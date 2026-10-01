@@ -118,6 +118,7 @@ int main() {
     CHECK(!samePath(L"C:\\Users", L"C:\\User"));
     CHECK_EQ(extensionOf(L"Photo.JPG"), L".jpg");
     CHECK_EQ(extensionOf(L"README"), L"");
+    CHECK(isShortcut(L"C:\\Bookmarks\\Work.LNK") && isShortcut(L"site.url") && !isShortcut(L"notes.txt"));
 
     // sortItems: folders first, natural number order, ties by name
     {

@@ -424,6 +424,12 @@ pub fn extension_of(name: &OsStr) -> Vec<u16> {
     to_lower(&OsString::from_wide(ext(&wide(name))))
 }
 
+/// A .lnk or .url file.
+pub fn is_shortcut(name: &OsStr) -> bool {
+    let ext = String::from_utf16_lossy(&extension_of(name));
+    ext == ".lnk" || ext == ".url"
+}
+
 /// Case-insensitive substring match, or a wildcard match when the filter has * or ?.
 /// `filter` is NUL-terminated.
 pub fn matches_filter(item: &Item, filter: &[u16]) -> bool {
@@ -545,6 +551,8 @@ mod tests {
         assert!(!dir("C:\\").same(&Location::ThisPc));
         assert_eq!(extension_of(OsStr::new("Photo.JPG")), ".jpg".encode_utf16().collect::<Vec<_>>());
         assert!(extension_of(OsStr::new("README")).is_empty());
+        assert!(is_shortcut(OsStr::new("C:\\Bookmarks\\Work.LNK")) && is_shortcut(OsStr::new("site.url")));
+        assert!(!is_shortcut(OsStr::new("notes.txt")));
     }
 
     #[test]

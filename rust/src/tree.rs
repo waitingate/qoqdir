@@ -9,7 +9,7 @@ use windows::Win32::Foundation::{HWND, LPARAM, POINT, WPARAM};
 use windows::Win32::Graphics::Gdi::ScreenToClient;
 use windows::Win32::System::Com::{COINIT_APARTMENTTHREADED, COINIT_DISABLE_OLE1DDE, CoInitializeEx, CoUninitialize};
 use windows::Win32::UI::Controls::{
-    HTREEITEM, NM_CLICK, NMHDR, NMTREEVIEWW, SetWindowTheme, TVE_COLLAPSE, TVE_COLLAPSERESET, TVE_EXPAND, TVGN_CARET, TVGN_CHILD, TVHITTESTINFO,
+    HTREEITEM, NM_CLICK, NMHDR, NMTREEVIEWW, SetWindowTheme, TVE_COLLAPSE, TVE_COLLAPSERESET, TVE_EXPAND, TVGN_CARET, TVGN_CHILD, TVGN_ROOT, TVHITTESTINFO,
     TVHT_ONITEM, TVI_LAST, TVI_ROOT, TVIF_CHILDREN, TVIF_IMAGE, TVIF_PARAM, TVIF_SELECTEDIMAGE, TVIF_TEXT,
     TVINSERTSTRUCTW, TVINSERTSTRUCTW_0, TVITEMEXW, TVITEMEXW_CHILDREN, TVITEMW, TVM_DELETEITEM, TVM_EXPAND, TVM_GETITEMW,
     TVM_GETNEXTITEM, TVM_HITTEST, TVM_INSERTITEMW, TVM_SETEXTENDEDSTYLE, TVM_SETIMAGELIST, TVM_SETITEMW,
@@ -25,7 +25,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
 };
 use windows::core::{PWSTR, w};
 
-use crate::folder::{Location, SortKey, list_folder, sort_items};
+use crate::folder::{Location, SortKey, is_shortcut, list_folder, sort_items};
 use crate::shell::{describe, folder_icon, known_folder, system_image_list};
 use crate::util::{send, wide};
 
@@ -33,7 +33,14 @@ use crate::util::{send, wide};
 pub struct TreeBatch {
     fill: u32, // which fill() the node belongs to; batches for an older tree are dropped
     node: isize,
-    children: Vec<(Location, OsString, Option<i32>)>, // icon None: plain folder icon
+    children: Vec<Child>,
+}
+
+struct Child {
+    location: Location,
+    text: OsString,
+    icon: Option<i32>, // None: plain folder icon
+    shortcut: bool,
 }
 
 pub struct FolderTree {
@@ -47,8 +54,8 @@ pub struct FolderTree {
 }
 
 
-/// Reads the subfolders of a location. Runs on a worker thread, so it may block.
-fn read_children(location: &Location) -> Vec<(Location, OsString, Option<i32>)> {
+/// Reads the subfolders of a location, and its shortcuts if asked. Runs on a worker thread, so it may block.
+fn read_children(location: &Location, shortcuts: bool) -> Vec<Child> {
     match location {
         Location::ThisPc => {
             let mask = unsafe { windows::Win32::Storage::FileSystem::GetLogicalDrives() };
@@ -56,15 +63,30 @@ fn read_children(location: &Location) -> Vec<(Location, OsString, Option<i32>)> 
                 .filter(|i| mask & (1 << i) != 0)
                 .map(|i| {
                     let drive = Location::dir(format!("{}:\\", (b'A' + i) as char));
-                    let (name, icon) = describe(&drive);
-                    (drive, name, Some(icon))
+                    let (text, icon) = describe(&drive);
+                    Child { location: drive, text, icon: Some(icon), shortcut: false }
                 })
                 .collect()
         }
         Location::Dir(_) => {
-            let mut dirs: Vec<_> = list_folder(location, false).items.into_iter().filter(|i| i.is_dir()).collect();
-            sort_items(&mut dirs, SortKey::Name, true);
-            dirs.into_iter().map(|it| (Location::dir(location.join(&it.name)), it.name, None)).collect()
+            let mut items: Vec<_> = list_folder(location, false)
+                .items
+                .into_iter()
+                .filter(|i| i.is_dir() || (shortcuts && is_shortcut(&i.name)))
+                .collect();
+            sort_items(&mut items, SortKey::Name, true); // folders first
+            items
+                .into_iter()
+                .map(|it| {
+                    let child = Location::dir(location.join(&it.name));
+                    if it.is_dir() {
+                        Child { location: child, text: it.name, icon: None, shortcut: false }
+                    } else {
+                        let (text, icon) = describe(&child); // as Windows names it ("Work", not "Work.lnk")
+                        Child { location: child, text, icon: Some(icon), shortcut: true }
+                    }
+                })
+                .collect()
         }
     }
 }
@@ -72,7 +94,7 @@ fn read_children(location: &Location) -> Vec<(Location, OsString, Option<i32>)> 
 impl FolderTree {
     /// `batch_msg` is posted to `parent` with a `Box<TreeBatch>` (for `add_children`)
     /// when subfolders have been read.
-    /// `bookmarks` is shown at the top of the tree.
+    /// `bookmarks` is shown at the top of the tree, open, with its shortcuts as well as its folders.
     pub fn create(parent: HWND, id: i32, batch_msg: u32, bookmarks: Location) -> FolderTree {
         let style = WS_CHILD.0 | WS_VISIBLE.0 | WS_TABSTOP.0 | TVS_HASBUTTONS | TVS_SHOWSELALWAYS | TVS_TRACKSELECT
             | TVS_FULLROWSELECT | TVS_NOHSCROLL;
@@ -120,21 +142,22 @@ impl FolderTree {
         self.reading.borrow_mut().clear();
         send(self.hwnd, TVM_DELETEITEM, 0, TVI_ROOT.0);
         self.paths.borrow_mut().clear();
-        self.add(TVI_ROOT, self.bookmarks.clone(), &"Bookmarks".into(), folder_icon());
+        let bookmarks = self.add(TVI_ROOT, self.bookmarks.clone(), &"Bookmarks".into(), folder_icon(), false);
         for id in [&FOLDERID_Desktop, &FOLDERID_Downloads, &FOLDERID_Documents, &FOLDERID_Pictures, &FOLDERID_Music, &FOLDERID_Videos] {
             // Only folders that exist (one may have been deleted or moved).
             if let Some(path) = known_folder(id).filter(|p| p.is_dir()) {
                 let location = Location::dir(path);
                 let (name, icon) = describe(&location);
-                self.add(TVI_ROOT, location, &name, icon);
+                self.add(TVI_ROOT, location, &name, icon, false);
             }
         }
         let (_, icon) = describe(&Location::ThisPc);
-        let this_pc = self.add(TVI_ROOT, Location::ThisPc, &"This PC".into(), icon);
+        let this_pc = self.add(TVI_ROOT, Location::ThisPc, &"This PC".into(), icon, false);
+        send(self.hwnd, TVM_EXPAND, TVE_EXPAND.0 as usize, bookmarks.0);
         send(self.hwnd, TVM_EXPAND, TVE_EXPAND.0 as usize, this_pc.0);
     }
 
-    fn add(&self, parent: HTREEITEM, location: Location, text: &OsString, icon: i32) -> HTREEITEM {
+    fn add(&self, parent: HTREEITEM, location: Location, text: &OsString, icon: i32, leaf: bool) -> HTREEITEM {
         let index = {
             let mut paths = self.paths.borrow_mut();
             paths.push(location);
@@ -151,12 +174,16 @@ impl FolderTree {
                     iImage: icon,
                     iSelectedImage: icon,
                     lParam: LPARAM(index as isize),
-                    cChildren: TVITEMEXW_CHILDREN(1), // unknown until expanded
+                    cChildren: TVITEMEXW_CHILDREN(if leaf { 0 } else { 1 }), // a folder's are unknown until expanded
                     ..Default::default()
                 },
             },
         };
         HTREEITEM(send(self.hwnd, TVM_INSERTITEMW, 0, &ins as *const _ as isize))
+    }
+
+    fn root(&self) -> isize {
+        send(self.hwnd, TVM_GETNEXTITEM, TVGN_ROOT as usize, 0)
     }
 
     fn location_of(&self, node: HTREEITEM) -> Option<Location> {
@@ -173,9 +200,10 @@ impl FolderTree {
         }
         let Some(location) = self.location_of(node) else { return };
         let (parent, msg, fill, node) = (self.parent.0 as usize, self.batch_msg, self.fill.get(), node.0);
+        let shortcuts = node == self.root(); // the Bookmarks node
         std::thread::spawn(move || unsafe {
             let co = CoInitializeEx(None, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE);
-            let batch = Box::into_raw(Box::new(TreeBatch { fill, node, children: read_children(&location) }));
+            let batch = Box::into_raw(Box::new(TreeBatch { fill, node, children: read_children(&location, shortcuts) }));
             if PostMessageW(Some(HWND(parent as _)), msg, WPARAM(0), LPARAM(batch as isize)).is_err() {
                 drop(Box::from_raw(batch)); // the window is gone
             }
@@ -196,8 +224,8 @@ impl FolderTree {
             send(self.hwnd, TVM_SETITEMW, 0, &item as *const _ as isize);
             return;
         }
-        for (location, name, icon) in batch.children {
-            self.add(node, location, &name, icon.unwrap_or_else(folder_icon));
+        for c in batch.children {
+            self.add(node, c.location, &c.text, c.icon.unwrap_or_else(folder_icon), c.shortcut);
         }
         send(self.hwnd, TVM_EXPAND, TVE_EXPAND.0 as usize, node.0);
     }

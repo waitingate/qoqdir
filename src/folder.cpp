@@ -226,6 +226,11 @@ std::wstring extensionOf(const std::wstring& name) {
     return toLower(extPtr(name));
 }
 
+bool isShortcut(const std::wstring& name) {
+    std::wstring ext = extensionOf(name);
+    return ext == L".lnk" || ext == L".url";
+}
+
 std::wstring formatSize(uint64_t bytes) {
     wchar_t buf[64];
     return StrFormatKBSizeW(static_cast<LONGLONG>(bytes), buf, 64) ? buf : L"";

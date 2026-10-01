@@ -9,8 +9,9 @@
 
 namespace {
 
-// Reads the subfolders of `dir` ("" = the drives). Runs on a worker thread, so it may block.
-std::vector<TreeBatch::Child> readChildren(const std::wstring& dir) {
+// Reads the subfolders of `dir` ("" = the drives), and its shortcuts if asked.
+// Runs on a worker thread, so it may block.
+std::vector<TreeBatch::Child> readChildren(const std::wstring& dir, bool shortcuts) {
     std::vector<TreeBatch::Child> children;
     if (dir.empty()) {
         DWORD mask = GetLogicalDrives();
@@ -24,18 +25,27 @@ std::vector<TreeBatch::Child> readChildren(const std::wstring& dir) {
         return children;
     }
     WIN32_FIND_DATAW fd;
-    HANDLE h = FindFirstFileExW(joinPath(dir, L"*").c_str(), FindExInfoBasic, &fd, FindExSearchLimitToDirectories,
-                                nullptr, FIND_FIRST_EX_LARGE_FETCH);
+    HANDLE h = FindFirstFileExW(joinPath(dir, L"*").c_str(), FindExInfoBasic, &fd,
+                                shortcuts ? FindExSearchNameMatch : FindExSearchLimitToDirectories, nullptr,
+                                FIND_FIRST_EX_LARGE_FETCH);
     if (h == INVALID_HANDLE_VALUE) return children;
     do {
         const wchar_t* n = fd.cFileName;
         bool dots = n[0] == L'.' && (n[1] == 0 || (n[1] == L'.' && n[2] == 0));
-        if (!dots && (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) && !(fd.dwFileAttributes & FILE_ATTRIBUTE_HIDDEN))
-            children.push_back({joinPath(dir, n), n, -1});
+        if (dots || (fd.dwFileAttributes & FILE_ATTRIBUTE_HIDDEN)) continue;
+        std::wstring path = joinPath(dir, n);
+        if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) {
+            children.push_back({path, n, -1});
+        } else if (shortcuts && isShortcut(n)) {   // shown as Windows names it ("Work", not "Work.lnk")
+            SHFILEINFOW sfi{};
+            SHGetFileInfoW(path.c_str(), 0, &sfi, sizeof sfi, SHGFI_DISPLAYNAME | SHGFI_SYSICONINDEX | SHGFI_SMALLICON);
+            children.push_back({path, sfi.szDisplayName[0] ? sfi.szDisplayName : n, sfi.iIcon, true});
+        }
     } while (FindNextFileW(h, &fd));
     FindClose(h);
-    std::sort(children.begin(), children.end(),
-              [](const auto& a, const auto& b) { return StrCmpLogicalW(a.text.c_str(), b.text.c_str()) < 0; });
+    std::sort(children.begin(), children.end(), [](const auto& a, const auto& b) {   // folders first
+        return a.shortcut != b.shortcut ? b.shortcut : StrCmpLogicalW(a.text.c_str(), b.text.c_str()) < 0;
+    });
     return children;
 }
 
@@ -60,7 +70,7 @@ void FolderTree::fill() {
     reading_.clear();
     TreeView_DeleteAllItems(tv_);
     paths_.clear();
-    add(TVI_ROOT, bookmarks_, L"Bookmarks", folderIcon());
+    HTREEITEM bookmarks = add(TVI_ROOT, bookmarks_, L"Bookmarks", folderIcon());
     const KNOWNFOLDERID* folders[] = {&FOLDERID_Desktop, &FOLDERID_Downloads, &FOLDERID_Documents,
                                       &FOLDERID_Pictures, &FOLDERID_Music,    &FOLDERID_Videos};
     for (const KNOWNFOLDERID* id : folders) {
@@ -78,10 +88,11 @@ void FolderTree::fill() {
         CoTaskMemFree(pidl);
     }
     HTREEITEM thisPc = add(TVI_ROOT, L"", L"This PC", pc.iIcon);
+    TreeView_Expand(tv_, bookmarks, TVE_EXPAND);
     TreeView_Expand(tv_, thisPc, TVE_EXPAND);
 }
 
-HTREEITEM FolderTree::add(HTREEITEM parent, const std::wstring& path, const std::wstring& text, int icon) {
+HTREEITEM FolderTree::add(HTREEITEM parent, const std::wstring& path, const std::wstring& text, int icon, bool leaf) {
     paths_.push_back(path);
     TVINSERTSTRUCTW ins{};
     ins.hParent = parent;
@@ -90,7 +101,7 @@ HTREEITEM FolderTree::add(HTREEITEM parent, const std::wstring& path, const std:
     ins.item.pszText = const_cast<wchar_t*>(text.c_str());
     ins.item.iImage = ins.item.iSelectedImage = icon;
     ins.item.lParam = LPARAM(paths_.size() - 1);
-    ins.item.cChildren = 1;   // unknown until expanded
+    ins.item.cChildren = leaf ? 0 : 1;   // a folder's are unknown until expanded
     return TreeView_InsertItem(tv_, &ins);
 }
 
@@ -108,12 +119,13 @@ void FolderTree::startReading(HTREEITEM node) {
     HWND parent = parent_;
     UINT msg = batchMsg_;
     unsigned fill = fill_;
-    std::thread([parent, msg, fill, node, dir] {
+    bool shortcuts = node == TreeView_GetRoot(tv_);   // the Bookmarks node
+    std::thread([parent, msg, fill, node, dir, shortcuts] {
         HRESULT co = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE);
         auto batch = std::make_unique<TreeBatch>();
         batch->fill = fill;
         batch->node = node;
-        batch->children = readChildren(dir);
+        batch->children = readChildren(dir, shortcuts);
         if (PostMessageW(parent, msg, 0, reinterpret_cast<LPARAM>(batch.get()))) batch.release();
         if (SUCCEEDED(co)) CoUninitialize();
     }).detach();
@@ -130,7 +142,7 @@ void FolderTree::addChildren(const TreeBatch& batch) {
         TreeView_SetItem(tv_, &item);
         return;
     }
-    for (const auto& c : batch.children) add(batch.node, c.path, c.text, c.icon >= 0 ? c.icon : folderIcon());
+    for (const auto& c : batch.children) add(batch.node, c.path, c.text, c.icon >= 0 ? c.icon : folderIcon(), c.shortcut);
     TreeView_Expand(tv_, batch.node, TVE_EXPAND);
 }
 

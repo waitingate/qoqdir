@@ -799,23 +799,43 @@ impl App {
             5000,
         );
         let bookmark_nodes = move |a: &App| {
-            // the tree's first root is Bookmarks
-            let mut n = 0;
+            // the texts under Bookmarks, the tree's first root
+            let mut texts = Vec::new();
             let mut child = send(tree(a), TVM_GETNEXTITEM, TVGN_CHILD as usize, send(tree(a), TVM_GETNEXTITEM, TVGN_ROOT as usize, 0));
             while child != 0 {
-                n += 1;
+                let mut text = [0u16; 64];
+                let mut item = TVITEMW {
+                    mask: TVIF_TEXT,
+                    hItem: HTREEITEM(child),
+                    pszText: windows::core::PWSTR(text.as_mut_ptr()),
+                    cchTextMax: 64,
+                    ..Default::default()
+                };
+                send(tree(a), TVM_GETITEMW, 0, &mut item as *mut _ as isize);
+                texts.push(from_wide(&text).to_string_lossy().into_owned());
                 child = send(tree(a), TVM_GETNEXTITEM, TVGN_NEXT as usize, child);
             }
-            n
+            texts.join(",")
         };
-        let one = p("Bookmarks\\one");
+        let (one, lnk, sub, sub2) = (p("Bookmarks\\one"), p("Bookmarks\\sub.lnk"), p("sub"), p("sub"));
         add(
-            "(expand Bookmarks, which has one subfolder)",
+            "Bookmarks shows its folders and shortcuts in the tree, open from the start",
             Some(Rc::new(move |a| {
                 let _ = std::fs::create_dir(&one);
-                send(tree(a), TVM_EXPAND, TVE_EXPAND.0 as usize, send(tree(a), TVM_GETNEXTITEM, TVGN_ROOT as usize, 0));
+                make_shortcut(&lnk, sub.as_os_str());
+                a.tree.fill(); // as at startup
             })),
-            Rc::new(move |a| bookmark_nodes(a) == 1),
+            Rc::new(move |a| bookmark_nodes(a) == "one,sub"),
+            5000,
+        );
+        add(
+            "choosing a bookmark shortcut in the tree opens its folder",
+            Some(Rc::new(move |a| {
+                let one = send(tree(a), TVM_GETNEXTITEM, TVGN_CHILD as usize, send(tree(a), TVM_GETNEXTITEM, TVGN_ROOT as usize, 0));
+                send(tree(a), TVM_SELECTITEM, TVGN_CARET as usize, one);
+                send(tree(a), WM_KEYDOWN, VK_DOWN.0 as usize, 0); // to "sub", as the user would
+            })),
+            Rc::new(move |a| a.at(&sub2)),
             5000,
         );
         let two = p("Bookmarks\\two");
@@ -828,7 +848,14 @@ impl App {
                 send(tree(a), WM_KEYDOWN, VK_LEFT.0 as usize, 0); // collapse, as the user would
                 send(tree(a), WM_KEYDOWN, VK_RIGHT.0 as usize, 0); // and expand again
             })),
-            Rc::new(move |a| bookmark_nodes(a) == 2),
+            Rc::new(move |a| bookmark_nodes(a) == "one,two,sub"),
+            5000,
+        );
+        let (d, d2) = (dir.clone(), dir.clone());
+        add(
+            "(back to the test folder)",
+            Some(Rc::new(move |a| a.open(Location::dir(&d), Nav::New, ViewState::default()))),
+            Rc::new(move |a| a.at(&d2)),
             5000,
         );
 

@@ -92,6 +92,8 @@ private:
     void reload();   // like refresh, but also restarts a load in progress (e.g. after Ctrl+H)
     void goToTyped();
     void activate(bool inNewTab);   // Enter / double-click on the selection
+    void openShortcut(const std::wstring& path, bool inNewTab);
+    void openNode(const std::wstring& path, bool inNewTab);   // a tree node: folder or bookmark
     ViewState currentView() const;
 
     // Tabs

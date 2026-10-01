@@ -391,7 +391,7 @@ void App::onMiddleClick(HWND from, POINT screenPt) {
         int row = ListView_HitTest(from, &hit);
         if (row >= 0 && row < list_.count() && list_.at(row).isDir()) newTab(list_.pathAt(row), false);
     } else if (from == tree_.hwnd() && tree_.pathAt(screenPt, &path)) {
-        newTab(path, false);
+        openNode(path, true);
     }
 }
 
@@ -431,7 +431,7 @@ LRESULT App::onNotify(NMHDR* nm) {
     }
     if (nm->hwndFrom == tree_.hwnd()) {
         std::wstring path;
-        if (tree_.onNotify(nm, &path)) open(path, Nav::New);
+        if (tree_.onNotify(nm, &path)) openNode(path, false);
         return 0;
     }
     if (nm->hwndFrom == tabBar_) {
@@ -486,8 +486,8 @@ void App::onContextMenu(HWND from, POINT pt) {
             pt = {r.left + scale(24, dpi_), r.top + scale(24, dpi_)};
         }
         showMenu(wnd_, itemMenu(wnd_, {path}).get(), pt, [&](const std::wstring& verb) {
-            if (is(verb, L"open") || is(verb, L"explore")) open(path, Nav::New);
-            else if (is(verb, L"opennewtab") || is(verb, L"opennewwindow")) newTab(path, true);
+            if (is(verb, L"open") || is(verb, L"explore")) openNode(path, false);
+            else if (is(verb, L"opennewtab") || is(verb, L"opennewwindow")) openNode(path, true);
             else return is(verb, L"rename");   // renaming is done in the file list
             return true;
         });
@@ -816,16 +816,8 @@ void App::goToTyped() {
 void App::activate(bool inNewTab) {
     std::vector<int> rows = list_.selection();
     if (rows.empty() && list_.focused() >= 0) rows = {list_.focused()};
-    // One shortcut: if it leads to a folder, show that folder here. Whether it does is
-    // found out by the folder loader on its worker thread (the target may be on a network).
-    if (rows.size() == 1 && !inNewTab && extensionOf(list_.at(rows[0]).name) == L".lnk") {
-        std::wstring lnk = list_.pathAt(rows[0]);
-        std::wstring target = shortcutTarget(lnk);
-        if (isAbsolutePath(target)) {
-            open(target, Nav::New, {}, Origin::fromShortcut(lnk));
-        } else {
-            openFile(wnd_, lnk);
-        }
+    if (rows.size() == 1 && !inNewTab && !list_.at(rows[0]).isDir() && isShortcut(list_.at(rows[0]).name)) {
+        openShortcut(list_.pathAt(rows[0]), false);
         return;
     }
     std::vector<std::wstring> dirs, files;
@@ -840,6 +832,23 @@ void App::activate(bool inNewTab) {
     } else {
         for (const auto& d : dirs) newTab(d, false);   // several folders: background tabs
     }
+}
+
+// A shortcut that leads to a folder shows that folder here (or in a background tab); Windows
+// opens anything else. Whether it is a folder is found out by the folder loader on its worker
+// thread (the target may be on a network).
+void App::openShortcut(const std::wstring& path, bool inNewTab) {
+    std::wstring target = extensionOf(path) == L".lnk" ? shortcutTarget(path) : L"";
+    if (!isAbsolutePath(target)) openFile(wnd_, path);   // a web link, a program...
+    else if (inNewTab) newTab(target, false);
+    else open(target, Nav::New, {}, Origin::fromShortcut(path));
+}
+
+// A node in the tree: a folder, or a bookmark shortcut.
+void App::openNode(const std::wstring& path, bool inNewTab) {
+    if (isShortcut(path)) openShortcut(path, inNewTab);
+    else if (inNewTab) newTab(path, false);
+    else open(path, Nav::New);
 }
 
 ViewState App::currentView() const {

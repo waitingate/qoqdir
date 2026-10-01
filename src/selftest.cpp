@@ -407,17 +407,33 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
             // Done when the subfolders are shown, or the node knows it has none.
             return expected > 0 ? shown == expected : item.cChildren == 0;
         });
-    auto bookmarkNodes = [this] {   // the tree's first root is Bookmarks
-        int n = 0;
-        for (HTREEITEM c = TreeView_GetChild(tree_.hwnd(), TreeView_GetRoot(tree_.hwnd())); c; c = TreeView_GetNextSibling(tree_.hwnd(), c)) ++n;
-        return n;
+    auto bookmarkNodes = [this] {   // the texts under Bookmarks, the tree's first root
+        std::wstring texts;
+        for (HTREEITEM c = TreeView_GetChild(tree_.hwnd(), TreeView_GetRoot(tree_.hwnd())); c; c = TreeView_GetNextSibling(tree_.hwnd(), c)) {
+            wchar_t text[64] = {};
+            TVITEMW item{};
+            item.mask = TVIF_TEXT;
+            item.hItem = c;
+            item.pszText = text;
+            item.cchTextMax = 64;
+            TreeView_GetItem(tree_.hwnd(), &item);
+            texts += (texts.empty() ? L"" : L",") + std::wstring(text);
+        }
+        return texts;
     };
-    add(L"(expand Bookmarks, which has one subfolder)",
+    add(L"Bookmarks shows its folders and shortcuts in the tree, open from the start",
         [=, this] {
             CreateDirectoryW(path(L"Bookmarks\\one").c_str(), nullptr);
-            TreeView_Expand(tree_.hwnd(), TreeView_GetRoot(tree_.hwnd()), TVE_EXPAND);
+            makeShortcut(path(L"Bookmarks\\sub.lnk"), path(L"sub"));
+            tree_.fill();   // as at startup
         },
-        [=] { return bookmarkNodes() == 1; });
+        [=] { return bookmarkNodes() == L"one,sub"; });
+    add(L"choosing a bookmark shortcut in the tree opens its folder",
+        [=, this] {
+            TreeView_SelectItem(tree_.hwnd(), TreeView_GetChild(tree_.hwnd(), TreeView_GetRoot(tree_.hwnd())));   // "one"
+            SendMessageW(tree_.hwnd(), WM_KEYDOWN, VK_DOWN, 0);   // to "sub", as the user would
+        },
+        [=, this] { return at(path(L"sub")); });
     add(L"collapsing and expanding a tree folder shows its new subfolders",
         [=, this] {
             CreateDirectoryW(path(L"Bookmarks\\two").c_str(), nullptr);
@@ -425,7 +441,8 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
             SendMessageW(tree_.hwnd(), WM_KEYDOWN, VK_LEFT, 0);    // collapse, as the user would
             SendMessageW(tree_.hwnd(), WM_KEYDOWN, VK_RIGHT, 0);   // and expand again
         },
-        [=] { return bookmarkNodes() == 2; });
+        [=] { return bookmarkNodes() == L"one,two,sub"; });
+    add(L"(back to the test folder)", [=, this] { open(dir, Nav::New); }, [=, this] { return at(dir); });
 
     // Speed: a folder with 10,000 files.
     add(L"loads a 10,000-file folder",

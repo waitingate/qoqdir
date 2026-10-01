@@ -13,6 +13,7 @@ struct TreeBatch {
     struct Child {
         std::wstring path, text;
         int icon = -1;   // -1: plain folder icon
+        bool shortcut = false;
     };
     std::vector<Child> children;
 };
@@ -20,7 +21,7 @@ struct TreeBatch {
 class FolderTree {
 public:
     // `batchMsg` is posted to `parent` with a TreeBatch* (to pass to addChildren) when subfolders are read.
-    // `bookmarks` is shown at the top of the tree.
+    // `bookmarks` is shown at the top of the tree, open, with its shortcuts as well as its folders.
     void create(HWND parent, int id, UINT batchMsg, const std::wstring& bookmarks);
     HWND hwnd() const { return tv_; }
     void fill();   // rebuilds the roots (user folders and This PC)
@@ -28,11 +29,11 @@ public:
 
     // Path of the node under a screen point, or of the selected node when pt is (-1,-1).
     bool pathAt(POINT screenPt, std::wstring* path) const;
-    // Returns true and sets 'open' when the user chose a folder.
+    // Returns true and sets 'open' when the user chose a folder (or a bookmark shortcut).
     bool onNotify(NMHDR* nm, std::wstring* open);
 
 private:
-    HTREEITEM add(HTREEITEM parent, const std::wstring& path, const std::wstring& text, int icon);
+    HTREEITEM add(HTREEITEM parent, const std::wstring& path, const std::wstring& text, int icon, bool leaf = false);
     void startReading(HTREEITEM node);
     const std::wstring& pathOf(HTREEITEM node) const;
 

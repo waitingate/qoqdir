@@ -56,7 +56,7 @@ use windows::core::{PCWSTR, PWSTR, w};
 
 use crate::filelist::FileList;
 use crate::APP_NAME;
-use crate::folder::{CommandLine, Listing, Location, SortKey, byte_size, extension_of, list_folder, normalize};
+use crate::folder::{CommandLine, Listing, Location, SortKey, byte_size, extension_of, is_shortcut, list_folder, normalize};
 use crate::selftest::SelfTest;
 use crate::shell::{
     FolderWatch, IconBatch, acknowledge_change, has_own_icon, read_own_icons, remember_icons, background_menu, copy_to_clipboard, delete_items, drag_out,
@@ -731,21 +731,20 @@ impl App {
 
     /// Middle-click on a folder in the list or the tree opens it in a new tab, in the background.
     fn on_middle_click(&self, from: HWND, pt: POINT) {
-        let location = if from == self.list.hwnd() {
+        if from == self.list.hwnd() {
             let mut hit = LVHITTESTINFO { pt, ..Default::default() };
             unsafe {
                 let _ = ScreenToClient(from, &mut hit.pt);
             }
             let row = send(from, LVM_HITTEST, 0, &mut hit as *mut _ as isize);
             let folder = usize::try_from(row).ok().filter(|&r| self.list.item(r).is_some_and(|i| i.is_dir()));
-            folder.and_then(|r| self.list.item_location(r))
+            if let Some(location) = folder.and_then(|r| self.list.item_location(r)) {
+                self.new_tab(location, false);
+            }
         } else if from == self.tree.hwnd() {
-            self.tree.location_at(pt)
-        } else {
-            None
-        };
-        if let Some(location) = location {
-            self.new_tab(location, false);
+            if let Some(location) = self.tree.location_at(pt) {
+                self.open_node(location, true);
+            }
         }
     }
 
@@ -792,7 +791,7 @@ impl App {
         }
         if from == self.tree.hwnd() {
             if let Some(location) = unsafe { self.tree.on_notify(nm) } {
-                self.open(location, Nav::New, ViewState::default());
+                self.open_node(location, false);
             }
             return LRESULT(0);
         }
@@ -867,9 +866,9 @@ impl App {
             show_menu(self.wnd, &cm, pt, &mut |verb| {
                 let is = |name: &str| verb.eq_ignore_ascii_case(name);
                 if is("open") || is("explore") {
-                    self.open(location.clone(), Nav::New, ViewState::default());
+                    self.open_node(location.clone(), false);
                 } else if is("opennewtab") || is("opennewwindow") {
-                    self.new_tab(location.clone(), true);
+                    self.open_node(location.clone(), true);
                 } else {
                     return is("rename"); // renaming is done in the file list
                 }
@@ -1412,15 +1411,10 @@ impl App {
         if rows.is_empty() {
             rows.extend(self.list.focused());
         }
-        // One shortcut: if it leads to a folder, show that folder here. Whether it does is
-        // found out by the folder loader on its worker thread (the target may be on a network).
         if let ([row], false) = (rows.as_slice(), in_new_tab) {
             if let (Some(it), Some(Location::Dir(lnk))) = (self.list.item(*row), self.list.item_location(*row)) {
-                if !it.is_dir() && extension_of(&it.name) == ".lnk".encode_utf16().collect::<Vec<_>>() {
-                    match shortcut_target(&lnk).filter(|t| t.is_absolute()) {
-                        Some(target) => self.open_from(Location::dir(target), Nav::New, ViewState::default(), Origin::Shortcut(lnk)),
-                        None => open_file(self.wnd, &lnk),
-                    }
+                if !it.is_dir() && is_shortcut(&it.name) {
+                    self.open_shortcut(lnk, false);
                     return;
                 }
             }
@@ -1448,6 +1442,28 @@ impl App {
             for d in dirs {
                 self.new_tab(d, false); // several folders: background tabs
             }
+        }
+    }
+
+    /// A shortcut that leads to a folder shows that folder here (or in a background tab); Windows
+    /// opens anything else. Whether it is a folder is found out by the folder loader on its worker
+    /// thread (the target may be on a network).
+    fn open_shortcut(&self, path: PathBuf, in_new_tab: bool) {
+        let lnk = extension_of(path.as_os_str()) == ".lnk".encode_utf16().collect::<Vec<_>>();
+        let target = if lnk { shortcut_target(&path).filter(|t| t.is_absolute()) } else { None };
+        match target {
+            None => open_file(self.wnd, &path), // a web link, a program...
+            Some(target) if in_new_tab => self.new_tab(Location::dir(target), false),
+            Some(target) => self.open_from(Location::dir(target), Nav::New, ViewState::default(), Origin::Shortcut(path)),
+        }
+    }
+
+    /// A node in the tree: a folder, or a bookmark shortcut.
+    fn open_node(&self, location: Location, in_new_tab: bool) {
+        match location {
+            Location::Dir(path) if is_shortcut(path.as_os_str()) => self.open_shortcut(path, in_new_tab),
+            location if in_new_tab => self.new_tab(location, false),
+            location => self.open(location, Nav::New, ViewState::default()),
         }
     }
 
