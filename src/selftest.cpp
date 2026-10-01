@@ -77,7 +77,7 @@ void makeShortcut(const std::wstring& lnk, const std::wstring& target) {
     if (FAILED(CoCreateInstance(CLSID_ShellLink, nullptr, CLSCTX_INPROC_SERVER, IID_IShellLinkW,
                                 reinterpret_cast<void**>(link.put()))))
         return;
-    link->SetPath(target.c_str());   // (saving a shortcut to an unreachable server waits ~40 s for it)
+    link->SetPath(target.c_str());
     if (Com<IPersistFile> file = link.as<IPersistFile>()) file->Save(lnk.c_str(), TRUE);
 }
 
@@ -223,6 +223,11 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
         },
         [=, this] { return keyMs < 500; });
     add(L"...and opening another folder cancels it", [=, this] { open(dir, Nav::New); }, [=, this] { return at(dir); }, 5000, true);
+    add(L"typing a subfolder's name opens it here (not in Explorer)",
+        [=, this] { SetWindowTextW(address_, L"sub"); SetFocus(address_); selfTestKey(VK_RETURN); },
+        [=, this] { return at(path(L"sub")); });
+    add(L"typing .. goes up", [=, this] { SetWindowTextW(address_, L".."); SetFocus(address_); selfTestKey(VK_RETURN); },
+        [=, this] { return at(dir); });
 
     // Second review: history entries for deleted folders, and shortcuts.
     add(L"(open a folder that will be deleted)",
@@ -245,31 +250,53 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
         });
     add(L"(the shortcut's folder is shown)", nullptr, [=, this] { return at(path(L"sub")); });
     add(L"(back up to the test folder)", [=, this] { open(dir, Nav::New); }, [=, this] { return at(dir); });
-    add(L"(make a shortcut to an unreachable network folder)",
+    add(L"Ctrl+Enter on a shortcut to a folder opens it in a new background tab (not in Explorer)",
         [=, this] {
-            t0 = nowMs();
-            makeShortcut(path(L"offline.lnk"), L"\\\\192.0.2.1\\share");
-            selfTest_->note = L"shortcut made in " + std::to_wstring(int(nowMs() - t0)) + L" ms";
-            refresh(ViewState::selecting(L"offline.lnk"));
+            list_.select({L"sub-link.lnk"}, L"sub-link.lnk");
+            SetFocus(list_.hwnd());
+            selfTestKey(VK_RETURN, true);
         },
-        [=, this] { return idle() && list_.focusedName() == L"offline.lnk"; }, 60000);
-    add(L"opening a shortcut to an unreachable network folder does not freeze the window",
+        [=, this] { return tabs_.size() == 2 && samePath(tabs_[size_t(active_) + 1].path, path(L"sub")) && at(dir); });
+    add(L"(close that tab)", [=, this] { closeTab(active_ + 1); }, [=, this] { return idle() && tabs_.size() == 1; });
+    add(L"in a network folder that is not available, paste, new folder and a drag over its tab return at once",
         [=, this] {
+            // As if this tab's folder had just failed to load (a real failure can take minutes to arrive).
+            tab().path = L"\\\\192.0.2.1\\share";
+            Pending p;
+            p.nav = Nav::Refresh;
+            p.tabId = tab().id;
+            onLoadFailed(Listing{tab().path, {}, ERROR_BAD_NETPATH, false}, p);
+            RECT r{};
+            TabCtrl_GetItemRect(tabBar_, active_, &r);
+            POINT pt{(r.left + r.right) / 2, (r.top + r.bottom) / 2};
+            ClientToScreen(tabBar_, &pt);
+            Com<IDataObject> data = dataObject(wnd_, {path(L"file1.txt")});
+            POINTL cursor{pt.x, pt.y};
+            DWORD effect = DROPEFFECT_COPY;
             SetFocus(list_.hwnd());
             t0 = nowMs();
-            selfTestKey(VK_RETURN);
+            selfTestKey('V', true);
+            selfTestKey('N', true, true);
+            tabDrop_->DragEnter(data.get(), MK_LBUTTON, cursor, &effect);
+            tabDrop_->DragLeave();
             keyMs = nowMs() - t0;
-            selfTest_->note = L"Enter took " + std::to_wstring(int(keyMs)) + L" ms";
+            selfTest_->note = L"took " + std::to_wstring(int(keyMs)) + L" ms";
         },
         [=, this] { return keyMs < 100; });
-    add(L"(opening another folder cancels it)", [=, this] { open(dir, Nav::New); }, [=, this] { return at(dir); }, 5000, true);
-    add(L"a shortcut to an unreachable folder says so here (no Explorer window or dialog)",
+    add(L"(back to the test folder)", [=, this] { tab().path = dir; open(dir, Nav::Refresh); }, [=, this] { return at(dir); });
+    add(L"a shortcut to a folder that is gone says so here (no Windows dialog)",
         [=, this] {
-            list_.select({L"offline.lnk"}, L"offline.lnk");
+            makeShortcut(path(L"gone.lnk"), path(L"no-such-folder"));
+            refresh(ViewState::selecting(L"gone.lnk"));
+        },
+        [=, this] {
+            if (!idle() || list_.focusedName() != L"gone.lnk") return false;
             SetFocus(list_.hwnd());
             selfTestKey(VK_RETURN);
-        },
-        [=, this] { return at(dir) && statusMessage().find(L"share") != std::wstring::npos; }, 90000);
+            return true;
+        });
+    add(L"(the status bar names the missing folder, and the tab stays put)", nullptr,
+        [=, this] { return at(dir) && statusMessage().find(L"no-such-folder") != std::wstring::npos; });
 
     // Regression tests for bugs found in code review.
     add(L"holding F5 while a folder loads does not start more loads",

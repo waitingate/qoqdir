@@ -90,6 +90,17 @@ The self-test opens a window without taking focus and never sends keystrokes
 to other windows. It replaces the clipboard and leaves one small `file10.txt`
 in the Recycle Bin.
 
+Two scripts in `..\tests` check the parts the self-test cannot (they work for the
+C++ version too):
+
+```powershell
+powershell -File ..\tests\cli-checks.ps1 -Exe target\release\qoqdir.exe     # command-line switches
+powershell -File ..\tests\watch-windows.ps1 -Exe target\release\qoqdir.exe -Log $env:TEMP\qoqdir-rs-selftest.log
+```
+
+`watch-windows.ps1` runs the self-test and lists every window that appears meanwhile,
+from any program (it never touches them), so a Windows error window would be noticed.
+
 If the app ever stops because of a bug, the reason is written to
 `%TEMP%\qoqdir-crash.log`.
 

@@ -458,18 +458,19 @@ void App::onContextMenu(HWND from, POINT pt) {
             if (!list_.dir().empty()) showMenu(wnd_, backgroundMenu(wnd_, list_.dir()).get(), pt, nullptr);
             return;
         }
-        bool allDirs = std::all_of(rows.begin(), rows.end(), [&](int r) { return list_.at(r).isDir(); });
+        // Folders (and a shortcut's folder) open here, not in a separate Explorer window.
+        bool opensHere = std::all_of(rows.begin(), rows.end(), [&](int r) { return list_.at(r).isDir(); }) ||
+                         (rows.size() == 1 && isShortcut(list_.at(rows[0]).name));
         showMenu(wnd_, itemMenu(wnd_, list_.selectedPaths()).get(), pt, [&](const std::wstring& verb) {
             if (is(verb, L"rename")) {
                 list_.rename(list_.focused() >= 0 ? list_.focused() : rows[0]);
                 return true;
             }
-            // Folders open here, not in a separate Explorer window.
-            if (allDirs && (is(verb, L"open") || is(verb, L"explore"))) {
+            if (opensHere && (is(verb, L"open") || is(verb, L"explore"))) {
                 activate(false);
                 return true;
             }
-            if (allDirs && (is(verb, L"opennewtab") || is(verb, L"opennewwindow"))) {
+            if (opensHere && (is(verb, L"opennewtab") || is(verb, L"opennewwindow"))) {
                 activate(true);
                 return true;
             }
@@ -702,6 +703,7 @@ void App::onLoaded(Listing&& listing, UINT generation) {
     if (!(p.nav == Nav::Refresh && sameFolder) && GetWindowTextLengthW(filter_) > 0) SetWindowTextW(filter_, L"");
 
     t.path = listing.path;
+    t.unavailable = false;
     list_.setListing(std::move(listing));
     int row = list_.select(view.select, view.focus);
     if (view.top >= 0) list_.scrollToRow(view.top);
@@ -747,8 +749,11 @@ void App::onLoadFailed(const Listing& listing, const Pending& p) {
     if (p.nav == Nav::Refresh || p.nav == Nav::Switch) {
         // The tab's own folder. A tab never changes its folder by itself (a network drive may
         // not be connected yet, a USB drive may come back): show it empty and say why.
+        // The list gets no folder, so paste, new folder, menus and drops have nothing to act on:
+        // asking Windows about an unreachable folder can freeze the window for 20-40 s.
         if (GetWindowTextLengthW(filter_) > 0) SetWindowTextW(filter_, L"");
-        list_.setListing(Listing{listing.path, {}, 0, false});
+        list_.setListing(Listing{});
+        t.unavailable = true;
         watch_ = {};
         showLocation(p.nav);
         setMessage(L"\"" + locationText(listing.path) + L"\" is not available: " + errorText(listing.error) +
@@ -797,6 +802,9 @@ void App::reload() {
 void App::goToTyped() {
     std::wstring text = windowText(address_);
     std::wstring path = normalizePath(text);
+    // ".." and the name of a subfolder here open in Qoqdir (Windows would open them in Explorer).
+    if (path == L"..") path = parentPath(tab().path);
+    else if (!tab().path.empty() && list_.hasFolder(path)) path = joinPath(tab().path, path);
     if (path.empty() || isAbsolutePath(path)) {
         // Checked by the folder loader on its worker thread, so a dead network
         // share cannot freeze the window. A file is opened when the result comes back.
@@ -816,8 +824,8 @@ void App::goToTyped() {
 void App::activate(bool inNewTab) {
     std::vector<int> rows = list_.selection();
     if (rows.empty() && list_.focused() >= 0) rows = {list_.focused()};
-    if (rows.size() == 1 && !inNewTab && !list_.at(rows[0]).isDir() && isShortcut(list_.at(rows[0]).name)) {
-        openShortcut(list_.pathAt(rows[0]), false);
+    if (rows.size() == 1 && !list_.at(rows[0]).isDir() && isShortcut(list_.at(rows[0]).name)) {
+        openShortcut(list_.pathAt(rows[0]), inNewTab);
         return;
     }
     std::vector<std::wstring> dirs, files;
@@ -834,13 +842,14 @@ void App::activate(bool inNewTab) {
     }
 }
 
-// A shortcut that leads to a folder shows that folder here (or in a background tab); Windows
-// opens anything else. Whether it is a folder is found out by the folder loader on its worker
-// thread (the target may be on a network).
+// A shortcut that leads to a folder shows that folder here, or in a background tab when the
+// shortcut says its target is a folder; Windows opens anything else. Whether the target really
+// is a folder is found out by the folder loader on its worker thread (it may be on a network).
 void App::openShortcut(const std::wstring& path, bool inNewTab) {
-    std::wstring target = extensionOf(path) == L".lnk" ? shortcutTarget(path) : L"";
+    bool folder = false;
+    std::wstring target = extensionOf(path) == L".lnk" ? shortcutTarget(path, &folder) : L"";
     if (!isAbsolutePath(target)) openFile(wnd_, path);   // a web link, a program...
-    else if (inNewTab) newTab(target, false);
+    else if (inNewTab && folder) newTab(target, false);
     else open(target, Nav::New, {}, Origin::fromShortcut(path));
 }
 
@@ -927,10 +936,10 @@ std::optional<std::wstring> App::tabDropTarget(const POINT* screenPt) {
         dropTab_ = hover;
     }
     if (hover < 0 || hover >= int(tabs_.size())) return std::nullopt;
-    const std::wstring& dir = tabs_[size_t(hover)].path;
-    // Not into This PC, and not back into the folder the files are dragged from.
-    if (dir.empty() || (draggingFiles_ && samePath(dir, list_.dir()))) return std::nullopt;
-    return dir;
+    const Tab& t = tabs_[size_t(hover)];
+    // Not into This PC, not into a folder that failed to load, and not back where the files come from.
+    if (t.path.empty() || t.unavailable || (draggingFiles_ && samePath(t.path, list_.dir()))) return std::nullopt;
+    return t.path;
 }
 
 void App::showTabs() {
@@ -961,7 +970,7 @@ void App::deleteSelection(bool permanently) {
 }
 
 void App::newFolder() {
-    const std::wstring& dir = tab().path;
+    const std::wstring& dir = list_.dir();   // the folder shown (none for This PC or an unavailable folder)
     if (dir.empty()) return;
     std::wstring name = L"New folder";
     for (int i = 2; !CreateDirectoryW(joinPath(dir, name).c_str(), nullptr); ++i) {
@@ -1007,16 +1016,12 @@ void App::setMessage(const std::wstring& text) {
 }
 
 void App::loadSettings(const CommandLine& cmd) {
-    auto read = [&](const wchar_t* section, const std::wstring& key) -> std::optional<std::wstring> {
-        std::wstring buf(32768, L'\0');
-        GetPrivateProfileStringW(section, key.c_str(), L"?", buf.data(), DWORD(buf.size()), ini_.c_str());
-        buf.resize(wcslen(buf.c_str()));
-        if (buf == L"?") return std::nullopt;   // '?' cannot appear in a path
-        return buf;
-    };
-    auto number = [&](const wchar_t* key, int fallback) {
-        auto s = read(L"Window", key);
-        return s && !s->empty() ? _wtoi(s->c_str()) : fallback;
+    auto number = [&](const std::wstring& key, int fallback) {   // missing or not a number: the default
+        wchar_t text[32] = {};
+        GetPrivateProfileStringW(L"Window", key.c_str(), L"", text, 32, ini_.c_str());
+        wchar_t* end = nullptr;
+        long value = wcstol(text, &end, 10);
+        return end != text && *end == 0 ? int(value) : fallback;
     };
 
     treeWidth_ = number(L"TreeWidth", 220);
@@ -1025,7 +1030,7 @@ void App::loadSettings(const CommandLine& cmd) {
     const int defaults[] = {320, 150, 170, 90};
     std::vector<int> widths;
     for (int i = 0; i < 4; ++i)
-        widths.push_back(scale(number((L"Column" + std::to_wstring(i)).c_str(), defaults[i]), dpi_));
+        widths.push_back(scale(number(L"Column" + std::to_wstring(i), defaults[i]), dpi_));
     list_.setColumnWidths(widths);
 
     // Tabs are not remembered: the command line's folders, or the home folder.

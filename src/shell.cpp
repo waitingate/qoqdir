@@ -317,7 +317,8 @@ void dragOut(HWND owner, const std::vector<std::wstring>& paths) {
     SHDoDragDrop(owner, obj.get(), nullptr, DROPEFFECT_COPY | DROPEFFECT_MOVE | DROPEFFECT_LINK, &effect);
 }
 
-std::wstring shortcutTarget(const std::wstring& lnkPath) {
+std::wstring shortcutTarget(const std::wstring& lnkPath, bool* folder) {
+    *folder = false;
     Com<IShellLinkW> link;
     if (FAILED(CoCreateInstance(CLSID_ShellLink, nullptr, CLSCTX_INPROC_SERVER, IID_IShellLinkW,
                                 reinterpret_cast<void**>(link.put()))))
@@ -325,7 +326,9 @@ std::wstring shortcutTarget(const std::wstring& lnkPath) {
     Com<IPersistFile> file = link.as<IPersistFile>();
     if (!file || FAILED(file->Load(lnkPath.c_str(), STGM_READ))) return L"";
     wchar_t target[MAX_PATH] = {};
-    if (link->GetPath(target, MAX_PATH, nullptr, 0) != S_OK) return L"";
+    WIN32_FIND_DATAW stored{};   // the target as it was when the shortcut was made
+    if (link->GetPath(target, MAX_PATH, &stored, 0) != S_OK) return L"";
+    *folder = (stored.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0;
     return target;
 }
 

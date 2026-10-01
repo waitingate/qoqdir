@@ -38,6 +38,7 @@ struct Tab {
     std::wstring path;              // "" = This PC
     std::vector<std::wstring> back, forward;
     ViewState view;                 // remembered while the tab is in the background
+    bool unavailable = false;       // its folder failed to load: no drops onto it until it loads again
 };
 
 class App {

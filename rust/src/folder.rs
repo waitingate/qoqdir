@@ -120,7 +120,7 @@ impl Location {
     }
 }
 
-fn equal_no_case(a: &OsStr, b: &OsStr) -> bool {
+pub fn equal_no_case(a: &OsStr, b: &OsStr) -> bool {
     let a: Vec<u16> = a.encode_wide().collect();
     let b: Vec<u16> = b.encode_wide().collect();
     unsafe { CompareStringOrdinal(&a, &b, true) == CSTR_EQUAL }

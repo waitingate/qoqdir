@@ -125,7 +125,8 @@ pub struct Tab {
     pub location: Location,
     pub back: Vec<Location>,
     pub forward: Vec<Location>,
-    view: ViewState, // remembered while the tab is in the background
+    view: ViewState,   // remembered while the tab is in the background
+    unavailable: bool, // its folder failed to load: no drops onto it until it loads again
 }
 
 /// Where a load was started from, when that changes what happens if it is not a folder.
@@ -826,13 +827,18 @@ impl App {
             }
             let rows = self.list.selection();
             if rows.is_empty() {
+                // The folder's own menu (New, Paste...); none when the list shows no folder.
                 let location = self.list.location();
-                if let Some(cm) = background_menu(self.wnd, &location).filter(|_| matches!(location, Location::Dir(_))) {
+                if matches!(location, Location::Dir(_))
+                    && let Some(cm) = background_menu(self.wnd, &location)
+                {
                     show_menu(self.wnd, &cm, pt, &mut |_| false);
                 }
                 return;
             }
-            let all_dirs = rows.iter().all(|&r| self.list.item(r).is_some_and(|i| i.is_dir()));
+            // Folders (and a shortcut's folder) open here, not in a separate Explorer window.
+            let opens_here = rows.iter().all(|&r| self.list.item(r).is_some_and(|i| i.is_dir()))
+                || (rows.len() == 1 && self.list.item(rows[0]).is_some_and(|i| is_shortcut(&i.name)));
             let Some(cm) = item_menu(self.wnd, &self.list.selected_items()) else { return };
             show_menu(self.wnd, &cm, pt, &mut |verb| {
                 let is = |name: &str| verb.eq_ignore_ascii_case(name);
@@ -840,12 +846,11 @@ impl App {
                     self.list.rename(self.list.focused().or(rows.first().copied()));
                     return true;
                 }
-                // Folders open here, not in a separate Explorer window.
-                if all_dirs && (is("open") || is("explore")) {
+                if opens_here && (is("open") || is("explore")) {
                     self.activate(false);
                     return true;
                 }
-                if all_dirs && (is("opennewtab") || is("opennewwindow")) {
+                if opens_here && (is("opennewtab") || is("opennewwindow")) {
                     self.activate(true);
                     return true;
                 }
@@ -1236,6 +1241,7 @@ impl App {
                 t.forward.remove(0);
             }
             t.location = listing.location.clone();
+            t.unavailable = false;
             old
         });
         if moved && view.select.is_empty() && view.focus.is_none() {
@@ -1311,23 +1317,7 @@ impl App {
             _ => {}
         }
         if matches!(pending.nav, Nav::Refresh | Nav::Switch) {
-            // The tab's own folder. A tab never changes its folder by itself (a network drive may
-            // not be connected yet, a USB drive may come back): show it empty and say why.
-            if !window_text(self.filter).is_empty() {
-                set_text(self.filter, "");
-            }
-            self.list.set_listing(Listing { location: listing.location.clone(), items: Vec::new(), error: None, is_file: false });
-            let old_watch = self.st.borrow_mut().watch.take();
-            drop(old_watch);
-            self.show_location(pending.nav);
-            self.set_message(&format!(
-                "\"{}\" is not available: {}   (F5 tries again)",
-                listing.location.text().to_string_lossy(),
-                error.trim()
-            ));
-            self.load_message_shown.set(true);
-            self.show_status();
-            return;
+            return self.show_unavailable(&listing.location, error, pending.nav);
         }
         if matches!(pending.nav, Nav::Back | Nav::Forward) {
             // A history entry whose folder is gone is dropped, so Back/Forward can move past it.
@@ -1345,6 +1335,24 @@ impl App {
         }
         self.set_message(&format!("{}: {}", listing.location.display_name().to_string_lossy(), error.trim()));
         self.warn();
+    }
+
+    /// The tab's own folder could not be read. A tab never changes its folder by itself (a network
+    /// drive may not be connected yet, a USB drive may come back): show it empty and say why.
+    /// The list gets no folder (as for This PC), so paste, new folder, menus and drops have nothing
+    /// to act on: asking Windows about an unreachable folder can freeze the window for 20-40 s.
+    pub fn show_unavailable(&self, location: &Location, error: &str, nav: Nav) {
+        if !window_text(self.filter).is_empty() {
+            set_text(self.filter, "");
+        }
+        self.list.set_listing(Listing { location: Location::ThisPc, items: Vec::new(), error: None, is_file: false });
+        self.with_tab(|t| t.unavailable = true);
+        let old_watch = self.st.borrow_mut().watch.take();
+        drop(old_watch);
+        self.show_location(nav);
+        self.set_message(&format!("\"{}\" is not available: {}   (F5 tries again)", location.text().to_string_lossy(), error.trim()));
+        self.load_message_shown.set(true);
+        self.show_status();
     }
 
     fn go_back(&self) {
@@ -1386,7 +1394,16 @@ impl App {
 
     fn go_to_typed(&self) {
         let text = window_text(self.address);
-        let location = normalize(&text);
+        let mut location = normalize(&text);
+        // ".." and the name of a subfolder here open in Qoqdir (Windows would open them in Explorer).
+        let here = self.location();
+        if let Location::Dir(typed) = &location {
+            if typed.as_os_str() == ".." {
+                location = here.parent();
+            } else if matches!(here, Location::Dir(_)) && self.list.has_folder(typed.as_os_str()) {
+                location = Location::dir(here.join(typed.as_os_str()));
+            }
+        }
         if location.path().is_none_or(|p| p.is_absolute()) {
             // Checked by the folder loader on its worker thread, so a dead network
             // share cannot freeze the window. A file is opened when the result comes back.
@@ -1411,10 +1428,10 @@ impl App {
         if rows.is_empty() {
             rows.extend(self.list.focused());
         }
-        if let ([row], false) = (rows.as_slice(), in_new_tab) {
+        if let [row] = rows.as_slice() {
             if let (Some(it), Some(Location::Dir(lnk))) = (self.list.item(*row), self.list.item_location(*row)) {
                 if !it.is_dir() && is_shortcut(&it.name) {
-                    self.open_shortcut(lnk, false);
+                    self.open_shortcut(lnk, in_new_tab);
                     return;
                 }
             }
@@ -1445,16 +1462,16 @@ impl App {
         }
     }
 
-    /// A shortcut that leads to a folder shows that folder here (or in a background tab); Windows
-    /// opens anything else. Whether it is a folder is found out by the folder loader on its worker
-    /// thread (the target may be on a network).
+    /// A shortcut that leads to a folder shows that folder here, or in a background tab when the
+    /// shortcut says its target is a folder; Windows opens anything else. Whether the target really
+    /// is a folder is found out by the folder loader on its worker thread (it may be on a network).
     fn open_shortcut(&self, path: PathBuf, in_new_tab: bool) {
         let lnk = extension_of(path.as_os_str()) == ".lnk".encode_utf16().collect::<Vec<_>>();
-        let target = if lnk { shortcut_target(&path).filter(|t| t.is_absolute()) } else { None };
+        let target = if lnk { shortcut_target(&path).filter(|(t, _)| t.is_absolute()) } else { None };
         match target {
             None => open_file(self.wnd, &path), // a web link, a program...
-            Some(target) if in_new_tab => self.new_tab(Location::dir(target), false),
-            Some(target) => self.open_from(Location::dir(target), Nav::New, ViewState::default(), Origin::Shortcut(path)),
+            Some((target, true)) if in_new_tab => self.new_tab(Location::dir(target), false),
+            Some((target, _)) => self.open_from(Location::dir(target), Nav::New, ViewState::default(), Origin::Shortcut(path)),
         }
     }
 
@@ -1479,7 +1496,7 @@ impl App {
     fn make_tab(st: &mut State, location: Location) -> Tab {
         let id = st.next_tab_id;
         st.next_tab_id += 1;
-        Tab { id, location, back: Vec::new(), forward: Vec::new(), view: ViewState::default() }
+        Tab { id, location, back: Vec::new(), forward: Vec::new(), view: ViewState::default(), unavailable: false }
     }
 
     pub fn new_tab(&self, location: Location, switch_to: bool) {
@@ -1579,10 +1596,10 @@ impl App {
             }
             self.drop_tab.set(hover);
         }
-        let location = self.st.borrow().tabs.get(hover?).map(|t| t.location.clone())?;
-        // Not into This PC, and not back into the folder the files are dragged from.
+        let (location, unavailable) = self.st.borrow().tabs.get(hover?).map(|t| (t.location.clone(), t.unavailable))?;
+        // Not into This PC, not into a folder that failed to load, and not back where the files come from.
         let from_here = self.dragging_files.get() && location.same(&self.list.location());
-        (matches!(location, Location::Dir(_)) && !from_here).then_some(location)
+        (matches!(location, Location::Dir(_)) && !unavailable && !from_here).then_some(location)
     }
 
     fn show_tabs(&self) {
@@ -1621,7 +1638,8 @@ impl App {
     }
 
     fn new_folder(&self) {
-        let Location::Dir(dir) = self.location() else { return };
+        // The folder shown (none for This PC or an unavailable folder).
+        let Location::Dir(dir) = self.list.location() else { return };
         let mut name = OsString::from("New folder");
         let mut i = 2;
         loop {

@@ -43,7 +43,9 @@ HRESULT renameItem(HWND owner, const std::wstring& path, const std::wstring& new
 void openFile(HWND owner, const std::wstring& path);
 bool runCommand(HWND owner, const std::wstring& command, const std::wstring& workDir);
 void dragOut(HWND owner, const std::vector<std::wstring>& paths);
-std::wstring shortcutTarget(const std::wstring& lnkPath);  // stored target path; no disk access
+// The target path stored in a shortcut, and whether it was a folder when the shortcut was made
+// (false if not recorded). Reads only the shortcut file, never the target.
+std::wstring shortcutTarget(const std::wstring& lnkPath, bool* folder);
 
 // Posts 'msg' to 'owner' when something inside 'dir' changes, or when 'dir' itself
 // is deleted or renamed (seen from its parent). Stops watching when destroyed.

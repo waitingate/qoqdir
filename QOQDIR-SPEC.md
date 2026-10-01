@@ -70,7 +70,9 @@ The user's priorities, in order:
 - **Names:** the app is "Qoqdir" in window titles and messages; every file name is
   lowercase `qoqdir` (`qoqdir.exe`, `qoqdir.ini`, logs `qoqdir-*.log`).
 - **Unicode everywhere:** any file name in any language must show, sort, rename and
-  open correctly. Paths longer than 260 characters must work.
+  open correctly. Paths longer than 260 characters must never crash or hang the app;
+  they work as far as Windows allows (Windows' long-path setting is off by default, and
+  Explorer cannot open such folders either).
 
 ### 3.1 Experience from two earlier builds (to help choose the language)
 Qoqdir was built before, twice in parallel (C++ and Rust, same features, same tests).
@@ -119,8 +121,9 @@ These describe what the user experiences. Each must hold in every situation.
   still in progress; the old result, when it finally arrives, is ignored.
 - A tab's displayed folder, history and title change only when its new folder has
   actually loaded. A failed or slow load never leaves a tab half-updated.
-- Repeated refreshes (holding F5 on a slow network folder) never pile up: at most one
-  load per tab is running at a time.
+- Repeated refreshes never pile up: refreshing while the folder is still loading starts
+  nothing new (holding F5 on a slow network folder starts one load, not one per key
+  repeat).
 - An automatic refresh (folder changed on disk) never cancels a navigation in progress
   and never interrupts a rename in progress; it waits until they are done.
 
@@ -130,6 +133,9 @@ These describe what the user experiences. Each must hold in every situation.
   empty list, and the status bar says:
   `"<folder>" is not available: <Windows error text>   (F5 tries again)`.
   When the folder is back, F5 shows it normally and the message goes away.
+- While a folder is not available there is nothing to act on: paste, new folder and the
+  empty-space menu do nothing, its tab takes no drops, and none of these waits on the
+  unreachable server (asking Windows about one can block for 20–40 s).
 - Navigating to a folder that cannot be opened (typed, Back, a link) does not move the
   tab: it stays where it was, the status bar shows the error, and an error beep sounds.
 - A history entry whose folder no longer exists is dropped when Back/Forward fails on
@@ -170,8 +176,10 @@ limits — faster is welcome):
 - Filter it as you type: under 0.1 s per keystroke.
 - Re-sort it by any column: under 0.1 s.
 - Copy all 10,000 selected files to the clipboard (Ctrl+C): under 3 s, without
-  freezing longer than that (reference: ~1.5–2.5 s). The same scale applies to
-  drag-and-drop, Delete and the context menu on 10,000 selected files.
+  freezing longer than that (reference: ~1.5–2.5 s). Starting a drag, Delete or the
+  context menu on 10,000 selected files also takes at most a few seconds.
+- The copy or delete itself then runs at Windows' speed (it can take minutes for
+  10,000 small files), and the window keeps responding meanwhile.
 - The app starts and shows its window in well under a second.
 
 ### 4.8 Never lose user data or state silently
@@ -224,6 +232,8 @@ Back/Forward/Up are disabled when they cannot do anything.
   - a file path → opens the file with Windows, the tab stays where it was;
   - `%ENVIRONMENT%` variables, forward slashes, quotes and spaces around the text,
     `D:` (means `D:\`), "This PC", and `..`-style segments;
+  - `..` (up, like the Up button) or the name of a subfolder of the current folder →
+    opened in this tab;
   - anything else → run as a command, the way the Windows Run box (Win+R) would:
     `cmd`, `notepad file.txt`, a web address. The working folder is the current
     folder. If Windows cannot run it: status bar "Can't find "<text>"" and a beep.
@@ -253,8 +263,9 @@ Back/Forward/Up are disabled when they cannot do anything.
   extension, like Explorer. Drives cannot be renamed here.
 - Opening (Enter / double-click):
   - one folder → opens it in this tab;
-  - one shortcut (`.lnk`) to a folder → opens that folder in this tab; a shortcut to
-    anything else (file, program) and `.url` web links → opened by Windows;
+  - one shortcut (`.lnk`) to a folder → opens that folder in this tab (Ctrl+Enter: in
+    a new background tab); a shortcut to anything else (file, program) and `.url` web
+    links → opened by Windows. The context menu's "Open" on a shortcut does the same;
   - files → opened by Windows; opening more than 15 files at once asks for
     confirmation first;
   - several folders → each in a new background tab;
@@ -431,13 +442,13 @@ drives it **from inside the process** (calling the app's own key handling and
 controls, never global input), writes one line per step to a log next to that folder
 (`ok`/`FAIL`, plus timings), and exits with code 0 only if every step passed. It must:
 - never take focus from the user (the window opens without activating), never beep,
-  never show a dialog, never open an Explorer window;
+  never show a window that waits for an answer, never open an Explorer window
+  (Windows' own copy-progress windows may appear briefly during copy steps);
 - not read or write the real `qoqdir.ini` or the real Bookmarks folder (it uses a
   Bookmarks folder inside the test folder);
 - use the reserved documentation address `192.0.2.1` for "unreachable network"
   cases (nothing ever answers there), and steps that cancel such loads must start
-  while the load is still in progress. Creating a test shortcut to that address must
-  not make Windows try to reach it (that alone can take ~40 s);
+  while the load is still in progress;
 - give each step a timeout, and continue after a failing step;
 - leave nothing behind except the test folder and log in `%TEMP%` (one small file in
   the Recycle Bin from the delete test is acceptable); it may replace the clipboard.
@@ -466,37 +477,42 @@ Scenarios (each: action → expected result). The test folder starts with a few 
 14. Typing a folder path + Enter → it opens.
 15. Typing `\\192.0.2.1\share` + Enter → Enter returns within 100 ms; opening another
     folder right away cancels it, and that folder is shown.
-16. Open a folder, go back, delete that folder, press Forward/Back onto it → the dead
+16. Typing `sub` + Enter → `sub` opens in this tab; typing `..` + Enter → back up. No
+    Explorer window.
+17. Open a folder, go back, delete that folder, press Forward/Back onto it → the dead
     entry is dropped from history; the tab does not get stuck.
-17. Enter on a shortcut to a folder → that folder opens in this tab.
-18. Enter on a shortcut to `\\192.0.2.1\share` → returns within 100 ms; opening another
-    folder cancels it.
-19. Enter on that unreachable shortcut and wait → the status bar names the share; no
-    window from any process appears (no Explorer error window).
-20. Holding F5 (20 repeats) while a folder loads → only one load is started.
-21. A change notification arriving while a folder is being opened → the open is not
+18. Enter on a shortcut to a folder → that folder opens in this tab.
+19. Ctrl+Enter on that shortcut → a new background tab with that folder; the current
+    tab is unchanged. No Explorer window.
+20. A tab whose network folder is not available (the test may put it into that state
+    directly: a real failure can take minutes to arrive) → Ctrl+V, Ctrl+Shift+N and
+    dragging a file over its tab together return within 100 ms.
+21. Enter on a shortcut to a folder that does not exist → the status bar names that
+    folder and the tab stays where it was; no window from any process appears.
+22. Holding F5 (20 repeats) while a folder loads → only one load is started.
+23. A change notification arriving while a folder is being opened → the open is not
     cancelled; the new folder is shown.
-22. A slow refresh shows "Loading…", which disappears afterwards.
-23. A folder containing a program → its own icon arrives from the background.
-24. Sorting by Type → the Type column is in order.
-25. The Bookmarks folder exists and is the first tree root, labelled "Bookmarks".
-26. Context menus can be built for This PC, a drive and a file.
-27. Dropping a file (simulated drag inside the process) on a second tab → the file is
+24. A slow refresh shows "Loading…", which disappears afterwards.
+25. A folder containing a program → its own icon arrives from the background.
+26. Sorting by Type → the Type column is in order.
+27. The Bookmarks folder exists and is the first tree root, labelled "Bookmarks".
+28. Context menus can be built for This PC, a drive and a file.
+29. Dropping a file (simulated drag inside the process) on a second tab → the file is
     copied into that tab's folder; no tab stays highlighted afterwards.
-28. Middle-click on a folder in the list → a new background tab with that folder; the
+30. Middle-click on a folder in the list → a new background tab with that folder; the
     current tab is unchanged.
-29. Middle-click on a tree node → a new background tab with that folder.
-30. The tree lists the drives under This PC.
-31. Expanding a tree folder lists exactly its (non-hidden) subfolders.
-32. With a subfolder `one` and a shortcut `sub.lnk` in Bookmarks, rebuilding the tree
+31. Middle-click on a tree node → a new background tab with that folder.
+32. The tree lists the drives under This PC.
+33. Expanding a tree folder lists exactly its (non-hidden) subfolders.
+34. With a subfolder `one` and a shortcut `sub.lnk` in Bookmarks, rebuilding the tree
     as at startup → Bookmarks is open and lists "one", then "sub" (no `.lnk`).
-33. Moving to the "sub" bookmark with the keyboard → the `sub` folder opens.
-34. Creating `Bookmarks\two`, then collapsing and expanding Bookmarks (as the user
+35. Moving to the "sub" bookmark with the keyboard → the `sub` folder opens.
+36. Creating `Bookmarks\two`, then collapsing and expanding Bookmarks (as the user
     would, with Left/Right keys) → "one, two, sub".
-35. A 10,000-file folder loads within the target of 4.7.
-36. Filtering while scrolled to the bottom → the matches are shown from the top.
-37. Filtering and sorting 10,000 files are within the targets of 4.7.
-38. Copying 10,000 selected files to the clipboard is within the target of 4.7 and the
+37. A 10,000-file folder loads within the target of 4.7.
+38. Filtering while scrolled to the bottom → the matches are shown from the top.
+39. Filtering and sorting 10,000 files are within the targets of 4.7.
+40. Copying 10,000 selected files to the clipboard is within the target of 4.7 and the
     clipboard then holds 10,000 files.
 
 ### 7.3 Command-line checks (on a private copy of the exe in a temp folder)
@@ -509,7 +525,10 @@ Scenarios (each: action → expected result). The test folder starts with a few 
 ### 7.4 Watching for popups
 When running the self-test, a helper script should list every new visible window that
 appears from **any** process during the run (not only Qoqdir's), so a Windows error
-window caused by the app is caught. Only the test's own main window is expected.
+window caused by the app is caught. Only the test's own main window (and Windows'
+copy-progress windows from the test's own process) is expected. The script only
+reports: it must never close or touch another program's window, because the user keeps
+working while tests run and other programs' windows show up in the list too.
 
 ## 8. Build order
 Build and test in this order; each step must pass its tests before the next.

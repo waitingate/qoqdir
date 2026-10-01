@@ -445,15 +445,19 @@ pub fn drag_out(owner: HWND, items: &[Location]) {
     }
 }
 
-/// The target path stored in a shortcut. Does not touch the target (it may be on a network).
-pub fn shortcut_target(lnk: &Path) -> Option<PathBuf> {
+/// The target path stored in a shortcut, and whether it was a folder when the shortcut was made
+/// (false if not recorded). Reads only the shortcut file, never the target (it may be on a network).
+pub fn shortcut_target(lnk: &Path) -> Option<(PathBuf, bool)> {
+    use windows::Win32::Storage::FileSystem::WIN32_FIND_DATAW;
     unsafe {
         let link: IShellLinkW = CoCreateInstance(&ShellLink, None, CLSCTX_INPROC_SERVER).ok()?;
         let file: IPersistFile = link.cast().ok()?;
         file.Load(pcwstr(&wide(lnk)), STGM_READ).ok()?;
         let mut target = [0u16; 260];
-        link.GetPath(&mut target, std::ptr::null_mut(), 0).ok()?;
-        Some(PathBuf::from(from_wide(&target))).filter(|t| !t.as_os_str().is_empty())
+        let mut stored = WIN32_FIND_DATAW::default(); // the target as it was when the shortcut was made
+        link.GetPath(&mut target, &mut stored, 0).ok()?;
+        let folder = stored.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY.0 != 0;
+        Some((PathBuf::from(from_wide(&target)), folder)).filter(|(t, _)| !t.as_os_str().is_empty())
     }
 }
 

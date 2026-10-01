@@ -33,7 +33,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
 use windows::Win32::UI::Input::KeyboardAndMouse::SetFocus;
 use windows::core::w;
 
-use crate::folder::{Item, Listing, Location, SortKey, matches_filter, sort_items, to_lower, format_size, format_time};
+use crate::folder::{Item, Listing, Location, SortKey, equal_no_case, matches_filter, sort_items, to_lower, format_size, format_time};
 use crate::shell::{icon_for, system_image_list, type_name};
 use crate::util::{send, copy_to, wide};
 
@@ -189,6 +189,10 @@ impl FileList {
     pub fn item(&self, row: usize) -> Option<Item> {
         let m = self.model.borrow();
         m.view.get(row).map(|&i| m.items[i].clone())
+    }
+    /// A subfolder of that name, shown or filtered out.
+    pub fn has_folder(&self, name: &OsStr) -> bool {
+        self.model.borrow().items.iter().any(|it| it.is_dir() && equal_no_case(&it.name, name))
     }
     /// The item at a row, as a location of its own (for shell commands).
     pub fn item_location(&self, row: usize) -> Option<Location> {

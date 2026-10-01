@@ -424,6 +424,32 @@ impl App {
             Rc::new(move |a| a.at(&d2)),
             5000,
         );
+        let sub = p("sub");
+        add(
+            "typing a subfolder's name opens it here (not in Explorer)",
+            Some(Rc::new(|a| {
+                Self::set_edit_text(a.address, "sub");
+                unsafe {
+                    let _ = SetFocus(Some(a.address));
+                }
+                a.test_key(VK_RETURN, false, false, false);
+            })),
+            Rc::new(move |a| a.at(&sub)),
+            5000,
+        );
+        let d = dir.clone();
+        add(
+            "typing .. goes up",
+            Some(Rc::new(|a| {
+                Self::set_edit_text(a.address, "..");
+                unsafe {
+                    let _ = SetFocus(Some(a.address));
+                }
+                a.test_key(VK_RETURN, false, false, false);
+            })),
+            Rc::new(move |a| a.at(&d)),
+            5000,
+        );
 
         // Second review: history entries for deleted folders, and shortcuts.
         let (t1, t1b) = (p("temp1"), p("temp1"));
@@ -486,51 +512,111 @@ impl App {
             Rc::new(move |a| a.at(&d2)),
             5000,
         );
-        let offline = p("offline.lnk");
+        let (sub, d) = (p("sub"), dir.clone());
         add(
-            "(make a shortcut to an unreachable network folder)",
-            Some(Rc::new(move |a| {
-                make_shortcut(&offline, OsStr::new("\\\\192.0.2.1\\share"));
-                a.refresh(ViewState { select: vec!["offline.lnk".into()], focus: Some("offline.lnk".into()), ..Default::default() });
-            })),
-            Rc::new(|a| !a.is_loading() && a.list.focused_name().as_deref() == Some(OsStr::new("offline.lnk"))),
-            60000,
-        );
-        let started = Rc::new(RefCell::new(0u128));
-        let (s1, s2) = (started.clone(), started.clone());
-        add(
-            "opening a shortcut to an unreachable network folder does not freeze the window",
-            Some(Rc::new(move |a| {
+            "Ctrl+Enter on a shortcut to a folder opens it in a new background tab (not in Explorer)",
+            Some(Rc::new(|a| {
+                a.list.select(&["sub-link.lnk".into()], Some(OsStr::new("sub-link.lnk")));
                 unsafe {
                     let _ = SetFocus(Some(a.list.hwnd()));
                 }
+                a.test_key(VK_RETURN, true, false, false);
+            })),
+            Rc::new(move |a| {
+                let opened = {
+                    let st = a.st.borrow();
+                    st.tabs.len() == 2 && st.tabs.get(st.active + 1).is_some_and(|t| t.location.same(&Location::dir(&sub)))
+                };
+                opened && a.at(&d)
+            }),
+            5000,
+        );
+        add(
+            "(close that tab)",
+            Some(Rc::new(|a| {
+                let index = a.st.borrow().active + 1;
+                a.close_tab(index);
+            })),
+            Rc::new(|a| !a.is_loading() && a.st.borrow().tabs.len() == 1),
+            5000,
+        );
+        let started = Rc::new(RefCell::new(0u128));
+        let (s1, s2, file1) = (started.clone(), started.clone(), p("file1.txt"));
+        add(
+            "in a network folder that is not available, paste, new folder and a drag over its tab return at once",
+            Some(Rc::new(move |a| {
+                // As if this tab's folder had just failed to load (a real failure can take minutes to arrive).
+                let offline = Location::dir("\\\\192.0.2.1\\share");
+                {
+                    let mut st = a.st.borrow_mut();
+                    let active = st.active;
+                    st.tabs[active].location = offline.clone();
+                }
+                a.show_unavailable(&offline, "The network path was not found.", Nav::Refresh);
+                let index = a.st.borrow().active;
+                let mut r = RECT::default();
+                send(a.tab_bar, TCM_GETITEMRECT, index, &mut r as *mut _ as isize);
+                let mut pt = POINT { x: (r.left + r.right) / 2, y: (r.top + r.bottom) / 2 };
+                let data = data_object(a.wnd, &[Location::dir(&file1)]);
+                unsafe {
+                    let _ = ClientToScreen(a.tab_bar, &mut pt);
+                    let _ = SetFocus(Some(a.list.hwnd()));
+                }
                 let t = Instant::now();
-                a.test_key(VK_RETURN, false, false, false);
-                *s1.borrow_mut() = t.elapsed().as_millis(); // how long Enter kept the window busy
-                note(format!("Enter took {} ms", s1.borrow()));
+                a.test_key(VIRTUAL_KEY(b'V' as u16), true, false, false);
+                a.test_key(VIRTUAL_KEY(b'N' as u16), true, true, false);
+                if let (Some(data), Some(target)) = (data, a.tab_drop.borrow().clone()) {
+                    let mut effect = DROPEFFECT_COPY;
+                    unsafe {
+                        let _ = target.DragEnter(&data, MK_LBUTTON, POINTL { x: pt.x, y: pt.y }, &mut effect);
+                        let _ = target.DragLeave();
+                    }
+                }
+                *s1.borrow_mut() = t.elapsed().as_millis();
+                note(format!("took {} ms", s1.borrow()));
             })),
             Rc::new(move |_| *s2.borrow() < 100),
             5000,
         );
         let (d, d2) = (dir.clone(), dir.clone());
         add(
-            "(opening another folder cancels it)",
-            Some(Rc::new(move |a| a.open(Location::dir(&d), Nav::New, ViewState::default()))),
+            "(back to the test folder)",
+            Some(Rc::new(move |a| {
+                {
+                    let mut st = a.st.borrow_mut();
+                    let active = st.active;
+                    st.tabs[active].location = Location::dir(&d);
+                }
+                a.refresh(ViewState::default());
+            })),
             Rc::new(move |a| a.at(&d2)),
             5000,
         );
-        let d = dir.clone();
+        let (gone, missing) = (p("gone.lnk"), p("no-such-folder"));
         add(
-            "a shortcut to an unreachable folder says so here (no Explorer window or dialog)",
-            Some(Rc::new(|a| {
-                a.list.select(&["offline.lnk".into()], Some(OsStr::new("offline.lnk")));
+            "a shortcut to a folder that is gone says so here (no Windows dialog)",
+            Some(Rc::new(move |a| {
+                make_shortcut(&gone, missing.as_os_str());
+                a.refresh(ViewState { select: vec!["gone.lnk".into()], focus: Some("gone.lnk".into()), ..Default::default() });
+            })),
+            Rc::new(|a| {
+                if a.is_loading() || a.list.focused_name().as_deref() != Some(OsStr::new("gone.lnk")) {
+                    return false;
+                }
                 unsafe {
                     let _ = SetFocus(Some(a.list.hwnd()));
                 }
                 a.test_key(VK_RETURN, false, false, false);
-            })),
-            Rc::new(move |a| a.at(&d) && a.status_message().contains("share")),
-            90000,
+                true
+            }),
+            5000,
+        );
+        let d = dir.clone();
+        add(
+            "(the status bar names the missing folder, and the tab stays put)",
+            None,
+            Rc::new(move |a| a.at(&d) && a.status_message().contains("no-such-folder")),
+            5000,
         );
 
         // Regression tests for bugs found in code review.

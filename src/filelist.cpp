@@ -4,6 +4,7 @@
 
 #include <uxtheme.h>
 
+#include <algorithm>
 #include <unordered_set>
 
 namespace {
@@ -74,6 +75,10 @@ void FileList::update(bool keepSelection, const std::function<void()>& change) {
     ListView_SetItemCountEx(lv_, int(view_.size()), LVSICF_NOSCROLL);
     InvalidateRect(lv_, nullptr, FALSE);
     select(names, focus);
+}
+
+bool FileList::hasFolder(const std::wstring& name) const {
+    return std::any_of(items_.begin(), items_.end(), [&](const Item& it) { return it.isDir() && samePath(it.name, name); });
 }
 
 std::vector<int> FileList::selection() const {

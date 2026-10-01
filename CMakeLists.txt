@@ -14,6 +14,9 @@ if(MSVC)
   add_compile_options(/W4 /permissive- /utf-8)
 else()
   add_compile_options(-Wall -Wextra -Wshadow)
+  # A bad index (or other misuse of the standard library) stops the program with a message
+  # instead of quietly reading the wrong memory.
+  add_compile_definitions(_GLIBCXX_ASSERTIONS)
   # One self-contained exe: no MinGW DLLs to ship alongside it.
   add_link_options(-static $<$<CONFIG:Release>:-s>)
 endif()
