@@ -18,7 +18,7 @@ use windows::Win32::System::Memory::{GlobalLock, GlobalUnlock};
 use windows::Win32::Storage::FileSystem::FILE_FLAGS_AND_ATTRIBUTES;
 use windows::Win32::UI::Controls::{
     EM_GETSEL, EM_REPLACESEL, HTREEITEM, LVIF_IMAGE, LVITEMW, LVM_GETITEMW, SB_GETTEXTLENGTHW, SB_GETTEXTW, TVE_EXPAND,
-    TVGN_CHILD, TVGN_NEXT, TVGN_ROOT, TVIF_CHILDREN, TVITEMW, TVM_EXPAND, TVM_GETITEMW, TVM_GETNEXTITEM,
+    TVGN_CHILD, TVGN_NEXT, TVGN_ROOT, TVIF_CHILDREN, TVIF_TEXT, TVITEMW, TVM_EXPAND, TVM_GETITEMW, TVM_GETNEXTITEM,
 };
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     GetFocus, SetFocus, VIRTUAL_KEY, VK_BACK, VK_DELETE, VK_DOWN, VK_ESCAPE, VK_F2, VK_F5, VK_LEFT, VK_RETURN, VK_RIGHT,
@@ -175,7 +175,8 @@ impl App {
         };
         let d = dir.clone();
 
-        add("opens the start folder with all 5 items", None, Rc::new(move |a| a.at(&d) && a.list.count() == 5), 5000);
+        // 6 items: the 5 test files and folders, plus the self-test's own Bookmarks folder.
+        add("opens the start folder with all 6 items", None, Rc::new(move |a| a.at(&d) && a.list.count() == 6), 5000);
         add("shows a Chinese file name", None, Rc::new(|a| a.listed("\u{5831}\u{544A}.pdf")), 5000);
         add(
             "typing in the list filters it",
@@ -191,7 +192,7 @@ impl App {
         add(
             "Esc clears the filter and returns to the list",
             Some(Rc::new(|a| a.test_key(VK_ESCAPE, false, false, false))),
-            Rc::new(|a| a.list.count() == 5 && unsafe { GetFocus() } == a.list.hwnd()),
+            Rc::new(|a| a.list.count() == 6 && unsafe { GetFocus() } == a.list.hwnd()),
             5000,
         );
         add(
@@ -624,6 +625,25 @@ impl App {
             }),
             5000,
         );
+        let bookmarks = p("Bookmarks");
+        add(
+            "the Bookmarks folder is created and shown at the top of the tree",
+            None,
+            Rc::new(move |a| {
+                let mut text = [0u16; 64];
+                let root = send(a.tree.hwnd(), TVM_GETNEXTITEM, TVGN_ROOT as usize, 0);
+                let mut item = TVITEMW {
+                    mask: TVIF_TEXT,
+                    hItem: HTREEITEM(root),
+                    pszText: windows::core::PWSTR(text.as_mut_ptr()),
+                    cchTextMax: 64,
+                    ..Default::default()
+                };
+                send(a.tree.hwnd(), TVM_GETITEMW, 0, &mut item as *mut _ as isize);
+                is_directory(&bookmarks) && from_wide(&text) == "Bookmarks"
+            }),
+            5000,
+        );
         let file1 = p("file1.txt");
         add(
             "right-click menus can be built for This PC, a drive and a file",
@@ -703,7 +723,7 @@ impl App {
             "middle-click in the tree opens a new background tab",
             Some(Rc::new(|a| {
                 let tree = a.tree.hwnd();
-                let root = send(tree, TVM_GETNEXTITEM, TVGN_ROOT as usize, 0); // Desktop
+                let root = send(tree, TVM_GETNEXTITEM, TVGN_NEXT as usize, send(tree, TVM_GETNEXTITEM, TVGN_ROOT as usize, 0)); // Desktop (after Bookmarks)
                 let mut r = RECT::default();
                 unsafe { *(&mut r as *mut RECT as *mut isize) = root };   // TVM_GETITEMRECT takes the item in the rect
                 send(tree, TVM_GETITEMRECT, 1, &mut r as *mut _ as isize);
@@ -744,13 +764,13 @@ impl App {
         add(
             "expanding a tree folder lists its subfolders",
             Some(Rc::new(move |a| {
-                let root = send(tree(a), TVM_GETNEXTITEM, TVGN_ROOT as usize, 0); // Desktop
+                let root = send(tree(a), TVM_GETNEXTITEM, TVGN_NEXT as usize, send(tree(a), TVM_GETNEXTITEM, TVGN_ROOT as usize, 0)); // Desktop (after Bookmarks)
                 send(tree(a), TVM_EXPAND, TVE_EXPAND.0 as usize, root);
             })),
             Rc::new(move |a| {
                 let desktop = known_folder(&FOLDERID_Desktop).map(Location::dir).unwrap_or(Location::ThisPc);
                 let expected = list_folder(&desktop, false).items.iter().filter(|i| i.is_dir()).count();
-                let root = send(tree(a), TVM_GETNEXTITEM, TVGN_ROOT as usize, 0);
+                let root = send(tree(a), TVM_GETNEXTITEM, TVGN_NEXT as usize, send(tree(a), TVM_GETNEXTITEM, TVGN_ROOT as usize, 0)); // Desktop
                 let mut shown = 0;
                 let mut child = send(tree(a), TVM_GETNEXTITEM, TVGN_CHILD as usize, root);
                 while child != 0 {

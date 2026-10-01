@@ -44,7 +44,7 @@ class App {
 public:
     App();
     ~App();
-    // Opens the saved tabs plus the command line's folders, each once (with -n: only those).
+    // Opens the command line's folders as tabs (or the home folder).
     bool create(HINSTANCE instance, const CommandLine& cmd, bool useSettings = true);
     bool handleKey(const MSG& msg);   // called for every message before dispatch
 
@@ -70,7 +70,6 @@ private:
     static constexpr UINT_PTR kRefreshTimer = 1, kStatusTimer = 2, kLoadingTimer = 3, kSelfTestTimer = 50;
     int exitCode_ = 0;
     bool useSettings_ = true;
-    bool saveTabs_ = true;   // false with -n: the saved tabs are left as they are
 
     static LRESULT CALLBACK wndProc(HWND, UINT, WPARAM, LPARAM);
     LRESULT onMessage(UINT msg, WPARAM wp, LPARAM lp);

@@ -39,6 +39,7 @@ pub struct TreeBatch {
 pub struct FolderTree {
     hwnd: HWND,
     parent: HWND,
+    bookmarks: Location,
     batch_msg: u32,
     fill: Cell<u32>,
     paths: RefCell<Vec<Location>>, // node lParam indexes this
@@ -71,7 +72,8 @@ fn read_children(location: &Location) -> Vec<(Location, OsString, Option<i32>)> 
 impl FolderTree {
     /// `batch_msg` is posted to `parent` with a `Box<TreeBatch>` (for `add_children`)
     /// when subfolders have been read.
-    pub fn create(parent: HWND, id: i32, batch_msg: u32) -> FolderTree {
+    /// `bookmarks` is shown at the top of the tree.
+    pub fn create(parent: HWND, id: i32, batch_msg: u32, bookmarks: Location) -> FolderTree {
         let style = WS_CHILD.0 | WS_VISIBLE.0 | WS_TABSTOP.0 | TVS_HASBUTTONS | TVS_SHOWSELALWAYS | TVS_TRACKSELECT
             | TVS_FULLROWSELECT | TVS_NOHSCROLL;
         let hwnd = unsafe {
@@ -100,6 +102,7 @@ impl FolderTree {
         FolderTree {
             hwnd,
             parent,
+            bookmarks,
             batch_msg,
             fill: Cell::new(0),
             paths: RefCell::new(Vec::new()),
@@ -117,8 +120,10 @@ impl FolderTree {
         self.reading.borrow_mut().clear();
         send(self.hwnd, TVM_DELETEITEM, 0, TVI_ROOT.0);
         self.paths.borrow_mut().clear();
+        self.add(TVI_ROOT, self.bookmarks.clone(), &"Bookmarks".into(), folder_icon());
         for id in [&FOLDERID_Desktop, &FOLDERID_Downloads, &FOLDERID_Documents, &FOLDERID_Pictures, &FOLDERID_Music, &FOLDERID_Videos] {
-            if let Some(path) = known_folder(id) {
+            // Only folders that exist (one may have been deleted or moved).
+            if let Some(path) = known_folder(id).filter(|p| p.is_dir()) {
                 let location = Location::dir(path);
                 let (name, icon) = describe(&location);
                 self.add(TVI_ROOT, location, &name, icon);

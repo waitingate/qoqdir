@@ -62,7 +62,6 @@ LRESULT CALLBACK middleClickProc(HWND h, UINT msg, WPARAM wp, LPARAM lp, UINT_PT
 
 bool App::create(HINSTANCE instance, const CommandLine& cmd, bool useSettings) {
     useSettings_ = useSettings;
-    saveTabs_ = !cmd.onlyThese;
     WNDCLASSEXW wc{};
     wc.cbSize = sizeof wc;
     wc.lpfnWndProc = wndProc;
@@ -91,7 +90,12 @@ bool App::create(HINSTANCE instance, const CommandLine& cmd, bool useSettings) {
     // Flat button-style tabs: Windows outlines the selected one, which reads clearly on gray.
     tabBar_ = make(WC_TABCONTROLW, L"", TCS_FOCUSNEVER | TCS_BUTTONS | TCS_FLATBUTTONS, 0, ID_TABS);
     plus_ = make(L"BUTTON", L"+", BS_PUSHBUTTON, 0, ID_PLUS);
-    tree_.create(wnd_, ID_TREE, WM_APP_TREE);
+    // Bookmarks are shortcuts in a folder next to the exe (in a self-test: in the test folder).
+    std::wstring exe(32768, L'\0');   // not MAX_PATH: the app may live in a deep folder
+    exe.resize(GetModuleFileNameW(nullptr, exe.data(), DWORD(exe.size())));
+    std::wstring bookmarks = joinPath(useSettings ? parentPath(exe) : cmd.folders.at(0), L"Bookmarks");
+    CreateDirectoryW(bookmarks.c_str(), nullptr);   // fails harmlessly if it exists
+    tree_.create(wnd_, ID_TREE, WM_APP_TREE, bookmarks);
     list_.create(wnd_, ID_LIST);
     status_ = make(STATUSCLASSNAMEW, L"", SBARS_SIZEGRIP, 0, ID_STATUS);
 
@@ -117,8 +121,6 @@ bool App::create(HINSTANCE instance, const CommandLine& cmd, bool useSettings) {
     applyFont();
     tree_.fill();
 
-    std::wstring exe(32768, L'\0');   // not MAX_PATH: the app may live in a deep folder
-    exe.resize(GetModuleFileNameW(nullptr, exe.data(), DWORD(exe.size())));
     // Without settings (self-test), read from a file that does not exist: every value is a default.
     ini_ = useSettings_ ? joinPath(parentPath(exe), std::wstring(kAppName) + L".ini") : L"?";
     loadSettings(cmd);
@@ -994,8 +996,6 @@ void App::setMessage(const std::wstring& text) {
 }
 
 void App::loadSettings(const CommandLine& cmd) {
-    // Settings from before the app was renamed: Cubic.ini becomes Qoqdir.ini, once.
-    if (useSettings_) CopyFileW(joinPath(parentPath(ini_), L"Cubic.ini").c_str(), ini_.c_str(), TRUE);
     auto read = [&](const wchar_t* section, const std::wstring& key) -> std::optional<std::wstring> {
         std::wstring buf(32768, L'\0');
         GetPrivateProfileStringW(section, key.c_str(), L"?", buf.data(), DWORD(buf.size()), ini_.c_str());
@@ -1017,16 +1017,10 @@ void App::loadSettings(const CommandLine& cmd) {
         widths.push_back(scale(number((L"Column" + std::to_wstring(i)).c_str(), defaults[i]), dpi_));
     list_.setColumnWidths(widths);
 
-    auto count = read(L"Tabs", L"Count");
-    int n = count ? _wtoi(count->c_str()) : 0;
-    std::vector<std::wstring> paths;
-    for (int i = 0; i < n && !cmd.onlyThese; ++i)   // -n: only the command line's folders
-        if (auto path = read(L"Tabs", std::to_wstring(i))) paths.push_back(*path);
-    auto active = read(L"Tabs", L"Active");
-    int activeIndex = addStartFolders(paths, active && !cmd.onlyThese ? _wtoi(active->c_str()) : 0, cmd.folders);
-    if (paths.empty()) paths.push_back(knownFolder(FOLDERID_Profile));
-    for (const auto& path : paths) tabs_.push_back(makeTab(path));
-    active_ = std::clamp(activeIndex, 0, int(tabs_.size()) - 1);
+    // Tabs are not remembered: the command line's folders, or the home folder.
+    for (const auto& folder : cmd.folders) tabs_.push_back(makeTab(folder));
+    if (tabs_.empty()) tabs_.push_back(makeTab(knownFolder(FOLDERID_Profile)));
+    active_ = 0;
 
     int w = number(L"Width", 0), h = number(L"Height", 0);
     if (w > 0 && h > 0) {
@@ -1075,10 +1069,4 @@ void App::saveSettings() {
     std::vector<int> widths = list_.columnWidths();
     for (size_t i = 0; i < widths.size(); ++i)
         number((L"Column" + std::to_wstring(i)).c_str(), MulDiv(widths[i], 96, int(dpi_)));
-
-    if (!saveTabs_) return;
-    WritePrivateProfileStringW(L"Tabs", nullptr, nullptr, ini_.c_str());   // drop old tabs
-    write(L"Tabs", L"Count", std::to_wstring(tabs_.size()));
-    write(L"Tabs", L"Active", std::to_wstring(active_));
-    for (size_t i = 0; i < tabs_.size(); ++i) write(L"Tabs", std::to_wstring(i), tabs_[i].path);
 }

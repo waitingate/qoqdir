@@ -41,8 +41,9 @@ std::vector<TreeBatch::Child> readChildren(const std::wstring& dir) {
 
 }  // namespace
 
-void FolderTree::create(HWND parent, int id, UINT batchMsg) {
+void FolderTree::create(HWND parent, int id, UINT batchMsg, const std::wstring& bookmarks) {
     parent_ = parent;
+    bookmarks_ = bookmarks;
     batchMsg_ = batchMsg;
     tv_ = CreateWindowExW(0, WC_TREEVIEWW, L"",
                           WS_CHILD | WS_VISIBLE | WS_TABSTOP | TVS_HASBUTTONS | TVS_SHOWSELALWAYS |
@@ -59,6 +60,7 @@ void FolderTree::fill() {
     reading_.clear();
     TreeView_DeleteAllItems(tv_);
     paths_.clear();
+    add(TVI_ROOT, bookmarks_, L"Bookmarks", folderIcon());
     const KNOWNFOLDERID* folders[] = {&FOLDERID_Desktop, &FOLDERID_Downloads, &FOLDERID_Documents,
                                       &FOLDERID_Pictures, &FOLDERID_Music,    &FOLDERID_Videos};
     for (const KNOWNFOLDERID* id : folders) {

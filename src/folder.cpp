@@ -136,24 +136,16 @@ std::wstring resolveArgument(const std::wstring& arg) {
     return normalizePath(n > 0 && n < full.size() ? full.substr(0, n) : path);
 }
 
-int addStartFolders(std::vector<std::wstring>& tabs, int active, const std::vector<std::wstring>& given) {
-    for (size_t g = 0; g < given.size(); ++g) {
-        auto same = std::find_if(tabs.begin(), tabs.end(), [&](const std::wstring& t) { return samePath(t, given[g]); });
-        if (same == tabs.end()) same = tabs.insert(tabs.end(), given[g]);
-        if (g == 0) active = int(same - tabs.begin());
-    }
-    return active;
-}
-
 CommandLine parseCommandLine(const std::vector<std::wstring>& args) {
     CommandLine cmd;
     auto addFolder = [&](const std::wstring& text) {
-        if (std::wstring folder = resolveArgument(text); !folder.empty()) cmd.folders.push_back(folder);
+        std::wstring folder = resolveArgument(text);
+        bool known = std::any_of(cmd.folders.begin(), cmd.folders.end(), [&](auto& f) { return samePath(f, folder); });
+        if (!folder.empty() && !known) cmd.folders.push_back(folder);   // each folder once
     };
     for (const std::wstring& arg : args) {
         if (arg.empty() || arg[0] != L'-') addFolder(arg);   // a plain folder
         else if (arg == L"--selftest") cmd.selfTest = true;
-        else if (arg == L"-n") cmd.onlyThese = true;
         else if (arg == L"-h" || arg == L"-?" || arg == L"--help") cmd.help = true;
         else if (arg.size() > 2 && arg[1] == L't') addFolder(arg.substr(2));
         else if (arg == L"-t") cmd.error = L"-t needs a folder right after it, with no space: -tD:\\logs";

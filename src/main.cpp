@@ -11,13 +11,14 @@ const wchar_t kUsage[] =
     L"  {folder}\tOpen the folder in a tab (relative paths work: qoqdir .)\n"
     L"  -t{folder}\tThe same, as a switch: -tD:\\logs  -t\"C:\\My Files\"\n"
     L"\t(quote folders with spaces, but don't end them with \\ before the closing quote)\n"
-    L"  -n\tOnly the tabs given here; your saved tabs stay as they are\n"
     L"  -h, -?\tShow this help\n"
+    L"\n"
+    L"Tabs are not remembered between runs. Keep folders you use often as\n"
+    L"shortcuts in the Bookmarks folder next to qoqdir.exe (shown at the top of the tree).\n"
     L"\n"
     L"Examples:\n"
     L"  qoqdir .\n"
-    L"  qoqdir -tD:\\projects -tD:\\logs\n"
-    L"  qoqdir -n -tD:\\build\\out";
+    L"  qoqdir -tD:\\projects -tD:\\logs";
 
 }  // namespace
 

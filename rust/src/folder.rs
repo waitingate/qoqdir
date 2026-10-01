@@ -189,30 +189,11 @@ pub fn resolve_argument(arg: &OsStr) -> Location {
     normalize(std::path::absolute(&arg).as_deref().map_or(arg.as_os_str(), |p| p.as_os_str()))
 }
 
-/// Adds folders given on the command line to the saved tabs (each folder once) and
-/// returns the active tab: the first given folder, or `active` if none were given.
-pub fn add_start_folders(tabs: &mut Vec<Location>, mut active: usize, given: &[Location]) -> usize {
-    for (g, folder) in given.iter().enumerate() {
-        let index = match tabs.iter().position(|t| t.same(folder)) {
-            Some(i) => i,
-            None => {
-                tabs.push(folder.clone());
-                tabs.len() - 1
-            }
-        };
-        if g == 0 {
-            active = index;
-        }
-    }
-    active
-}
-
 /// The command line, 7z style: one-letter switches with the value attached.
 ///   qoqdir [switches] [folders...]     (see USAGE in main.rs)
 #[derive(Default, Debug)]
 pub struct CommandLine {
-    pub folders: Vec<Location>, // -t{folder} and plain folders, in order
-    pub only_these: bool,       // -n: only these tabs; the saved tabs are left alone
+    pub folders: Vec<Location>, // -t{folder} and plain folders, in order, each once
     pub help: bool,             // -h or -?
     pub self_test: bool,        // --selftest
     pub error: Option<String>,  // a mistake to show with the help
@@ -231,7 +212,6 @@ pub fn parse_command_line(args: &[OsString]) -> CommandLine {
         } else {
             match text.as_ref() {
                 "--selftest" => cmd.self_test = true,
-                "-n" => cmd.only_these = true,
                 "-h" | "-?" | "--help" => cmd.help = true,
                 "-t" => cmd.error = Some("-t needs a folder right after it, with no space: -tD:\\logs".into()),
                 _ => cmd.error = Some(format!("Unknown switch: {text}")),
@@ -242,6 +222,13 @@ pub fn parse_command_line(args: &[OsString]) -> CommandLine {
         }
     }
     cmd.folders.retain(|l| matches!(l, Location::Dir(_)));
+    let mut unique: Vec<Location> = Vec::new(); // each folder once
+    for folder in cmd.folders.drain(..) {
+        if !unique.iter().any(|u| u.same(&folder)) {
+            unique.push(folder);
+        }
+    }
+    cmd.folders = unique;
     cmd
 }
 
@@ -590,25 +577,11 @@ mod tests {
     }
 
     #[test]
-    fn start_folders() {
-        // "qoqdir A B" adds A and B as tabs (each once) and shows the first.
-        let texts = |tabs: &[Location]| tabs.iter().map(text).collect::<Vec<_>>().join(",");
-        let mut tabs = vec![dir("C:\\A"), dir("C:\\B")];
-        assert_eq!(add_start_folders(&mut tabs, 0, &[]), 0); // nothing given: unchanged
-        assert_eq!(add_start_folders(&mut tabs, 0, &[dir("C:\\B")]), 1); // already open: just shown
-        assert_eq!(add_start_folders(&mut tabs, 0, &[dir("C:\\C"), dir("c:\\a"), dir("C:\\D")]), 2); // first given shown
-        assert_eq!(texts(&tabs), "C:\\A,C:\\B,C:\\C,C:\\D"); // c:\a matched C:\A
-        let mut none = Vec::new();
-        assert_eq!(add_start_folders(&mut none, 0, &[dir("C:\\X"), dir("C:\\X")]), 0);
-        assert_eq!(none.len(), 1);
-    }
-
-    #[test]
     fn command_line() {
         let args = |list: &[&str]| list.iter().map(OsString::from).collect::<Vec<_>>();
         let cwd = std::env::current_dir().unwrap();
-        let c = parse_command_line(&args(&[".", "-tC:\\A", "-n", "-tC:\\My Files\\"]));
-        assert!(c.error.is_none() && c.only_these && !c.help && !c.self_test);
+        let c = parse_command_line(&args(&[".", "-tC:\\A", "-tc:\\a", "-tC:\\My Files\\"]));
+        assert!(c.error.is_none() && !c.help && !c.self_test); // c:\a is C:\A again: kept once
         let texts: Vec<String> = c.folders.iter().map(text).collect();
         assert_eq!(texts.len(), 3);
         assert!(c.folders[0].same(&Location::dir(cwd)));
@@ -618,7 +591,8 @@ mod tests {
         assert!(parse_command_line(&args(&["--selftest"])).self_test);
         assert_eq!(parse_command_line(&args(&["-x"])).error.as_deref(), Some("Unknown switch: -x"));
         assert!(parse_command_line(&args(&["-t"])).error.is_some()); // -t without a folder
-        assert!(parse_command_line(&args(&["-n", "-tC:\\A", "-q"])).error.is_some());
+        assert!(parse_command_line(&args(&["-tC:\\A", "-q"])).error.is_some());
+        assert!(parse_command_line(&args(&["-n"])).error.is_some()); // -n no longer exists
     }
 
     #[test]

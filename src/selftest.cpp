@@ -143,12 +143,13 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
     };
     static double t0 = 0, keyMs = 0;   // keyMs: how long a key press kept the window busy
 
-    add(L"opens the start folder with all 5 items", nullptr, [=, this] { return at(dir) && list_.count() == 5; });
+    // 6 items: the 5 test files and folders, plus the self-test's own Bookmarks folder.
+    add(L"opens the start folder with all 6 items", nullptr, [=, this] { return at(dir) && list_.count() == 6; });
     add(L"shows a Chinese file name", nullptr, [=, this] { return listed(L"\u5831\u544A.pdf"); });
     add(L"typing in the list filters it", [=, this] { SetFocus(list_.hwnd()); selfTestType(L"file"); },
         [=, this] { return list_.count() == 3 && GetFocus() == filter_; });
     add(L"Esc clears the filter and returns to the list", [=, this] { selfTestKey(VK_ESCAPE); },
-        [=, this] { return list_.count() == 5 && GetFocus() == list_.hwnd(); });
+        [=, this] { return list_.count() == 6 && GetFocus() == list_.hwnd(); });
     add(L"Ctrl+C puts the file on the clipboard",
         [=, this] { list_.select({L"file1.txt"}, L"file1.txt"); selfTestKey('C', true); },
         [=, this] {
@@ -327,6 +328,16 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
             list_.setSort(SortKey::Name, true);
             return ordered;
         });
+    add(L"the Bookmarks folder is created and shown at the top of the tree", nullptr, [=, this] {
+        TVITEMW item{};
+        item.mask = TVIF_TEXT;
+        wchar_t text[64] = {};
+        item.pszText = text;
+        item.cchTextMax = 64;
+        item.hItem = TreeView_GetRoot(tree_.hwnd());
+        TreeView_GetItem(tree_.hwnd(), &item);
+        return isDirectory(path(L"Bookmarks")) && std::wstring(text) == L"Bookmarks";
+    });
     add(L"right-click menus can be built for This PC, a drive and a file", nullptr, [=, this] {
         return itemMenu(wnd_, {L""}) && itemMenu(wnd_, {L"C:\\"}) && itemMenu(wnd_, {path(L"file1.txt")});
     });
@@ -362,7 +373,7 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
     add(L"middle-click in the tree opens a new background tab",
         [=, this] {
             RECT r{};
-            TreeView_GetItemRect(tree_.hwnd(), TreeView_GetRoot(tree_.hwnd()), &r, TRUE);   // Desktop
+            TreeView_GetItemRect(tree_.hwnd(), TreeView_GetNextSibling(tree_.hwnd(), TreeView_GetRoot(tree_.hwnd())), &r, TRUE);   // Desktop (after Bookmarks)
             SendMessageW(tree_.hwnd(), WM_MBUTTONUP, 0, MAKELPARAM((r.left + r.right) / 2, (r.top + r.bottom) / 2));
         },
         [=, this] {
@@ -375,11 +386,11 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
         return last && TreeView_GetChild(tree_.hwnd(), last) != nullptr;
     });
     add(L"expanding a tree folder lists its subfolders",
-        [=, this] { TreeView_Expand(tree_.hwnd(), TreeView_GetRoot(tree_.hwnd()), TVE_EXPAND); },   // Desktop
+        [=, this] { TreeView_Expand(tree_.hwnd(), TreeView_GetNextSibling(tree_.hwnd(), TreeView_GetRoot(tree_.hwnd())), TVE_EXPAND); },   // Desktop (after Bookmarks)
         [=, this] {
             int expected = 0;
             for (const Item& it : listFolder(knownFolder(FOLDERID_Desktop), false).items) expected += it.isDir();
-            HTREEITEM root = TreeView_GetRoot(tree_.hwnd());
+            HTREEITEM root = TreeView_GetNextSibling(tree_.hwnd(), TreeView_GetRoot(tree_.hwnd()));   // Desktop
             int shown = 0;
             for (HTREEITEM c = TreeView_GetChild(tree_.hwnd(), root); c; c = TreeView_GetNextSibling(tree_.hwnd(), c)) ++shown;
             TVITEMW item{};

@@ -40,15 +40,11 @@ bool matchesFilter(const Item& item, const std::wstring& filter);
 
 std::wstring normalizePath(std::wstring text);       // cleans up typed text; "" for This PC
 std::wstring resolveArgument(const std::wstring& arg); // a command-line folder, relative to the current one
-// Adds folders given on the command line to the saved tabs (each folder once) and returns
-// the active tab: the first given folder, or `active` if none were given.
-int addStartFolders(std::vector<std::wstring>& tabs, int active, const std::vector<std::wstring>& given);
 
 // The command line, 7z style: one-letter switches with the value attached.
 //   qoqdir [switches] [folders...]     (see kUsage in main.cpp)
 struct CommandLine {
-    std::vector<std::wstring> folders;   // -t{folder} and plain folders, in order
-    bool onlyThese = false;              // -n: only these tabs; the saved tabs are left alone
+    std::vector<std::wstring> folders;   // -t{folder} and plain folders, in order, each once
     bool help = false;                   // -h or -?
     bool selfTest = false;               // --selftest
     std::wstring error;                  // a mistake to show with the help

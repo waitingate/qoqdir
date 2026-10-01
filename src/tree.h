@@ -20,7 +20,8 @@ struct TreeBatch {
 class FolderTree {
 public:
     // `batchMsg` is posted to `parent` with a TreeBatch* (to pass to addChildren) when subfolders are read.
-    void create(HWND parent, int id, UINT batchMsg);
+    // `bookmarks` is shown at the top of the tree.
+    void create(HWND parent, int id, UINT batchMsg, const std::wstring& bookmarks);
     HWND hwnd() const { return tv_; }
     void fill();   // rebuilds the roots (user folders and This PC)
     void addChildren(const TreeBatch& batch);
@@ -36,6 +37,7 @@ private:
     const std::wstring& pathOf(HTREEITEM node) const;
 
     HWND tv_ = nullptr, parent_ = nullptr;
+    std::wstring bookmarks_;
     UINT batchMsg_ = 0;
     unsigned fill_ = 0;
     std::vector<std::wstring> paths_;   // node lParam indexes this

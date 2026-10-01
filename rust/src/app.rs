@@ -56,7 +56,7 @@ use windows::core::{PCWSTR, PWSTR, w};
 
 use crate::filelist::FileList;
 use crate::APP_NAME;
-use crate::folder::{CommandLine, Listing, Location, SortKey, add_start_folders, byte_size, exists, extension_of, list_folder, normalize};
+use crate::folder::{CommandLine, Listing, Location, SortKey, byte_size, extension_of, list_folder, normalize};
 use crate::selftest::SelfTest;
 use crate::shell::{
     FolderWatch, IconBatch, acknowledge_change, has_own_icon, read_own_icons, remember_icons, background_menu, copy_to_clipboard, delete_items, drag_out,
@@ -194,7 +194,6 @@ pub struct App {
     show_hidden: Cell<bool>,
     pub generation: Cell<u32>,
     use_settings: bool,
-    save_tabs: bool, // false with -n: the saved tabs are left as they are
     ini: Vec<u16>, // settings file
     pub st: RefCell<State>,
     pub selftest: RefCell<Option<SelfTest>>,
@@ -257,7 +256,7 @@ unsafe extern "system" fn middle_click_proc(h: HWND, msg: u32, wp: WPARAM, lp: L
 impl App {
     // ------------------------------------------------------------ setup
 
-    /// Opens the saved tabs plus the command line's folders, each once (with -n: only those).
+    /// Opens the command line's folders as tabs (or the home folder).
     pub fn create(instance: HINSTANCE, cmd: CommandLine, use_settings: bool) -> Option<Rc<App>> {
         let name = wide(APP_NAME);
         unsafe {
@@ -316,25 +315,24 @@ impl App {
             const TCS_FLATBUTTONS: u32 = 0x0008;
             let tab_bar = make(w!("SysTabControl32"), w!(""), TCS_FOCUSNEVER | TCS_BUTTONS | TCS_FLATBUTTONS, 0, ID_TABS);
             let plus = make(w!("BUTTON"), w!("+"), 0, 0, ID_PLUS);
-            let tree = FolderTree::create(wnd, ID_TREE, WM_APP_TREE);
-            let list = FileList::create(wnd, ID_LIST);
-            const SBARS_SIZEGRIP: u32 = 0x100;
-            let status = make(w!("msctls_statusbar32"), w!(""), SBARS_SIZEGRIP, 0, ID_STATUS);
-
             let exe = {
                 let mut buf = [0u16; 32768];
                 let n = GetModuleFileNameW(None, &mut buf) as usize;
                 PathBuf::from(from_wide(&buf[..n]))
             };
+            // Bookmarks are shortcuts in a folder next to the exe (in a self-test: in the test folder).
+            let bookmarks = match (use_settings, cmd.folders.first().and_then(|f| f.path())) {
+                (false, Some(test_dir)) => test_dir.join("Bookmarks"),
+                _ => exe.with_file_name("Bookmarks"),
+            };
+            let _ = std::fs::create_dir(&bookmarks); // fails harmlessly if it exists
+            let tree = FolderTree::create(wnd, ID_TREE, WM_APP_TREE, Location::dir(bookmarks));
+            let list = FileList::create(wnd, ID_LIST);
+            const SBARS_SIZEGRIP: u32 = 0x100;
+            let status = make(w!("msctls_statusbar32"), w!(""), SBARS_SIZEGRIP, 0, ID_STATUS);
+
             // Without settings (self-test), read from a file that cannot exist: every value is a default.
-            // Without settings (self-test), read from a file that cannot exist: every value is a default.
-            let ini = exe.with_file_name(if use_settings { format!("{APP_NAME}.ini") } else { "none?.ini".into() });
-            // Settings from before the app was renamed: Cubic.ini becomes Qoqdir.ini, once.
-            let old = exe.with_file_name("Cubic.ini");
-            if use_settings && !exists(&ini) && exists(&old) {
-                let _ = std::fs::copy(&old, &ini);
-            }
-            let ini = wide(ini);
+            let ini = wide(exe.with_file_name(if use_settings { format!("{APP_NAME}.ini") } else { "none?.ini".into() }));
 
             let app = Rc::new(App {
                 wnd,
@@ -363,7 +361,6 @@ impl App {
                 show_hidden: Cell::new(false),
                 generation: Cell::new(0),
                 use_settings,
-                save_tabs: !cmd.only_these,
                 ini,
                 st: RefCell::new(State {
                     tabs: Vec::new(),
@@ -1688,14 +1685,8 @@ impl App {
             [320, 150, 170, 90].iter().enumerate().map(|(i, &d)| scale(self.number(&format!("Column{i}"), d), dpi)).collect();
         self.list.set_column_widths(&widths);
 
-        let count: usize = self.read_setting("Tabs", "Count").and_then(|v| v.to_string_lossy().parse().ok()).unwrap_or(0);
-        let saved = if cmd.only_these { 0 } else { count }; // -n: only the command line's folders
-        let mut tabs: Vec<Location> = (0..saved)
-            .filter_map(|i| self.read_setting("Tabs", &i.to_string()))
-            .map(|p| if p.is_empty() { Location::ThisPc } else { Location::dir(p) })
-            .collect();
-        let saved_active: usize = self.read_setting("Tabs", "Active").and_then(|v| v.to_string_lossy().parse().ok()).unwrap_or(0);
-        let active = add_start_folders(&mut tabs, saved_active, &cmd.folders);
+        // Tabs are not remembered: the command line's folders, or the home folder.
+        let mut tabs = cmd.folders.clone();
         if tabs.is_empty() {
             tabs.push(known_folder(&FOLDERID_Profile).map(Location::dir).unwrap_or(Location::ThisPc));
         }
@@ -1705,7 +1696,7 @@ impl App {
                 let tab = Self::make_tab(&mut st, location);
                 st.tabs.push(tab);
             }
-            st.active = active.min(st.tabs.len() - 1);
+            st.active = 0;
         }
 
         let (w, h) = (self.number("Width", 0), self.number("Height", 0));
@@ -1762,24 +1753,6 @@ impl App {
             let dpi = self.dpi.get() as i64;
             for (i, w) in self.list.column_widths().iter().enumerate() {
                 number(&format!("Column{i}"), (*w as i64 * 96 / dpi) as i32);
-            }
-
-            if !self.save_tabs {
-                return;
-            }
-            let _ = WritePrivateProfileStringW(w!("Tabs"), PCWSTR::null(), PCWSTR::null(), pcwstr(&self.ini)); // drop old tabs
-            let (paths, active): (Vec<OsString>, usize) = {
-                let st = self.st.borrow();
-                let paths = st.tabs.iter().map(|t| match &t.location {
-                    Location::ThisPc => OsString::new(),
-                    Location::Dir(p) => p.clone().into_os_string(),
-                });
-                (paths.collect(), st.active)
-            };
-            write("Tabs", "Count", OsStr::new(&paths.len().to_string()));
-            write("Tabs", "Active", OsStr::new(&active.to_string()));
-            for (i, p) in paths.iter().enumerate() {
-                write("Tabs", &i.to_string(), p);
             }
         }
     }

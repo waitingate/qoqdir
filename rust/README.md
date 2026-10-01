@@ -57,7 +57,6 @@ qoqdir [switches] [folders...]
 
   {folder}     Open the folder in a tab (relative paths work: qoqdir .)
   -t{folder}   The same, as a switch: -tD:\logs  -t"C:\My Files"
-  -n           Only the tabs given here; your saved tabs stay as they are
   -h, -?       Show this help
 ```
 
@@ -65,13 +64,16 @@ Quote folders that contain spaces, but don't end them with `\` before the closin
 quote: Windows reads `\"` as a literal quote (write `-t"D:\My Files"`, not
 `-t"D:\My Files\"`).
 
-Without `-n`, the folders are added to your saved tabs (each folder once) and the
-first one is shown. Examples:
+Each folder opens once; the first is shown. With no folders, the home folder opens.
+
+Tabs are not remembered between runs. For folders you use often, keep shortcuts
+in the `Bookmarks` folder next to `qoqdir.exe` (it is created if missing and shown
+at the top of the tree): Alt+drag a folder into it, or copy shortcuts in. Rename or
+delete them like any file. Examples:
 
 ```
 qoqdir .
 qoqdir -tD:\projects -tD:\logs
-qoqdir -n -tD:\build\out
 ```
 
 Put `qoqdir.exe` in a folder on your PATH to type just `qoqdir`.

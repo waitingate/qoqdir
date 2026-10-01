@@ -31,13 +31,14 @@ const USAGE: &str = "Usage: qoqdir [switches] [folders...]\n\
   {folder}\tOpen the folder in a tab (relative paths work: qoqdir .)\n\
   -t{folder}\tThe same, as a switch: -tD:\\logs  -t\"C:\\My Files\"\n\
 \t(quote folders with spaces, but don't end them with \\ before the closing quote)\n\
-  -n\tOnly the tabs given here; your saved tabs stay as they are\n\
   -h, -?\tShow this help\n\
+\n\
+Tabs are not remembered between runs. Keep folders you use often as\n\
+shortcuts in the Bookmarks folder next to qoqdir.exe (shown at the top of the tree).\n\
 \n\
 Examples:\n\
   qoqdir .\n\
-  qoqdir -tD:\\projects -tD:\\logs\n\
-  qoqdir -n -tD:\\build\\out";
+  qoqdir -tD:\\projects -tD:\\logs";
 
 /// The app's name: window title, settings file, logs. (The exe name is set in Cargo.toml.)
 pub const APP_NAME: &str = "Qoqdir";
