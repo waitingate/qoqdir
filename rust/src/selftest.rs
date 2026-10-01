@@ -18,7 +18,8 @@ use windows::Win32::System::Memory::{GlobalLock, GlobalUnlock};
 use windows::Win32::Storage::FileSystem::FILE_FLAGS_AND_ATTRIBUTES;
 use windows::Win32::UI::Controls::{
     EM_GETSEL, EM_REPLACESEL, HTREEITEM, LVIF_IMAGE, LVITEMW, LVM_GETITEMW, SB_GETTEXTLENGTHW, SB_GETTEXTW, TVE_EXPAND,
-    TVGN_CHILD, TVGN_NEXT, TVGN_ROOT, TVIF_CHILDREN, TVIF_TEXT, TVITEMW, TVM_EXPAND, TVM_GETITEMW, TVM_GETNEXTITEM,
+    TVGN_CARET, TVGN_CHILD, TVGN_NEXT, TVGN_ROOT, TVIF_CHILDREN, TVIF_TEXT, TVITEMW, TVM_EXPAND, TVM_GETITEMW, TVM_GETNEXTITEM,
+    TVM_SELECTITEM,
 };
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     GetFocus, SetFocus, VIRTUAL_KEY, VK_BACK, VK_DELETE, VK_DOWN, VK_ESCAPE, VK_F2, VK_F5, VK_LEFT, VK_RETURN, VK_RIGHT,
@@ -518,6 +519,19 @@ impl App {
             Rc::new(move |a| a.at(&d2)),
             5000,
         );
+        let d = dir.clone();
+        add(
+            "a shortcut to an unreachable folder says so here (no Explorer window or dialog)",
+            Some(Rc::new(|a| {
+                a.list.select(&["offline.lnk".into()], Some(OsStr::new("offline.lnk")));
+                unsafe {
+                    let _ = SetFocus(Some(a.list.hwnd()));
+                }
+                a.test_key(VK_RETURN, false, false, false);
+            })),
+            Rc::new(move |a| a.at(&d) && a.status_message().contains("share")),
+            90000,
+        );
 
         // Regression tests for bugs found in code review.
         let (sub, sub2) = (p("sub"), p("sub"));
@@ -784,6 +798,39 @@ impl App {
             }),
             5000,
         );
+        let bookmark_nodes = move |a: &App| {
+            // the tree's first root is Bookmarks
+            let mut n = 0;
+            let mut child = send(tree(a), TVM_GETNEXTITEM, TVGN_CHILD as usize, send(tree(a), TVM_GETNEXTITEM, TVGN_ROOT as usize, 0));
+            while child != 0 {
+                n += 1;
+                child = send(tree(a), TVM_GETNEXTITEM, TVGN_NEXT as usize, child);
+            }
+            n
+        };
+        let one = p("Bookmarks\\one");
+        add(
+            "(expand Bookmarks, which has one subfolder)",
+            Some(Rc::new(move |a| {
+                let _ = std::fs::create_dir(&one);
+                send(tree(a), TVM_EXPAND, TVE_EXPAND.0 as usize, send(tree(a), TVM_GETNEXTITEM, TVGN_ROOT as usize, 0));
+            })),
+            Rc::new(move |a| bookmark_nodes(a) == 1),
+            5000,
+        );
+        let two = p("Bookmarks\\two");
+        add(
+            "collapsing and expanding a tree folder shows its new subfolders",
+            Some(Rc::new(move |a| {
+                let _ = std::fs::create_dir(&two);
+                let root = send(tree(a), TVM_GETNEXTITEM, TVGN_ROOT as usize, 0);
+                send(tree(a), TVM_SELECTITEM, TVGN_CARET as usize, root);
+                send(tree(a), WM_KEYDOWN, VK_LEFT.0 as usize, 0); // collapse, as the user would
+                send(tree(a), WM_KEYDOWN, VK_RIGHT.0 as usize, 0); // and expand again
+            })),
+            Rc::new(move |a| bookmark_nodes(a) == 2),
+            5000,
+        );
 
         // Speed: a folder with 10,000 files.
         let big = p("big");
@@ -854,8 +901,7 @@ impl App {
             5000,
         );
 
-        // Steps that cancel an unreachable load must really cancel it (not wait ~40 s for it to
-        // fail), or the app would then ask Windows to open the shortcut and a dialog would appear.
+        // Steps that cancel an unreachable load must start while it loads (not wait ~40 s for it to fail).
         for step in steps.iter_mut().filter(|s| s.name.contains("opening another folder cancels it")) {
             step.while_loading = true;
         }

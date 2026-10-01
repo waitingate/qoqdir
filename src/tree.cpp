@@ -156,6 +156,12 @@ bool FolderTree::onNotify(NMHDR* nm, std::wstring* open) {
         if (tv->action & TVE_EXPAND) startReading(tv->itemNew.hItem);
         return false;
     }
+    case TVN_ITEMEXPANDEDW: {
+        // Forget the subfolders of a collapsed node: the next expand reads them fresh.
+        auto* tv = reinterpret_cast<NMTREEVIEWW*>(nm);
+        if (tv->action & TVE_COLLAPSE) TreeView_Expand(tv_, tv->itemNew.hItem, TVE_COLLAPSE | TVE_COLLAPSERESET);
+        return false;
+    }
     case TVN_SELCHANGEDW: {
         auto* tv = reinterpret_cast<NMTREEVIEWW*>(nm);
         if (tv->action == TVC_BYMOUSE || tv->action == TVC_BYKEYBOARD) {

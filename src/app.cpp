@@ -122,7 +122,7 @@ bool App::create(HINSTANCE instance, const CommandLine& cmd, bool useSettings) {
     tree_.fill();
 
     // Without settings (self-test), read from a file that does not exist: every value is a default.
-    ini_ = useSettings_ ? joinPath(parentPath(exe), std::wstring(kAppName) + L".ini") : L"?";
+    ini_ = useSettings_ ? joinPath(parentPath(exe), toLower(kAppName) + L".ini") : L"?";
     loadSettings(cmd);
     layout();
     showTabs();
@@ -729,7 +729,9 @@ void App::showLocation(Nav nav) {
 // The folder could not be read: decide what to show or do instead.
 void App::onLoadFailed(const Listing& listing, const Pending& p) {
     Tab& t = tab();
-    if (!p.origin.shortcut.empty()) {   // the shortcut does not lead to a folder: let Windows open it
+    // The shortcut leads to a file: let Windows open it. (Not when its folder is unreachable:
+    // Windows would only show its own error, after the same long wait.)
+    if (!p.origin.shortcut.empty() && listing.isFile) {
         openFile(wnd_, p.origin.shortcut);
         return;
     }
@@ -1036,17 +1038,7 @@ void App::loadSettings(const CommandLine& cmd) {
 }
 
 void App::saveSettings() {
-    if (!useSettings_) return;
-    // Create the file as UTF-16 first, or Windows writes it in the ANSI code page
-    // and non-English folder names would be lost.
-    if (GetFileAttributesW(ini_.c_str()) == INVALID_FILE_ATTRIBUTES) {
-        HANDLE f = CreateFileW(ini_.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_NEW, FILE_ATTRIBUTE_NORMAL, nullptr);
-        if (f == INVALID_HANDLE_VALUE) return;   // read-only location: nothing to save to
-        const wchar_t bom = 0xFEFF;
-        DWORD written = 0;
-        WriteFile(f, &bom, sizeof bom, &written, nullptr);
-        CloseHandle(f);
-    }
+    if (!useSettings_) return;   // only numbers are saved: a plain ini file is fine
     auto write = [&](const wchar_t* section, const std::wstring& key, const std::wstring& value) {
         WritePrivateProfileStringW(section, key.c_str(), value.c_str(), ini_.c_str());
     };

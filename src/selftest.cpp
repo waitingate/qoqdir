@@ -263,6 +263,13 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
         },
         [=, this] { return keyMs < 100; });
     add(L"(opening another folder cancels it)", [=, this] { open(dir, Nav::New); }, [=, this] { return at(dir); }, 5000, true);
+    add(L"a shortcut to an unreachable folder says so here (no Explorer window or dialog)",
+        [=, this] {
+            list_.select({L"offline.lnk"}, L"offline.lnk");
+            SetFocus(list_.hwnd());
+            selfTestKey(VK_RETURN);
+        },
+        [=, this] { return at(dir) && statusMessage().find(L"share") != std::wstring::npos; }, 90000);
 
     // Regression tests for bugs found in code review.
     add(L"holding F5 while a folder loads does not start more loads",
@@ -400,6 +407,25 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
             // Done when the subfolders are shown, or the node knows it has none.
             return expected > 0 ? shown == expected : item.cChildren == 0;
         });
+    auto bookmarkNodes = [this] {   // the tree's first root is Bookmarks
+        int n = 0;
+        for (HTREEITEM c = TreeView_GetChild(tree_.hwnd(), TreeView_GetRoot(tree_.hwnd())); c; c = TreeView_GetNextSibling(tree_.hwnd(), c)) ++n;
+        return n;
+    };
+    add(L"(expand Bookmarks, which has one subfolder)",
+        [=, this] {
+            CreateDirectoryW(path(L"Bookmarks\\one").c_str(), nullptr);
+            TreeView_Expand(tree_.hwnd(), TreeView_GetRoot(tree_.hwnd()), TVE_EXPAND);
+        },
+        [=] { return bookmarkNodes() == 1; });
+    add(L"collapsing and expanding a tree folder shows its new subfolders",
+        [=, this] {
+            CreateDirectoryW(path(L"Bookmarks\\two").c_str(), nullptr);
+            TreeView_SelectItem(tree_.hwnd(), TreeView_GetRoot(tree_.hwnd()));
+            SendMessageW(tree_.hwnd(), WM_KEYDOWN, VK_LEFT, 0);    // collapse, as the user would
+            SendMessageW(tree_.hwnd(), WM_KEYDOWN, VK_RIGHT, 0);   // and expand again
+        },
+        [=] { return bookmarkNodes() == 2; });
 
     // Speed: a folder with 10,000 files.
     add(L"loads a 10,000-file folder",

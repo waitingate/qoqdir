@@ -9,11 +9,11 @@ use windows::Win32::Foundation::{HWND, LPARAM, POINT, WPARAM};
 use windows::Win32::Graphics::Gdi::ScreenToClient;
 use windows::Win32::System::Com::{COINIT_APARTMENTTHREADED, COINIT_DISABLE_OLE1DDE, CoInitializeEx, CoUninitialize};
 use windows::Win32::UI::Controls::{
-    HTREEITEM, NM_CLICK, NMHDR, NMTREEVIEWW, SetWindowTheme, TVE_EXPAND, TVGN_CARET, TVGN_CHILD, TVHITTESTINFO,
+    HTREEITEM, NM_CLICK, NMHDR, NMTREEVIEWW, SetWindowTheme, TVE_COLLAPSE, TVE_COLLAPSERESET, TVE_EXPAND, TVGN_CARET, TVGN_CHILD, TVHITTESTINFO,
     TVHT_ONITEM, TVI_LAST, TVI_ROOT, TVIF_CHILDREN, TVIF_IMAGE, TVIF_PARAM, TVIF_SELECTEDIMAGE, TVIF_TEXT,
     TVINSERTSTRUCTW, TVINSERTSTRUCTW_0, TVITEMEXW, TVITEMEXW_CHILDREN, TVITEMW, TVM_DELETEITEM, TVM_EXPAND, TVM_GETITEMW,
     TVM_GETNEXTITEM, TVM_HITTEST, TVM_INSERTITEMW, TVM_SETEXTENDEDSTYLE, TVM_SETIMAGELIST, TVM_SETITEMW,
-    TVN_ITEMEXPANDINGW, TVN_SELCHANGEDW, TVS_EX_DOUBLEBUFFER, TVS_EX_FADEINOUTEXPANDOS, TVS_FULLROWSELECT,
+    TVN_ITEMEXPANDEDW, TVN_ITEMEXPANDINGW, TVN_SELCHANGEDW, TVS_EX_DOUBLEBUFFER, TVS_EX_FADEINOUTEXPANDOS, TVS_FULLROWSELECT,
     TVS_HASBUTTONS, TVS_NOHSCROLL, TVS_SHOWSELALWAYS, TVS_TRACKSELECT, TVSIL_NORMAL, TVC_BYKEYBOARD, TVC_BYMOUSE,
 };
 use windows::Win32::UI::Shell::{
@@ -226,6 +226,14 @@ impl FolderTree {
                 let tv = unsafe { &*(nm as *const NMTREEVIEWW) };
                 if tv.action.0 & TVE_EXPAND.0 != 0 {
                     self.start_reading(tv.itemNew.hItem);
+                }
+                None
+            }
+            TVN_ITEMEXPANDEDW => {
+                // Forget the subfolders of a collapsed node: the next expand reads them fresh.
+                let tv = unsafe { &*(nm as *const NMTREEVIEWW) };
+                if tv.action.0 & TVE_COLLAPSE.0 != 0 {
+                    send(self.hwnd, TVM_EXPAND, (TVE_COLLAPSE.0 | TVE_COLLAPSERESET.0) as usize, tv.itemNew.hItem.0);
                 }
                 None
             }

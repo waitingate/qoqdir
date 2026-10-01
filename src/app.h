@@ -27,7 +27,7 @@ struct ViewState {                  // what to select and scroll to after a fold
 // Where a load was started from, when that changes what happens if it is not a folder.
 struct Origin {
     bool typed = false;      // typed in the address bar: a file is opened instead
-    std::wstring shortcut;   // opened from this shortcut: if not a folder, Windows opens the shortcut
+    std::wstring shortcut;   // opened from this shortcut: if it leads to a file, Windows opens the shortcut
 
     static Origin addressBar() { return {true, {}}; }
     static Origin fromShortcut(std::wstring lnk) { return {false, std::move(lnk)}; }

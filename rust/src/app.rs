@@ -134,7 +134,7 @@ pub enum Origin {
     #[default]
     Other,
     AddressBar,        // typed in the address bar: a file is opened instead
-    Shortcut(PathBuf), // opened from this shortcut: if not a folder, Windows opens the shortcut
+    Shortcut(PathBuf), // opened from this shortcut: if it leads to a file, Windows opens the shortcut
 }
 
 struct Pending {
@@ -332,7 +332,7 @@ impl App {
             let status = make(w!("msctls_statusbar32"), w!(""), SBARS_SIZEGRIP, 0, ID_STATUS);
 
             // Without settings (self-test), read from a file that cannot exist: every value is a default.
-            let ini = wide(exe.with_file_name(if use_settings { format!("{APP_NAME}.ini") } else { "none?.ini".into() }));
+            let ini = wide(exe.with_file_name(if use_settings { format!("{}.ini", APP_NAME.to_lowercase()) } else { "none?.ini".into() }));
 
             let app = Rc::new(App {
                 wnd,
@@ -1291,8 +1291,10 @@ impl App {
     /// The folder could not be read: decide what to show or do instead.
     fn on_load_failed(&self, listing: &Listing, error: &str, pending: &Pending) {
         match (&pending.origin, &listing.location) {
-            (Origin::Shortcut(lnk), _) => {
-                open_file(self.wnd, lnk); // the shortcut does not lead to a folder: let Windows open it
+            // The shortcut leads to a file: let Windows open it. (Not when its folder is unreachable:
+            // Windows would only show its own error, after the same long wait.)
+            (Origin::Shortcut(lnk), _) if listing.is_file => {
+                open_file(self.wnd, lnk);
                 return;
             }
             (Origin::AddressBar, Location::Dir(path)) if listing.is_file => {
@@ -1722,18 +1724,11 @@ impl App {
             return;
         }
         unsafe {
-            // Create the file as UTF-16 first, or Windows writes it in the ANSI code page
-            // and non-English folder names would be lost.
-            let ini = PathBuf::from(from_wide(&self.ini));
-            if let Ok(mut f) = std::fs::OpenOptions::new().write(true).create_new(true).open(&ini) {
-                use std::io::Write;
-                let _ = f.write_all(&[0xFF, 0xFE]); // UTF-16 byte order mark
-            }
-            let write = |section: &str, key: &str, value: &OsStr| {
-                let (s, k, v) = (wide(section), wide(key), wide(value));
-                let _ = WritePrivateProfileStringW(pcwstr(&s), pcwstr(&k), pcwstr(&v), pcwstr(&self.ini));
+            // Only numbers are saved: a plain ini file is fine.
+            let number = |key: &str, value: i32| {
+                let (k, v) = (wide(key), wide(value.to_string()));
+                let _ = WritePrivateProfileStringW(w!("Window"), pcwstr(&k), pcwstr(&v), pcwstr(&self.ini));
             };
-            let number = |key: &str, value: i32| write("Window", key, OsStr::new(&value.to_string()));
 
             let mut wp = WINDOWPLACEMENT { length: size_of::<WINDOWPLACEMENT>() as u32, ..Default::default() };
             let _ = GetWindowPlacement(self.wnd, &mut wp);
