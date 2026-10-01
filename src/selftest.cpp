@@ -194,8 +194,14 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
         [=, this] { return idle() && listed(L"external.txt"); });
     add(L"opening a folder", [=, this] { CreateDirectoryW(path(L"gone").c_str(), nullptr); open(path(L"gone"), Nav::New); },
         [=, this] { return at(path(L"gone")); });
-    add(L"...that another program deletes falls back to its parent", [=, this] { RemoveDirectoryW(path(L"gone").c_str()); },
-        [=, this] { return at(dir); });
+    add(L"...that another program deletes stays in its tab, shown as not available",
+        [=, this] { RemoveDirectoryW(path(L"gone").c_str()); },
+        [=, this] {
+            return at(path(L"gone")) && list_.count() == 0 && statusMessage().find(L"not available") != std::wstring::npos;
+        });
+    add(L"F5 tries again once it is back", [=, this] { CreateDirectoryW(path(L"gone").c_str(), nullptr); selfTestKey(VK_F5); },
+        [=, this] { return at(path(L"gone")) && statusMessage().empty(); });
+    add(L"(back up to the test folder)", [=, this] { SetFocus(list_.hwnd()); selfTestKey(VK_BACK); }, [=, this] { return at(dir); });
     add(L"Ctrl+T opens a tab", [=, this] { selfTestKey('T', true); }, [=, this] { return idle() && tabs_.size() == 2; });
     add(L"Ctrl+W closes it", [=, this] { selfTestKey('W', true); }, [=, this] { return idle() && tabs_.size() == 1 && at(dir); });
     add(L"Enter on a missing typed path shows an error and stays put",

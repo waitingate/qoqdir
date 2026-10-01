@@ -85,6 +85,7 @@ private:
     void onLoaded(Listing&& listing, UINT generation);
     struct Pending;
     void onLoadFailed(const Listing& listing, const Pending& p);
+    void showLocation(Nav nav);
     void goBack();
     void goForward();
     void goUp();
@@ -132,7 +133,7 @@ private:
     bool dragging_ = false;         // moving the tree/list splitter
     bool draggingFiles_ = false;    // a drag started from our own list is in progress
     bool refreshQueued_ = false;
-    bool loadingShown_ = false;     // "Loading..." is in the status bar
+    bool loadMessageShown_ = false; // "Loading..." or "not available": cleared when a folder loads
     bool showHidden_ = false;
 
     std::vector<Tab> tabs_;

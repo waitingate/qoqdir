@@ -327,11 +327,33 @@ impl App {
             Rc::new(move |a| a.at(&gone_dir2)),
             5000,
         );
-        let (gone_dir, d) = (p("gone"), dir.clone());
+        let (gone_dir, gone_dir2) = (p("gone"), p("gone"));
         add(
-            "...that another program deletes falls back to its parent",
+            "...that another program deletes stays in its tab, shown as not available",
             Some(Rc::new(move |_| {
                 let _ = std::fs::remove_dir(&gone_dir);
+            })),
+            Rc::new(move |a| a.at(&gone_dir2) && a.list.count() == 0 && a.status_message().contains("not available")),
+            5000,
+        );
+        let (gone_dir, gone_dir2) = (p("gone"), p("gone"));
+        add(
+            "F5 tries again once it is back",
+            Some(Rc::new(move |a| {
+                let _ = std::fs::create_dir(&gone_dir);
+                a.test_key(VK_F5, false, false, false);
+            })),
+            Rc::new(move |a| a.at(&gone_dir2) && a.status_message().is_empty()),
+            5000,
+        );
+        let d = dir.clone();
+        add(
+            "(back up to the test folder)",
+            Some(Rc::new(|a| {
+                unsafe {
+                    let _ = SetFocus(Some(a.list.hwnd()));
+                }
+                a.test_key(VK_BACK, false, false, false);
             })),
             Rc::new(move |a| a.at(&d)),
             5000,

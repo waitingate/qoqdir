@@ -372,7 +372,7 @@ void App::onTimer(UINT_PTR id) {
         KillTimer(wnd_, kLoadingTimer);
         if (pending_.generation) {   // say "Loading..." only if it is slow
             setMessage(L"Loading…");
-            loadingShown_ = true;
+            loadMessageShown_ = true;
         }
     } else if (id == kSelfTestTimer) {
         selfTestTick();
@@ -651,9 +651,9 @@ void App::open(const std::wstring& path, Nav nav, ViewState view, Origin origin)
 void App::onLoaded(Listing&& listing, UINT generation) {
     if (generation != generation_ || generation != pending_.generation) return;   // superseded
     KillTimer(wnd_, kLoadingTimer);
-    if (loadingShown_) {   // any load, not only navigation, may have shown it
+    if (loadMessageShown_) {   // any load, not only navigation, may have shown one
         setMessage(L"");
-        loadingShown_ = false;
+        loadMessageShown_ = false;
     }
     Pending p = std::move(pending_);
     pending_ = {};
@@ -707,15 +707,21 @@ void App::onLoaded(Listing&& listing, UINT generation) {
     if (view.rename && row >= 0) list_.rename(row);
 
     watch_ = FolderWatch(wnd_, WM_APP_CHANGED, t.path);
-    if (p.nav != Nav::Refresh || GetFocus() != address_)   // never overwrite what the user is typing
+    showLocation(p.nav);
+    if (moved) setMessage(L"");
+    showStatus();
+}
+
+// The address bar, title, buttons and tabs follow the current tab's folder.
+void App::showLocation(Nav nav) {
+    const Tab& t = tab();
+    if (nav != Nav::Refresh || GetFocus() != address_)   // never overwrite what the user is typing
         SetWindowTextW(address_, locationText(t.path).c_str());
     SetWindowTextW(wnd_, (displayName(t.path) + L" - " + kAppName).c_str());
     EnableWindow(back_, !t.back.empty());
     EnableWindow(forward_, !t.forward.empty());
     EnableWindow(up_, !t.path.empty());
     showTabs();
-    if (moved) setMessage(L"");
-    showStatus();
 }
 
 // The folder could not be read: decide what to show or do instead.
@@ -734,10 +740,17 @@ void App::onLoadFailed(const Listing& listing, const Pending& p) {
         SetFocus(address_);
         SendMessageW(address_, EM_SETSEL, 0, -1);
     }
-    if ((p.nav == Nav::Refresh || p.nav == Nav::Switch) && !listing.path.empty()) {
-        // The tab's own folder is gone (deleted, unplugged...): fall back to its parent.
-        setMessage(L"\"" + listing.path + L"\" is not available: " + errorText(listing.error));
-        open(parentPath(listing.path), p.nav);
+    if (p.nav == Nav::Refresh || p.nav == Nav::Switch) {
+        // The tab's own folder. A tab never changes its folder by itself (a network drive may
+        // not be connected yet, a USB drive may come back): show it empty and say why.
+        if (GetWindowTextLengthW(filter_) > 0) SetWindowTextW(filter_, L"");
+        list_.setListing(Listing{listing.path, {}, 0, false});
+        watch_ = {};
+        showLocation(p.nav);
+        setMessage(L"\"" + locationText(listing.path) + L"\" is not available: " + errorText(listing.error) +
+                   L"   (F5 tries again)");
+        loadMessageShown_ = true;
+        showStatus();
         return;
     }
     // A history entry whose folder is gone is dropped, so Back/Forward can move past it.

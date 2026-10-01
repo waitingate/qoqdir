@@ -190,7 +190,7 @@ pub struct App {
     dragging: Cell<bool>,       // moving the tree/list splitter
     dragging_files: Cell<bool>, // a drag started from our own list is in progress
     refresh_queued: Cell<bool>,
-    loading_shown: Cell<bool>, // "Loading..." is in the status bar
+    load_message_shown: Cell<bool>, // "Loading..." or "not available": cleared when a folder loads
     show_hidden: Cell<bool>,
     pub generation: Cell<u32>,
     use_settings: bool,
@@ -359,7 +359,7 @@ impl App {
                 dragging: Cell::new(false),
                 dragging_files: Cell::new(false),
                 refresh_queued: Cell::new(false),
-                loading_shown: Cell::new(false),
+                load_message_shown: Cell::new(false),
                 show_hidden: Cell::new(false),
                 generation: Cell::new(0),
                 use_settings,
@@ -723,7 +723,7 @@ impl App {
                     let _ = KillTimer(Some(self.wnd), TIMER_LOADING);
                     if self.is_loading() {
                         self.set_message("Loading\u{2026}"); // only when it is slow
-                        self.loading_shown.set(true);
+                        self.load_message_shown.set(true);
                     }
                 }
                 TIMER_SELFTEST => self.self_test_tick(),
@@ -1197,7 +1197,7 @@ impl App {
         unsafe {
             let _ = KillTimer(Some(self.wnd), TIMER_LOADING);
         }
-        if self.loading_shown.replace(false) {
+        if self.load_message_shown.replace(false) {
             self.set_message(""); // any load, not only navigation, may have shown it
         }
 
@@ -1266,7 +1266,17 @@ impl App {
         let watch = FolderWatch::new(self.wnd, WM_APP_CHANGED, &location);
         let old_watch = self.st.borrow_mut().watch.replace(watch);
         drop(old_watch);
-        if pending.nav != Nav::Refresh || unsafe { GetFocus() } != self.address {
+        self.show_location(pending.nav);
+        if moved {
+            self.set_message("");
+        }
+        self.show_status();
+    }
+
+    /// The address bar, title, buttons and tabs follow the current tab's folder.
+    fn show_location(&self, nav: Nav) {
+        let location = self.location();
+        if nav != Nav::Refresh || unsafe { GetFocus() } != self.address {
             set_text(self.address, location.text()); // never overwrite what the user is typing
         }
         let mut title = location.display_name();
@@ -1279,10 +1289,6 @@ impl App {
             let _ = EnableWindow(self.up, matches!(location, Location::Dir(_)));
         }
         self.show_tabs();
-        if moved {
-            self.set_message("");
-        }
-        self.show_status();
     }
 
     /// The folder could not be read: decide what to show or do instead.
@@ -1306,11 +1312,23 @@ impl App {
             }
             _ => {}
         }
-        let own_folder = matches!(pending.nav, Nav::Refresh | Nav::Switch);
-        if own_folder && matches!(listing.location, Location::Dir(_)) {
-            // The tab's own folder is gone (deleted, unplugged...): fall back to its parent.
-            self.set_message(&format!("\"{}\" is not available: {}", listing.location.text().to_string_lossy(), error.trim()));
-            self.open(listing.location.parent(), pending.nav, ViewState::default());
+        if matches!(pending.nav, Nav::Refresh | Nav::Switch) {
+            // The tab's own folder. A tab never changes its folder by itself (a network drive may
+            // not be connected yet, a USB drive may come back): show it empty and say why.
+            if !window_text(self.filter).is_empty() {
+                set_text(self.filter, "");
+            }
+            self.list.set_listing(Listing { location: listing.location.clone(), items: Vec::new(), error: None, is_file: false });
+            let old_watch = self.st.borrow_mut().watch.take();
+            drop(old_watch);
+            self.show_location(pending.nav);
+            self.set_message(&format!(
+                "\"{}\" is not available: {}   (F5 tries again)",
+                listing.location.text().to_string_lossy(),
+                error.trim()
+            ));
+            self.load_message_shown.set(true);
+            self.show_status();
             return;
         }
         if matches!(pending.nav, Nav::Back | Nav::Forward) {
