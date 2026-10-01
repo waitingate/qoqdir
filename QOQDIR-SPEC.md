@@ -72,6 +72,33 @@ The user's priorities, in order:
 - **Unicode everywhere:** any file name in any language must show, sort, rename and
   open correctly. Paths longer than 260 characters must work.
 
+### 3.1 Experience from two earlier builds (to help choose the language)
+Qoqdir was built before, twice in parallel (C++ and Rust, same features, same tests).
+Facts from that, not instructions:
+- **Result:** both met every rule here, with the same speed (differences were within
+  measurement noise). Exe size: C++ ~730 KB, Rust ~570 KB.
+- **Code size:** the Rust version needed ~45% more lines for the same app (~3,700 vs
+  ~2,500, without tests), mostly from Win32 calls and pointer handling through the
+  `windows` crate.
+- **Build time:** C++ clean build under a minute; Rust's first build ~7 minutes (the
+  `windows` crate), then about a minute.
+- **Safety:** Rust turned one real bug (a list row pointing at an item that had just
+  been replaced) into a clean stop with a clear message; the same bug in C++ was
+  silent memory misuse that went unnoticed. In Rust the main trap is the opposite
+  kind: Windows often calls straight back into the app while it is inside a call to
+  Windows, so shared state must never be held borrowed across such a call.
+- **Toolchain pitfalls on this machine:** the Rust GNU toolchain's bundled `dlltool`
+  fails here; Rust must be pointed at MinGW's (`C:\mingw64\bin\dlltool.exe`) in the
+  portable cargo config. Implementing COM interfaces in Rust (drop targets, etc.) needs
+  the `windows-core` crate alongside `windows`. The C++ side needed only MinGW,
+  static linking and the manifest in a resource file.
+- **Two versions at once doubled every change and every test run.** The second version
+  found exactly one hidden bug (the one above); all others were found by the tests and
+  by code reviews, which work on one version too. So build one, and make it stop
+  loudly on such mistakes: Rust does by itself; in C++, build and test with the
+  compiler's runtime checks on (e.g. GCC's `_GLIBCXX_ASSERTIONS`, which turns an
+  out-of-range index into a clear stop).
+
 ## 4. Behavior rules (the reliability contract)
 
 These describe what the user experiences. Each must hold in every situation.
