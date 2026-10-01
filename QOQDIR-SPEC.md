@@ -334,10 +334,11 @@ Back/Forward/Up are disabled when they cannot do anything.
 - **New folder:** Ctrl+Shift+N creates "New folder" (or "New folder (2)", "(3)"...),
   selects it and starts renaming it.
 - **Context menus:** right-click on items → the full Windows context menu for the
-  selection (Shift+right-click → extended menu). Right-click on empty space → Paste
-  (greyed when no files were copied; it does what Ctrl+V does), then the folder's own
-  menu from Windows (New, Properties...). Windows' folder menu has no Paste of its own:
-  Explorer adds it from its window, so Qoqdir must add it too. Menu key / Shift+F10 opens
+  selection (Shift+right-click → extended menu). Right-click on empty space → Paste and
+  Paste shortcut (greyed when no files were copied; Paste does what Ctrl+V does), then
+  the folder's own menu from Windows (New, Properties...). Windows' folder menu has
+  neither: Explorer adds them from its window, so Qoqdir must add them too. Like
+  Explorer, Ctrl+C marks the files "copy or link", or Windows refuses Paste shortcut. Menu key / Shift+F10 opens
   the menu for the focused item. Owner-drawn and cascading menus (e.g. "Send to",
   "New", "Open with", third-party entries) must work.
 - **Properties:** Alt+Enter.

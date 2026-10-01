@@ -54,7 +54,8 @@ use crate::util::{OwnedMenu, Pidl, from_wide, pcwstr, wide};
 const CMIC_MASK_UNICODE: u32 = 0x4000; // not in the windows crate
 const FIRST_CMD: u32 = 1;
 const LAST_CMD: u32 = 0x7FFF;
-const PASTE_CMD: u32 = 0x8000; // our own Paste item, after the shell's ids
+const PASTE_CMD: u32 = 0x8000; // our own items, after the shell's ids
+const PASTE_SHORTCUT_CMD: u32 = 0x8001;
 
 thread_local! {
     static TYPES: RefCell<HashMap<Vec<u16>, (i32, OsString)>> = RefCell::new(HashMap::new());
@@ -248,16 +249,19 @@ fn key_down(vk: windows::Win32::UI::Input::KeyboardAndMouse::VIRTUAL_KEY) -> boo
 }
 
 /// Shows a context menu. `intercept` sees the chosen verb first and returns
-/// true if it handled it (e.g. "rename", or "open" on a folder). With `paste`, a Paste
-/// item comes first: a folder's own menu has none (Explorer adds its own).
-pub fn show_menu(owner: HWND, cm: &IContextMenu, pt: POINT, intercept: &mut dyn FnMut(&str) -> bool, paste: Option<&dyn Fn()>) {
+/// true if it handled it (e.g. "rename", or "open" on a folder). With `paste`, Paste and
+/// Paste shortcut come first: a folder's own menu has neither (Explorer adds its own).
+/// `paste` is called with true for Paste shortcut.
+pub fn show_menu(owner: HWND, cm: &IContextMenu, pt: POINT, intercept: &mut dyn FnMut(&str) -> bool, paste: Option<&dyn Fn(bool)>) {
     let Ok(menu) = (unsafe { CreatePopupMenu() }) else { return };
     let menu = OwnedMenu(menu);
     if paste.is_some() {
         // Greyed when no files were copied.
         let copied = unsafe { IsClipboardFormatAvailable(u32::from(CF_HDROP.0)) }.is_ok();
+        let state = if copied { MF_STRING } else { MF_STRING | MF_GRAYED };
         unsafe {
-            let _ = AppendMenuW(menu.0, if copied { MF_STRING } else { MF_STRING | MF_GRAYED }, PASTE_CMD as usize, w!("Paste\tCtrl+V"));
+            let _ = AppendMenuW(menu.0, state, PASTE_CMD as usize, w!("Paste\tCtrl+V"));
+            let _ = AppendMenuW(menu.0, state, PASTE_SHORTCUT_CMD as usize, w!("Paste shortcut"));
             let _ = AppendMenuW(menu.0, MF_SEPARATOR, 0, PCWSTR::null());
         }
     }
@@ -273,8 +277,8 @@ pub fn show_menu(owner: HWND, cm: &IContextMenu, pt: POINT, intercept: &mut dyn 
         OPEN_MENU.with(|m| *m.borrow_mut() = (cm.cast().ok(), cm.cast().ok()));
         let id = TrackPopupMenuEx(menu.0, (TPM_RETURNCMD | TPM_RIGHTBUTTON).0, pt.x, pt.y, owner, None).0 as u32;
         OPEN_MENU.with(|m| *m.borrow_mut() = (None, None));
-        if let (PASTE_CMD, Some(paste)) = (id, paste) {
-            return paste();
+        if let (PASTE_CMD | PASTE_SHORTCUT_CMD, Some(paste)) = (id, paste) {
+            return paste(id == PASTE_SHORTCUT_CMD);
         }
         if id < FIRST_CMD {
             return;
@@ -357,7 +361,7 @@ pub fn copy_to_clipboard(owner: HWND, items: &[Location], cut: bool) {
         if let Ok(h) = GlobalAlloc(GMEM_MOVEABLE, size_of::<u32>()) {
             let p = GlobalLock(h) as *mut u32;
             if !p.is_null() {
-                *p = if cut { DROPEFFECT_MOVE.0 } else { DROPEFFECT_COPY.0 };
+                *p = if cut { DROPEFFECT_MOVE.0 } else { (DROPEFFECT_COPY | DROPEFFECT_LINK).0 }; // a copy also allows Paste shortcut
                 let _ = GlobalUnlock(h);
             }
             let mut med = STGMEDIUM {
@@ -373,10 +377,10 @@ pub fn copy_to_clipboard(owner: HWND, items: &[Location], cut: bool) {
     }
 }
 
-/// Same code path as Explorer's Paste: runs in the background with Windows' progress UI.
-pub fn paste_into(owner: HWND, dir: &Location) {
+/// Same code path as Explorer's Paste (and Paste shortcut, with `shortcuts`), with Windows' progress UI.
+pub fn paste_into(owner: HWND, dir: &Location, shortcuts: bool) {
     if matches!(dir, Location::Dir(_)) {
-        invoke_verb(owner, background_menu(owner, dir), "paste");
+        invoke_verb(owner, background_menu(owner, dir), if shortcuts { "pastelink" } else { "paste" });
     }
 }
 

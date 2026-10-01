@@ -832,7 +832,7 @@ impl App {
                 if matches!(location, Location::Dir(_))
                     && let Some(cm) = background_menu(self.wnd, &location)
                 {
-                    show_menu(self.wnd, &cm, pt, &mut |_| false, Some(&|| paste_into(self.wnd, &location)));
+                    show_menu(self.wnd, &cm, pt, &mut |_| false, Some(&|shortcuts| paste_into(self.wnd, &location, shortcuts)));
                 }
                 return;
             }
@@ -1116,7 +1116,7 @@ impl App {
                 return true;
             }
             if ctrl && letter(b'V') {
-                paste_into(self.wnd, &self.list.location());
+                paste_into(self.wnd, &self.list.location(), false);
                 return true;
             }
             return false;

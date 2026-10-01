@@ -70,7 +70,8 @@ HRESULT fileOperation(HWND owner, DWORD flags, AddWork addWork) {
     return hr;
 }
 
-constexpr UINT kFirstCmd = 1, kLastCmd = 0x7FFF, kPasteCmd = 0x8000;   // the shell's ids, then our Paste
+constexpr UINT kFirstCmd = 1, kLastCmd = 0x7FFF;          // the shell's own menu items
+constexpr UINT kPasteCmd = 0x8000, kPasteShortcutCmd = 0x8001;   // ours
 Com<IContextMenu2> g_menu2;   // set only while a context menu is on screen
 Com<IContextMenu3> g_menu3;
 
@@ -179,13 +180,14 @@ Com<IContextMenu> backgroundMenu(HWND owner, const std::wstring& dir) {
 }
 
 void showMenu(HWND owner, IContextMenu* cm, POINT pt, const std::function<bool(const std::wstring&)>& intercept,
-              const std::function<void()>& paste) {
+              const std::function<void(bool shortcuts)>& paste) {
     if (!cm) return;
     Menu menu(CreatePopupMenu());
     if (!menu) return;
     if (paste) {   // greyed when no files were copied
-        AppendMenuW(menu.get(), MF_STRING | (IsClipboardFormatAvailable(CF_HDROP) ? 0 : MF_GRAYED), kPasteCmd,
-                    L"Paste\tCtrl+V");
+        UINT state = MF_STRING | (IsClipboardFormatAvailable(CF_HDROP) ? 0 : MF_GRAYED);
+        AppendMenuW(menu.get(), state, kPasteCmd, L"Paste\tCtrl+V");
+        AppendMenuW(menu.get(), state, kPasteShortcutCmd, L"Paste shortcut");
         AppendMenuW(menu.get(), MF_SEPARATOR, 0, nullptr);
     }
     UINT flags = CMF_NORMAL | CMF_CANRENAME;
@@ -199,7 +201,7 @@ void showMenu(HWND owner, IContextMenu* cm, POINT pt, const std::function<bool(c
     UINT id = UINT(TrackPopupMenuEx(menu.get(), TPM_RETURNCMD | TPM_RIGHTBUTTON, pt.x, pt.y, owner, nullptr));
     g_menu2.reset();
     g_menu3.reset();
-    if (id == kPasteCmd) return paste();
+    if (id == kPasteCmd || id == kPasteShortcutCmd) return paste(id == kPasteShortcutCmd);
     if (id < kFirstCmd) return;
 
     wchar_t verb[80] = {};
@@ -259,7 +261,7 @@ void copyToClipboard(HWND owner, const std::vector<std::wstring>& paths, bool cu
     med.tymed = TYMED_HGLOBAL;
     med.hGlobal = GlobalAlloc(GMEM_MOVEABLE, sizeof(DWORD));
     if (auto* effect = med.hGlobal ? static_cast<DWORD*>(GlobalLock(med.hGlobal)) : nullptr) {
-        *effect = cut ? DROPEFFECT_MOVE : DROPEFFECT_COPY;
+        *effect = cut ? DROPEFFECT_MOVE : DROPEFFECT_COPY | DROPEFFECT_LINK;   // a copy also allows Paste shortcut
         GlobalUnlock(med.hGlobal);
         if (FAILED(obj->SetData(&fmt, &med, TRUE))) ReleaseStgMedium(&med);
     } else if (med.hGlobal) {
@@ -268,10 +270,10 @@ void copyToClipboard(HWND owner, const std::vector<std::wstring>& paths, bool cu
     OleSetClipboard(obj.get());
 }
 
-void pasteInto(HWND owner, const std::wstring& dir) {
+void pasteInto(HWND owner, const std::wstring& dir, bool shortcuts) {
     if (dir.empty()) return;
-    // Same code path as Explorer's Paste: runs in the background with Windows' progress UI.
-    invokeVerb(owner, backgroundMenu(owner, dir).get(), "paste");
+    // Same code path as Explorer's Paste (and Paste shortcut), with Windows' progress UI.
+    invokeVerb(owner, backgroundMenu(owner, dir).get(), shortcuts ? "pastelink" : "paste");
 }
 
 void deleteItems(HWND owner, const std::vector<std::wstring>& paths, bool permanently) {

@@ -161,6 +161,14 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
     add(L"Ctrl+V pastes with the Windows copy engine", [=, this] { selfTestKey('V', true); },
         [=, this] { return exists(path(L"sub\\file1.txt")); }, 10000);
     add(L"pasted file appears in the list by itself", nullptr, [=, this] { return idle() && listed(L"file1.txt"); });
+    add(L"Paste shortcut makes a shortcut to the copied file", [=, this] { pasteInto(wnd_, list_.dir(), true); },
+        [=, this] {
+            bool folder = false;
+            for (const Item& it : listFolder(path(L"sub"), false).items)
+                if (isShortcut(it.name) && samePath(shortcutTarget(path(L"sub\\" + it.name), &folder), path(L"file1.txt")))
+                    return true;
+            return false;
+        }, 10000);
     add(L"Backspace goes up and selects the folder you came from", [=, this] { selfTestKey(VK_BACK); },
         [=, this] { return at(dir) && list_.focusedName() == L"sub" && list_.selectedNames().size() == 1; });
     add(L"Alt+Left goes back", [=, this] { selfTestKey(VK_LEFT, false, false, true); }, [=, this] { return at(path(L"sub")); });

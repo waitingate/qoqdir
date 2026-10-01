@@ -30,16 +30,17 @@ Com<IDataObject> dataObject(HWND owner, const std::vector<std::wstring>& paths);
 Com<IContextMenu> itemMenu(HWND owner, const std::vector<std::wstring>& paths);
 Com<IContextMenu> backgroundMenu(HWND owner, const std::wstring& dir);
 // Shows the menu. 'intercept' sees the chosen verb first and returns true if it handled it.
-// With 'paste', a Paste item comes first: a folder's own menu has none (Explorer adds its own).
+// With 'paste', Paste and Paste shortcut come first: a folder's own menu has neither (Explorer
+// adds its own). 'paste' is called with true for Paste shortcut.
 void showMenu(HWND owner, IContextMenu* menu, POINT screenPt,
               const std::function<bool(const std::wstring& verb)>& intercept,
-              const std::function<void()>& paste = nullptr);
+              const std::function<void(bool shortcuts)>& paste = nullptr);
 // Forwards owner-drawn submenu messages (Send to, Open with) while a menu is open.
 bool forwardMenuMessage(UINT msg, WPARAM wp, LPARAM lp, LRESULT* result);
 bool invokeVerb(HWND owner, IContextMenu* menu, const char* verb);
 
 void copyToClipboard(HWND owner, const std::vector<std::wstring>& paths, bool cut);
-void pasteInto(HWND owner, const std::wstring& dir);
+void pasteInto(HWND owner, const std::wstring& dir, bool shortcuts = false);   // shortcuts: "Paste shortcut"
 void deleteItems(HWND owner, const std::vector<std::wstring>& paths, bool permanently);
 HRESULT renameItem(HWND owner, const std::wstring& path, const std::wstring& newName);
 void openFile(HWND owner, const std::wstring& path);

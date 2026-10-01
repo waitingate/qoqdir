@@ -33,8 +33,8 @@ use windows::Win32::UI::WindowsAndMessaging::{
 };
 
 use crate::app::{App, Key, Nav, TIMER_LOADING, TIMER_REFRESH, TIMER_SELFTEST, ViewState};
-use crate::folder::{Location, SortKey, exists, is_directory, list_folder};
-use crate::shell::{copy_to_clipboard, data_object, item_menu, known_folder, type_name};
+use crate::folder::{Location, SortKey, exists, is_directory, is_shortcut, list_folder};
+use crate::shell::{copy_to_clipboard, data_object, item_menu, known_folder, paste_into, shortcut_target, type_name};
 use windows::Win32::UI::Shell::StrCmpLogicalW;
 use crate::util::{send, from_wide, pcwstr, wide, window_text};
 
@@ -226,6 +226,18 @@ impl App {
             10000,
         );
         add("pasted file appears in the list by itself", None, Rc::new(|a| !a.is_loading() && a.listed("file1.txt")), 5000);
+        let (sub, file1) = (p("sub"), p("file1.txt"));
+        add(
+            "Paste shortcut makes a shortcut to the copied file",
+            Some(Rc::new(|a| paste_into(a.wnd, &a.list.location(), true))),
+            Rc::new(move |_| {
+                list_folder(&Location::dir(&sub), false).items.iter().any(|it| {
+                    is_shortcut(&it.name)
+                        && shortcut_target(&sub.join(&it.name)).is_some_and(|(t, _)| Location::dir(t).same(&Location::dir(&file1)))
+                })
+            }),
+            10000,
+        );
         let d = dir.clone();
         add(
             "Backspace goes up and selects the folder you came from",
