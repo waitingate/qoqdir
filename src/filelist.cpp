@@ -1,0 +1,223 @@
+#include "filelist.h"
+
+#include "shell.h"
+
+#include <uxtheme.h>
+
+#include <unordered_set>
+
+namespace {
+const wchar_t* const kColumns[] = {L"Name", L"Date modified", L"Type", L"Size"};
+constexpr int kColumnCount = 4;
+}  // namespace
+
+void FileList::create(HWND parent, int id) {
+    lv_ = CreateWindowExW(0, WC_LISTVIEWW, L"",
+                          WS_CHILD | WS_VISIBLE | WS_TABSTOP | LVS_REPORT | LVS_OWNERDATA | LVS_SHOWSELALWAYS |
+                              LVS_EDITLABELS | LVS_SHAREIMAGELISTS,
+                          0, 0, 0, 0, parent, reinterpret_cast<HMENU>(INT_PTR(id)), GetModuleHandleW(nullptr), nullptr);
+    ListView_SetExtendedListViewStyle(lv_, LVS_EX_FULLROWSELECT | LVS_EX_DOUBLEBUFFER);
+    SetWindowTheme(lv_, L"Explorer", nullptr);
+    ListView_SetImageList(lv_, systemImageList(), LVSIL_SMALL);
+    for (int i = 0; i < kColumnCount; ++i) {
+        LVCOLUMNW col{};
+        col.mask = LVCF_TEXT | LVCF_WIDTH | LVCF_FMT;
+        col.fmt = i == 3 ? LVCFMT_RIGHT : LVCFMT_LEFT;
+        col.cx = 100;
+        col.pszText = const_cast<wchar_t*>(kColumns[i]);
+        ListView_InsertColumn(lv_, i, &col);
+    }
+    showSortArrow();
+}
+
+void FileList::setListing(Listing&& listing) {
+    update(false, [&] {
+        dir_ = std::move(listing.path);
+        items_ = std::move(listing.items);
+        for (Item& it : items_)   // cached per extension, so this is quick; lets Type sort by what is shown
+            if (it.type.empty()) it.type = typeName(it);
+        sortItems(items_, key_, asc_);
+    });
+    ensureVisible(0);
+}
+
+void FileList::setFilter(const std::wstring& filter) {
+    if (filter == filter_) return;
+    update(true, [&] { filter_ = filter; });
+    ensureVisible(focused() >= 0 ? focused() : 0);   // the old scroll position may be past the end
+}
+
+void FileList::setSort(SortKey key, bool ascending) {
+    update(true, [&] {
+        key_ = key;
+        asc_ = ascending;
+        sortItems(items_, key_, asc_);
+    });
+    showSortArrow();
+    ensureVisible(focused());
+}
+
+void FileList::update(bool keepSelection, const std::function<void()>& change) {
+    std::vector<std::wstring> names;
+    std::wstring focus;
+    if (keepSelection) {
+        names = selectedNames();
+        focus = focusedName();
+    }
+    // Change the items and rebuild view_ before any ListView call: those can ask
+    // for row text right away, and every row must already point at a valid item.
+    change();
+    view_.clear();
+    for (int i = 0; i < int(items_.size()); ++i)
+        if (matchesFilter(items_[i], filter_)) view_.push_back(i);
+    ListView_SetItemState(lv_, -1, 0, LVIS_SELECTED | LVIS_FOCUSED);
+    ListView_SetItemCountEx(lv_, int(view_.size()), LVSICF_NOSCROLL);
+    InvalidateRect(lv_, nullptr, FALSE);
+    select(names, focus);
+}
+
+std::vector<int> FileList::selection() const {
+    std::vector<int> rows;
+    for (int i = ListView_GetNextItem(lv_, -1, LVNI_SELECTED); i >= 0; i = ListView_GetNextItem(lv_, i, LVNI_SELECTED))
+        if (i < count()) rows.push_back(i);
+    return rows;
+}
+
+std::vector<std::wstring> FileList::selectedPaths() const {
+    std::vector<std::wstring> paths;
+    for (int row : selection()) paths.push_back(pathAt(row));
+    return paths;
+}
+
+std::vector<std::wstring> FileList::selectedNames() const {
+    std::vector<std::wstring> names;
+    for (int row : selection()) names.push_back(at(row).name);
+    return names;
+}
+
+int FileList::focused() const {
+    int row = ListView_GetNextItem(lv_, -1, LVNI_FOCUSED);
+    return row < count() ? row : -1;
+}
+
+std::wstring FileList::focusedName() const {
+    int row = focused();
+    return row >= 0 ? at(row).name : L"";
+}
+
+int FileList::select(const std::vector<std::wstring>& names, const std::wstring& focus) {
+    ListView_SetItemState(lv_, -1, 0, LVIS_SELECTED | LVIS_FOCUSED);
+    int focusRow = -1;
+    if (!names.empty() || !focus.empty()) {
+        std::unordered_set<std::wstring> wanted;
+        for (const auto& n : names) wanted.insert(toLower(n));
+        std::wstring focusLower = toLower(focus);
+        for (int row = 0; row < count(); ++row) {
+            std::wstring name = toLower(at(row).name);
+            if (wanted.count(name)) ListView_SetItemState(lv_, row, LVIS_SELECTED, LVIS_SELECTED);
+            if (focusRow < 0 && name == focusLower) focusRow = row;
+        }
+    }
+    // Something always has keyboard focus, so arrow keys work right away.
+    int keyRow = focusRow >= 0 ? focusRow : (count() > 0 ? 0 : -1);
+    if (keyRow >= 0) {
+        ListView_SetItemState(lv_, keyRow, LVIS_FOCUSED, LVIS_FOCUSED);
+        ListView_SetSelectionMark(lv_, keyRow);
+    }
+    return focusRow;
+}
+
+void FileList::selectAll() {
+    ListView_SetItemState(lv_, -1, LVIS_SELECTED, LVIS_SELECTED);
+}
+
+int FileList::topRow() const { return ListView_GetTopIndex(lv_); }
+
+void FileList::scrollToRow(int row) {
+    if (row < 0 || count() == 0) return;
+    RECT r{};
+    if (!ListView_GetItemRect(lv_, 0, &r, LVIR_BOUNDS)) return;
+    ListView_Scroll(lv_, 0, (row - topRow()) * (r.bottom - r.top));
+}
+
+void FileList::ensureVisible(int row) {
+    if (row >= 0 && row < count()) ListView_EnsureVisible(lv_, row, FALSE);
+}
+
+void FileList::rename(int row) {
+    if (row < 0 || row >= count() || dir_.empty()) return;
+    SetFocus(lv_);
+    ListView_EditLabel(lv_, row);
+}
+
+bool FileList::renaming() const { return ListView_GetEditControl(lv_) != nullptr; }
+
+std::vector<int> FileList::columnWidths() const {
+    std::vector<int> w;
+    for (int i = 0; i < kColumnCount; ++i) w.push_back(ListView_GetColumnWidth(lv_, i));
+    return w;
+}
+
+void FileList::setColumnWidths(const std::vector<int>& widths) {
+    for (int i = 0; i < kColumnCount && i < int(widths.size()); ++i) ListView_SetColumnWidth(lv_, i, widths[i]);
+}
+
+void FileList::showSortArrow() {
+    HWND header = ListView_GetHeader(lv_);
+    for (int i = 0; i < kColumnCount; ++i) {
+        HDITEMW hd{};
+        hd.mask = HDI_FORMAT;
+        Header_GetItem(header, i, &hd);
+        hd.fmt &= ~(HDF_SORTUP | HDF_SORTDOWN);
+        if (i == int(key_)) hd.fmt |= asc_ ? HDF_SORTUP : HDF_SORTDOWN;
+        Header_SetItem(header, i, &hd);
+    }
+}
+
+bool FileList::onNotify(NMHDR* nm, LRESULT* result) {
+    switch (nm->code) {
+    case LVN_GETDISPINFOW: {
+        LVITEMW& lvi = reinterpret_cast<NMLVDISPINFOW*>(nm)->item;
+        if (lvi.iItem < 0 || lvi.iItem >= count()) return true;
+        Item& it = items_[view_[lvi.iItem]];
+        if ((lvi.mask & LVIF_TEXT) && lvi.pszText && lvi.cchTextMax > 0) {
+            std::wstring text;
+            switch (lvi.iSubItem) {
+            case 0: text = it.shown(); break;
+            case 1: text = formatTime(it.modified); break;
+            case 2: text = typeName(it); break;
+            case 3: if (!it.isDir()) text = formatSize(it.size); break;
+            }
+            lstrcpynW(lvi.pszText, text.c_str(), lvi.cchTextMax);
+        }
+        if (lvi.mask & LVIF_IMAGE)   // not stored in the item: a file's own icon may arrive later
+            lvi.iImage = it.icon >= 0 ? it.icon : iconFor(joinPath(dir_, it.name), it);
+        return true;
+    }
+    case LVN_COLUMNCLICK: {
+        auto key = SortKey(reinterpret_cast<NMLISTVIEW*>(nm)->iSubItem);
+        // Names and types read best A-Z; dates and sizes newest/largest first.
+        bool asc = key == key_ ? !asc_ : (key == SortKey::Name || key == SortKey::Type);
+        setSort(key, asc);
+        return true;
+    }
+    case LVN_BEGINLABELEDITW: {
+        int row = reinterpret_cast<NMLVDISPINFOW*>(nm)->item.iItem;
+        if (dir_.empty() || row < 0 || row >= count()) {
+            *result = TRUE;   // drives cannot be renamed here
+            return true;
+        }
+        // Select the name without its extension, like Explorer.
+        const Item& it = at(row);
+        size_t dot = it.isDir() ? std::wstring::npos : it.name.find_last_of(L'.');
+        if (dot != std::wstring::npos && dot > 0)
+            PostMessageW(ListView_GetEditControl(lv_), EM_SETSEL, 0, LPARAM(dot));
+        *result = FALSE;
+        return true;
+    }
+    case LVN_ODFINDITEMW:
+        *result = -1;   // typing goes to the filter box instead
+        return true;
+    }
+    return false;
+}
