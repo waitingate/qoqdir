@@ -15,10 +15,10 @@ use windows::Win32::System::Com::{
     CLSCTX_ALL, CLSCTX_INPROC_SERVER, CoCreateInstance, CoTaskMemFree, DVASPECT_CONTENT, FORMATETC, IBindCtx,
     IDataObject, IPersistFile, STGM_READ, STGMEDIUM, STGMEDIUM_0, TYMED_HGLOBAL,
 };
-use windows::Win32::System::DataExchange::RegisterClipboardFormatW;
+use windows::Win32::System::DataExchange::{IsClipboardFormatAvailable, RegisterClipboardFormatW};
 use windows::Win32::System::Memory::{GMEM_MOVEABLE, GlobalAlloc, GlobalLock, GlobalUnlock};
 use windows::Win32::System::Ole::{
-    DROPEFFECT, DROPEFFECT_COPY, DROPEFFECT_LINK, DROPEFFECT_MOVE, DROPEFFECT_NONE, IDropSource, IDropTarget,
+    CF_HDROP, DROPEFFECT, DROPEFFECT_COPY, DROPEFFECT_LINK, DROPEFFECT_MOVE, DROPEFFECT_NONE, IDropSource, IDropTarget,
     IDropTarget_Impl, OleSetClipboard, ReleaseStgMedium,
 };
 use windows::Win32::System::SystemServices::MODIFIERKEYS_FLAGS;
@@ -42,8 +42,9 @@ use windows::Win32::UI::Shell::{
     SHSetInstanceExplorer, ShellExecuteExW, ShellLink,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    CreatePopupMenu, DispatchMessageW, MSG, MsgWaitForMultipleObjects, PM_REMOVE, PeekMessageW, QS_ALLINPUT,
-    SW_SHOWNORMAL, TPM_RETURNCMD, TPM_RIGHTBUTTON, TrackPopupMenuEx, TranslateMessage,
+    AppendMenuW, CreatePopupMenu, DispatchMessageW, GetMenuItemCount, MF_GRAYED, MF_SEPARATOR, MF_STRING, MSG,
+    MsgWaitForMultipleObjects, PM_REMOVE, PeekMessageW, QS_ALLINPUT, SW_SHOWNORMAL, TPM_RETURNCMD, TPM_RIGHTBUTTON,
+    TrackPopupMenuEx, TranslateMessage,
 };
 use windows::core::{GUID, IUnknown, Interface, PCSTR, PCWSTR, PSTR, Ref, Result, implement, w};
 
@@ -53,6 +54,7 @@ use crate::util::{OwnedMenu, Pidl, from_wide, pcwstr, wide};
 const CMIC_MASK_UNICODE: u32 = 0x4000; // not in the windows crate
 const FIRST_CMD: u32 = 1;
 const LAST_CMD: u32 = 0x7FFF;
+const PASTE_CMD: u32 = 0x8000; // our own Paste item, after the shell's ids
 
 thread_local! {
     static TYPES: RefCell<HashMap<Vec<u16>, (i32, OsString)>> = RefCell::new(HashMap::new());
@@ -246,21 +248,34 @@ fn key_down(vk: windows::Win32::UI::Input::KeyboardAndMouse::VIRTUAL_KEY) -> boo
 }
 
 /// Shows a context menu. `intercept` sees the chosen verb first and returns
-/// true if it handled it (e.g. "rename", or "open" on a folder).
-pub fn show_menu(owner: HWND, cm: &IContextMenu, pt: POINT, intercept: &mut dyn FnMut(&str) -> bool) {
+/// true if it handled it (e.g. "rename", or "open" on a folder). With `paste`, a Paste
+/// item comes first: a folder's own menu has none (Explorer adds its own).
+pub fn show_menu(owner: HWND, cm: &IContextMenu, pt: POINT, intercept: &mut dyn FnMut(&str) -> bool, paste: Option<&dyn Fn()>) {
     let Ok(menu) = (unsafe { CreatePopupMenu() }) else { return };
     let menu = OwnedMenu(menu);
+    if paste.is_some() {
+        // Greyed when no files were copied.
+        let copied = unsafe { IsClipboardFormatAvailable(u32::from(CF_HDROP.0)) }.is_ok();
+        unsafe {
+            let _ = AppendMenuW(menu.0, if copied { MF_STRING } else { MF_STRING | MF_GRAYED }, PASTE_CMD as usize, w!("Paste\tCtrl+V"));
+            let _ = AppendMenuW(menu.0, MF_SEPARATOR, 0, PCWSTR::null());
+        }
+    }
     let mut flags = CMF_NORMAL | CMF_CANRENAME;
     if key_down(VK_SHIFT) {
         flags |= CMF_EXTENDEDVERBS;
     }
     unsafe {
-        if cm.QueryContextMenu(menu.0, 0, FIRST_CMD, LAST_CMD, flags).is_err() {
+        let first = GetMenuItemCount(Some(menu.0)).max(0) as u32;
+        if cm.QueryContextMenu(menu.0, first, FIRST_CMD, LAST_CMD, flags).is_err() {
             return;
         }
         OPEN_MENU.with(|m| *m.borrow_mut() = (cm.cast().ok(), cm.cast().ok()));
         let id = TrackPopupMenuEx(menu.0, (TPM_RETURNCMD | TPM_RIGHTBUTTON).0, pt.x, pt.y, owner, None).0 as u32;
         OPEN_MENU.with(|m| *m.borrow_mut() = (None, None));
+        if let (PASTE_CMD, Some(paste)) = (id, paste) {
+            return paste();
+        }
         if id < FIRST_CMD {
             return;
         }

@@ -455,7 +455,8 @@ void App::onContextMenu(HWND from, POINT pt) {
         }
         std::vector<int> rows = list_.selection();
         if (rows.empty()) {
-            if (!list_.dir().empty()) showMenu(wnd_, backgroundMenu(wnd_, list_.dir()).get(), pt, nullptr);
+            if (!list_.dir().empty())
+                showMenu(wnd_, backgroundMenu(wnd_, list_.dir()).get(), pt, nullptr, [&] { pasteInto(wnd_, list_.dir()); });
             return;
         }
         // Folders (and a shortcut's folder) open here, not in a separate Explorer window.

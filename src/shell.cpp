@@ -70,7 +70,7 @@ HRESULT fileOperation(HWND owner, DWORD flags, AddWork addWork) {
     return hr;
 }
 
-constexpr UINT kFirstCmd = 1, kLastCmd = 0x7FFF;
+constexpr UINT kFirstCmd = 1, kLastCmd = 0x7FFF, kPasteCmd = 0x8000;   // the shell's ids, then our Paste
 Com<IContextMenu2> g_menu2;   // set only while a context menu is on screen
 Com<IContextMenu3> g_menu3;
 
@@ -178,12 +178,19 @@ Com<IContextMenu> backgroundMenu(HWND owner, const std::wstring& dir) {
     return cm;
 }
 
-void showMenu(HWND owner, IContextMenu* cm, POINT pt, const std::function<bool(const std::wstring&)>& intercept) {
+void showMenu(HWND owner, IContextMenu* cm, POINT pt, const std::function<bool(const std::wstring&)>& intercept,
+              const std::function<void()>& paste) {
     if (!cm) return;
     Menu menu(CreatePopupMenu());
+    if (!menu) return;
+    if (paste) {   // greyed when no files were copied
+        AppendMenuW(menu.get(), MF_STRING | (IsClipboardFormatAvailable(CF_HDROP) ? 0 : MF_GRAYED), kPasteCmd,
+                    L"Paste\tCtrl+V");
+        AppendMenuW(menu.get(), MF_SEPARATOR, 0, nullptr);
+    }
     UINT flags = CMF_NORMAL | CMF_CANRENAME;
     if (GetKeyState(VK_SHIFT) < 0) flags |= CMF_EXTENDEDVERBS;
-    if (!menu || FAILED(cm->QueryContextMenu(menu.get(), 0, kFirstCmd, kLastCmd, flags))) return;
+    if (FAILED(cm->QueryContextMenu(menu.get(), UINT(GetMenuItemCount(menu.get())), kFirstCmd, kLastCmd, flags))) return;
 
     g_menu2.reset();
     g_menu3.reset();
@@ -192,6 +199,7 @@ void showMenu(HWND owner, IContextMenu* cm, POINT pt, const std::function<bool(c
     UINT id = UINT(TrackPopupMenuEx(menu.get(), TPM_RETURNCMD | TPM_RIGHTBUTTON, pt.x, pt.y, owner, nullptr));
     g_menu2.reset();
     g_menu3.reset();
+    if (id == kPasteCmd) return paste();
     if (id < kFirstCmd) return;
 
     wchar_t verb[80] = {};

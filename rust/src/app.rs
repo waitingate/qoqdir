@@ -827,12 +827,12 @@ impl App {
             }
             let rows = self.list.selection();
             if rows.is_empty() {
-                // The folder's own menu (New, Paste...); none when the list shows no folder.
+                // The folder's own menu, with Paste; none when the list shows no folder.
                 let location = self.list.location();
                 if matches!(location, Location::Dir(_))
                     && let Some(cm) = background_menu(self.wnd, &location)
                 {
-                    show_menu(self.wnd, &cm, pt, &mut |_| false);
+                    show_menu(self.wnd, &cm, pt, &mut |_| false, Some(&|| paste_into(self.wnd, &location)));
                 }
                 return;
             }
@@ -855,7 +855,7 @@ impl App {
                     return true;
                 }
                 false
-            });
+            }, None);
             return;
         }
         if from == self.tree.hwnd() {
@@ -878,7 +878,7 @@ impl App {
                     return is("rename"); // renaming is done in the file list
                 }
                 true
-            });
+            }, None);
         }
     }
 
