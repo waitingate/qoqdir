@@ -60,8 +60,9 @@ LRESULT CALLBACK middleClickProc(HWND h, UINT msg, WPARAM wp, LPARAM lp, UINT_PT
 
 // ---------------------------------------------------------------- setup
 
-bool App::create(HINSTANCE instance, const std::wstring& startPath, bool useSettings) {
+bool App::create(HINSTANCE instance, const CommandLine& cmd, bool useSettings) {
     useSettings_ = useSettings;
+    saveTabs_ = !cmd.onlyThese;
     WNDCLASSEXW wc{};
     wc.cbSize = sizeof wc;
     wc.lpfnWndProc = wndProc;
@@ -69,11 +70,11 @@ bool App::create(HINSTANCE instance, const std::wstring& startPath, bool useSett
     wc.hCursor = LoadCursorW(nullptr, IDC_ARROW);
     wc.hIcon = LoadIconW(instance, MAKEINTRESOURCEW(1));
     wc.hbrBackground = CreateSolidBrush(kBackground);   // lives as long as the process
-    wc.lpszClassName = L"CubicWindow";
+    wc.lpszClassName = kAppName;
     RegisterClassExW(&wc);
 
     UINT sysDpi = GetDpiForSystem();
-    CreateWindowExW(0, wc.lpszClassName, L"Cubic", WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN, CW_USEDEFAULT, CW_USEDEFAULT,
+    CreateWindowExW(0, wc.lpszClassName, kAppName, WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN, CW_USEDEFAULT, CW_USEDEFAULT,
                     scale(1100, sysDpi), scale(700, sysDpi), nullptr, nullptr, instance, this);
     if (!wnd_) return false;
     dpi_ = GetDpiForWindow(wnd_);
@@ -119,8 +120,8 @@ bool App::create(HINSTANCE instance, const std::wstring& startPath, bool useSett
     std::wstring exe(32768, L'\0');   // not MAX_PATH: the app may live in a deep folder
     exe.resize(GetModuleFileNameW(nullptr, exe.data(), DWORD(exe.size())));
     // Without settings (self-test), read from a file that does not exist: every value is a default.
-    ini_ = joinPath(useSettings_ ? parentPath(exe) : startPath, useSettings_ ? L"Cubic.ini" : L"none?.ini");
-    loadSettings(startPath);
+    ini_ = useSettings_ ? joinPath(parentPath(exe), std::wstring(kAppName) + L".ini") : L"?";
+    loadSettings(cmd);
     layout();
     showTabs();
     open(tab().path, Nav::Switch, tab().view);
@@ -281,21 +282,9 @@ LRESULT App::onMessage(UINT msg, WPARAM wp, LPARAM lp) {
         tree_.addChildren(*batch);
         return 0;
     }
-    case WM_APP_MIDDLECLICK: {   // a folder opens in a new tab, in the background
-        HWND from = reinterpret_cast<HWND>(wp);
-        POINT pt{GET_X_LPARAM(lp), GET_Y_LPARAM(lp)};
-        std::wstring path;
-        if (from == list_.hwnd()) {
-            LVHITTESTINFO hit{};
-            hit.pt = pt;
-            ScreenToClient(from, &hit.pt);
-            int row = ListView_HitTest(from, &hit);
-            if (row >= 0 && row < list_.count() && list_.at(row).isDir()) newTab(list_.pathAt(row), false);
-        } else if (from == tree_.hwnd() && tree_.pathAt(pt, &path)) {
-            newTab(path, false);
-        }
+    case WM_APP_MIDDLECLICK:
+        onMiddleClick(reinterpret_cast<HWND>(wp), {GET_X_LPARAM(lp), GET_Y_LPARAM(lp)});
         return 0;
-    }
     case WM_APP_CLOSETAB:
         closeTab(int(wp));
         return 0;
@@ -303,32 +292,12 @@ LRESULT App::onMessage(UINT msg, WPARAM wp, LPARAM lp) {
         Rename r = std::move(rename_);
         rename_ = {};
         if (!r.path.empty() && SUCCEEDED(renameItem(wnd_, r.path, r.name))) {
-            ViewState v;
-            v.select = {r.name};
-            v.focus = r.name;
-            refresh(v);
+            refresh(ViewState::selecting(r.name));
         }
         return 0;
     }
     case WM_TIMER:
-        if (wp == kRefreshTimer) {
-            // Try again later: never disturb a rename, and never cancel a folder that is loading.
-            if (list_.renaming() || pending_.generation) return 0;
-            KillTimer(wnd_, kRefreshTimer);
-            refreshQueued_ = false;
-            refresh();
-        } else if (wp == kStatusTimer) {
-            KillTimer(wnd_, kStatusTimer);
-            showStatus();
-        } else if (wp == kSelfTestTimer) {
-            selfTestTick();
-        } else if (wp == kLoadingTimer) {
-            KillTimer(wnd_, kLoadingTimer);
-            if (pending_.generation) {
-                setMessage(L"Loading…");
-                loadingShown_ = true;
-            }
-        }
+        onTimer(wp);
         return 0;
     case WM_APPCOMMAND:
         switch (GET_APPCOMMAND_LPARAM(lp)) {
@@ -387,6 +356,41 @@ LRESULT App::onMessage(UINT msg, WPARAM wp, LPARAM lp) {
         return 0;
     }
     return DefWindowProcW(wnd_, msg, wp, lp);
+}
+
+void App::onTimer(UINT_PTR id) {
+    if (id == kRefreshTimer) {
+        // Try again later: never disturb a rename, and never cancel a folder that is loading.
+        if (list_.renaming() || pending_.generation) return;
+        KillTimer(wnd_, kRefreshTimer);
+        refreshQueued_ = false;
+        refresh();
+    } else if (id == kStatusTimer) {
+        KillTimer(wnd_, kStatusTimer);
+        showStatus();
+    } else if (id == kLoadingTimer) {
+        KillTimer(wnd_, kLoadingTimer);
+        if (pending_.generation) {   // say "Loading..." only if it is slow
+            setMessage(L"Loading…");
+            loadingShown_ = true;
+        }
+    } else if (id == kSelfTestTimer) {
+        selfTestTick();
+    }
+}
+
+// Middle-click on a folder in the list or the tree opens it in a new tab, in the background.
+void App::onMiddleClick(HWND from, POINT screenPt) {
+    std::wstring path;
+    if (from == list_.hwnd()) {
+        LVHITTESTINFO hit{};
+        hit.pt = screenPt;
+        ScreenToClient(from, &hit.pt);
+        int row = ListView_HitTest(from, &hit);
+        if (row >= 0 && row < list_.count() && list_.at(row).isDir()) newTab(list_.pathAt(row), false);
+    } else if (from == tree_.hwnd() && tree_.pathAt(screenPt, &path)) {
+        newTab(path, false);
+    }
 }
 
 LRESULT App::onNotify(NMHDR* nm) {
@@ -574,7 +578,7 @@ bool App::onKey(const Key& key) {
     if (focus == address_) {
         if (k == VK_RETURN) { goToTyped(); return true; }
         if (k == VK_ESCAPE) {
-            SetWindowTextW(address_, tab().path.empty() ? L"This PC" : tab().path.c_str());
+            SetWindowTextW(address_, locationText(tab().path).c_str());
             focusList();
             return true;
         }
@@ -621,10 +625,10 @@ void App::focusList() {
 
 // ---------------------------------------------------------------- navigation
 
-void App::open(const std::wstring& path, Nav nav, ViewState view) {
+void App::open(const std::wstring& path, Nav nav, ViewState view, Origin origin) {
     if (list_.renaming()) ListView_CancelEditLabel(list_.hwnd());
     UINT generation = ++generation_;
-    pending_ = {generation, path, nav, std::move(view), tab().id, false, {}};
+    pending_ = {generation, path, nav, std::move(view), tab().id, std::move(origin)};
     SetTimer(wnd_, kLoadingTimer, 250, nullptr);   // say "Loading..." only if it is slow
     HWND wnd = wnd_;
     bool hidden = showHidden_;
@@ -656,37 +660,7 @@ void App::onLoaded(Listing&& listing, UINT generation) {
     if (tab().id != p.tabId) return;
     Tab& t = tab();
 
-    if (listing.error) {
-        if (!p.shortcut.empty()) {   // the shortcut does not lead to a folder: let Windows open it
-            openFile(wnd_, p.shortcut);
-            return;
-        }
-        if (p.typed && listing.isFile) {   // a file typed in the address bar: open it
-            openFile(wnd_, listing.path);
-            SetWindowTextW(address_, t.path.empty() ? L"This PC" : t.path.c_str());
-            return;
-        }
-        if (p.typed) {   // let the user correct what they typed
-            SetFocus(address_);
-            SendMessageW(address_, EM_SETSEL, 0, -1);
-        }
-        if ((p.nav == Nav::Refresh || p.nav == Nav::Switch) && !listing.path.empty()) {
-            // The tab's own folder is gone (deleted, unplugged...): fall back to its parent.
-            setMessage(L"\"" + listing.path + L"\" is not available: " + errorText(listing.error));
-            open(parentPath(listing.path), p.nav);
-            return;
-        }
-        // A history entry whose folder is gone is dropped, so Back/Forward can move past it.
-        std::vector<std::wstring>& history = p.nav == Nav::Back ? t.back : t.forward;
-        if ((p.nav == Nav::Back || p.nav == Nav::Forward) && !history.empty() && samePath(history.back(), listing.path)) {
-            history.pop_back();
-            EnableWindow(back_, !t.back.empty());
-            EnableWindow(forward_, !t.forward.empty());
-        }
-        setMessage(displayName(listing.path) + L": " + errorText(listing.error));
-        warn();
-        return;
-    }
+    if (listing.error) return onLoadFailed(listing, p);
 
     std::wstring old = t.path;
     bool sameFolder = samePath(list_.dir(), listing.path);
@@ -721,7 +695,7 @@ void App::onLoaded(Listing&& listing, UINT generation) {
     if (moved && view.select.empty() && view.focus.empty()) {
         // Going up (or back to a parent) selects the folder you came from.
         std::wstring child = childToward(listing.path, old);
-        if (!child.empty()) view.select = {view.focus = child};
+        if (!child.empty()) view = ViewState::selecting(child);
     }
     if (!(p.nav == Nav::Refresh && sameFolder) && GetWindowTextLengthW(filter_) > 0) SetWindowTextW(filter_, L"");
 
@@ -734,14 +708,47 @@ void App::onLoaded(Listing&& listing, UINT generation) {
 
     watch_ = FolderWatch(wnd_, WM_APP_CHANGED, t.path);
     if (p.nav != Nav::Refresh || GetFocus() != address_)   // never overwrite what the user is typing
-        SetWindowTextW(address_, t.path.empty() ? L"This PC" : t.path.c_str());
-    SetWindowTextW(wnd_, (displayName(t.path) + L" - Cubic").c_str());
+        SetWindowTextW(address_, locationText(t.path).c_str());
+    SetWindowTextW(wnd_, (displayName(t.path) + L" - " + kAppName).c_str());
     EnableWindow(back_, !t.back.empty());
     EnableWindow(forward_, !t.forward.empty());
     EnableWindow(up_, !t.path.empty());
     showTabs();
     if (moved) setMessage(L"");
     showStatus();
+}
+
+// The folder could not be read: decide what to show or do instead.
+void App::onLoadFailed(const Listing& listing, const Pending& p) {
+    Tab& t = tab();
+    if (!p.origin.shortcut.empty()) {   // the shortcut does not lead to a folder: let Windows open it
+        openFile(wnd_, p.origin.shortcut);
+        return;
+    }
+    if (p.origin.typed && listing.isFile) {   // a file typed in the address bar: open it
+        openFile(wnd_, listing.path);
+        SetWindowTextW(address_, locationText(t.path).c_str());
+        return;
+    }
+    if (p.origin.typed) {   // let the user correct what they typed
+        SetFocus(address_);
+        SendMessageW(address_, EM_SETSEL, 0, -1);
+    }
+    if ((p.nav == Nav::Refresh || p.nav == Nav::Switch) && !listing.path.empty()) {
+        // The tab's own folder is gone (deleted, unplugged...): fall back to its parent.
+        setMessage(L"\"" + listing.path + L"\" is not available: " + errorText(listing.error));
+        open(parentPath(listing.path), p.nav);
+        return;
+    }
+    // A history entry whose folder is gone is dropped, so Back/Forward can move past it.
+    std::vector<std::wstring>& history = p.nav == Nav::Back ? t.back : t.forward;
+    if ((p.nav == Nav::Back || p.nav == Nav::Forward) && !history.empty() && samePath(history.back(), listing.path)) {
+        history.pop_back();
+        EnableWindow(back_, !t.back.empty());
+        EnableWindow(forward_, !t.forward.empty());
+    }
+    setMessage(displayName(listing.path) + L": " + errorText(listing.error));
+    warn();
 }
 
 void App::goBack() {
@@ -767,9 +774,7 @@ void App::refresh(ViewState view) {
 void App::reload() {
     if (!pending_.generation) return refresh();
     Pending p = pending_;   // restart the load in progress, e.g. with new settings
-    open(p.path, p.nav, std::move(p.view));
-    pending_.typed = p.typed;
-    pending_.shortcut = p.shortcut;
+    open(p.path, p.nav, std::move(p.view), std::move(p.origin));
 }
 
 void App::goToTyped() {
@@ -778,8 +783,7 @@ void App::goToTyped() {
     if (path.empty() || isAbsolutePath(path)) {
         // Checked by the folder loader on its worker thread, so a dead network
         // share cannot freeze the window. A file is opened when the result comes back.
-        open(path, Nav::New);
-        pending_.typed = true;
+        open(path, Nav::New, {}, Origin::addressBar());
         focusList();
         return;
     }
@@ -788,7 +792,7 @@ void App::goToTyped() {
         warn();
         return;
     }
-    SetWindowTextW(address_, tab().path.empty() ? L"This PC" : tab().path.c_str());
+    SetWindowTextW(address_, locationText(tab().path).c_str());
     focusList();
 }
 
@@ -801,8 +805,7 @@ void App::activate(bool inNewTab) {
         std::wstring lnk = list_.pathAt(rows[0]);
         std::wstring target = shortcutTarget(lnk);
         if (isAbsolutePath(target)) {
-            open(target, Nav::New);
-            pending_.shortcut = lnk;
+            open(target, Nav::New, {}, Origin::fromShortcut(lnk));
         } else {
             openFile(wnd_, lnk);
         }
@@ -811,7 +814,7 @@ void App::activate(bool inNewTab) {
     std::vector<std::wstring> dirs, files;
     for (int row : rows) (list_.at(row).isDir() ? dirs : files).push_back(list_.pathAt(row));
     if (files.size() > 15 &&
-        MessageBoxW(wnd_, (L"Open " + std::to_wstring(files.size()) + L" files?").c_str(), L"Cubic",
+        MessageBoxW(wnd_, (L"Open " + std::to_wstring(files.size()) + L" files?").c_str(), kAppName,
                     MB_OKCANCEL | MB_ICONQUESTION) != IDOK)
         return;
     for (const auto& f : files) openFile(wnd_, f);
@@ -924,9 +927,8 @@ void App::deleteSelection(bool permanently) {
     std::vector<int> rows = list_.selection();
     if (rows.empty() || list_.dir().empty()) return;
     // Afterwards, select the item that followed the deleted ones.
-    ViewState v;
     int next = rows.back() + 1 < list_.count() ? rows.back() + 1 : rows.front() - 1;
-    if (next >= 0 && next < list_.count()) v.select = {v.focus = list_.at(next).name};
+    ViewState v = next >= 0 && next < list_.count() ? ViewState::selecting(list_.at(next).name) : ViewState{};
     v.top = list_.topRow();
     deleteItems(wnd_, list_.selectedPaths(), permanently);
     refresh(v);
@@ -945,8 +947,7 @@ void App::newFolder() {
         name = L"New folder (" + std::to_wstring(i) + L")";
     }
     SetWindowTextW(filter_, L"");
-    ViewState v;
-    v.select = {v.focus = name};
+    ViewState v = ViewState::selecting(name);
     v.rename = true;
     refresh(v);
 }
@@ -979,7 +980,9 @@ void App::setMessage(const std::wstring& text) {
     SendMessageW(status_, SB_SETTEXTW, 1, reinterpret_cast<LPARAM>(text.c_str()));
 }
 
-void App::loadSettings(const std::wstring& startPath) {
+void App::loadSettings(const CommandLine& cmd) {
+    // Settings from before the app was renamed: Cubic.ini becomes Qoqdir.ini, once.
+    if (useSettings_) CopyFileW(joinPath(parentPath(ini_), L"Cubic.ini").c_str(), ini_.c_str(), TRUE);
     auto read = [&](const wchar_t* section, const std::wstring& key) -> std::optional<std::wstring> {
         std::wstring buf(32768, L'\0');
         GetPrivateProfileStringW(section, key.c_str(), L"?", buf.data(), DWORD(buf.size()), ini_.c_str());
@@ -1003,18 +1006,14 @@ void App::loadSettings(const std::wstring& startPath) {
 
     auto count = read(L"Tabs", L"Count");
     int n = count ? _wtoi(count->c_str()) : 0;
-    for (int i = 0; i < n; ++i)
-        if (auto path = read(L"Tabs", std::to_wstring(i))) tabs_.push_back(makeTab(*path));
+    std::vector<std::wstring> paths;
+    for (int i = 0; i < n && !cmd.onlyThese; ++i)   // -n: only the command line's folders
+        if (auto path = read(L"Tabs", std::to_wstring(i))) paths.push_back(*path);
     auto active = read(L"Tabs", L"Active");
-    active_ = active ? _wtoi(active->c_str()) : 0;
-    if (!startPath.empty()) {
-        // A folder that is already open in a tab is switched to, not opened twice.
-        auto same = std::find_if(tabs_.begin(), tabs_.end(), [&](const Tab& t) { return samePath(t.path, startPath); });
-        if (same == tabs_.end()) same = tabs_.insert(tabs_.end(), makeTab(startPath));
-        active_ = int(same - tabs_.begin());
-    }
-    if (tabs_.empty()) tabs_.push_back(makeTab(knownFolder(FOLDERID_Profile)));
-    active_ = std::clamp(active_, 0, int(tabs_.size()) - 1);
+    int activeIndex = addStartFolders(paths, active && !cmd.onlyThese ? _wtoi(active->c_str()) : 0, cmd.folders);
+    if (paths.empty()) paths.push_back(knownFolder(FOLDERID_Profile));
+    for (const auto& path : paths) tabs_.push_back(makeTab(path));
+    active_ = std::clamp(activeIndex, 0, int(tabs_.size()) - 1);
 
     int w = number(L"Width", 0), h = number(L"Height", 0);
     if (w > 0 && h > 0) {
@@ -1064,6 +1063,7 @@ void App::saveSettings() {
     for (size_t i = 0; i < widths.size(); ++i)
         number((L"Column" + std::to_wstring(i)).c_str(), MulDiv(widths[i], 96, int(dpi_)));
 
+    if (!saveTabs_) return;
     WritePrivateProfileStringW(L"Tabs", nullptr, nullptr, ini_.c_str());   // drop old tabs
     write(L"Tabs", L"Count", std::to_wstring(tabs_.size()));
     write(L"Tabs", L"Active", std::to_wstring(active_));

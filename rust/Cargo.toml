@@ -1,5 +1,5 @@
 [package]
-name = "cubic"
+name = "qoqdir" # also the exe name; in the code the app name is APP_NAME (main.rs)
 version = "0.1.0"
 edition = "2024"
 description = "A light, fast, portable file manager for Windows"

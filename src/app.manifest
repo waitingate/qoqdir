@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0">
-  <assemblyIdentity type="win32" name="Cubic" version="1.0.0.0"/>
-  <description>Cubic file manager</description>
+  <assemblyIdentity type="win32" name="Qoqdir" version="1.0.0.0"/>
+  <description>Qoqdir file manager</description>
   <dependency>
     <dependentAssembly>
       <assemblyIdentity type="win32" name="Microsoft.Windows.Common-Controls" version="6.0.0.0"

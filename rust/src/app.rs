@@ -43,7 +43,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
     HMENU, HTCLIENT, IDC_ARROW, IDC_SIZEWE, IsChild, KillTimer, WPF_RESTORETOMAXIMIZED, LoadCursorW, MB_ICONQUESTION,
     MB_ICONWARNING, MB_OKCANCEL, MF_GRAYED, MF_STRING, MINMAXINFO, MSG, MessageBoxW, MoveWindow,
     NONCLIENTMETRICSW, PostMessageW, PostQuitMessage, RegisterClassExW, SPI_GETNONCLIENTMETRICS, SW_SHOWMAXIMIZED,
-    SW_SHOWNOACTIVATE, SW_SHOWNORMAL, SWP_NOACTIVATE, SWP_NOZORDER, SendMessageW, SetCursor, SetTimer,
+    SW_SHOWNOACTIVATE, SW_SHOWNORMAL, SWP_NOACTIVATE, SWP_NOZORDER, SetCursor, SetTimer,
     SetWindowLongPtrW, SetWindowPlacement, SetWindowPos, SetWindowTextW, ShowWindow, TPM_RETURNCMD,
     TPM_RIGHTBUTTON, TrackPopupMenuEx, WINDOW_EX_STYLE, WINDOW_STYLE, WINDOWPLACEMENT, WM_ACTIVATE, WM_APP,
     WM_APPCOMMAND, WM_CAPTURECHANGED, WM_CHAR, WM_CLOSE, WM_COMMAND, WM_CONTEXTMENU, WM_DESTROY, WM_DEVICECHANGE,
@@ -55,7 +55,8 @@ use windows::Win32::UI::WindowsAndMessaging::{
 use windows::core::{PCWSTR, PWSTR, w};
 
 use crate::filelist::FileList;
-use crate::folder::{Listing, Location, SortKey, byte_size, extension_of, list_folder, normalize};
+use crate::APP_NAME;
+use crate::folder::{CommandLine, Listing, Location, SortKey, add_start_folders, byte_size, exists, extension_of, list_folder, normalize};
 use crate::selftest::SelfTest;
 use crate::shell::{
     FolderWatch, IconBatch, acknowledge_change, has_own_icon, read_own_icons, remember_icons, background_menu, copy_to_clipboard, delete_items, drag_out,
@@ -63,7 +64,7 @@ use crate::shell::{
     paste_into, rename_item, run_command, show_menu,
 };
 use crate::tree::{FolderTree, TreeBatch};
-use crate::util::{Font, OwnedMenu, from_wide, pcwstr, scale, wide, window_text};
+use crate::util::{send, Font, OwnedMenu, from_wide, pcwstr, scale, wide, window_text};
 
 const ID_BACK: i32 = 100;
 const ID_FORWARD: i32 = 101;
@@ -127,14 +128,22 @@ pub struct Tab {
     view: ViewState, // remembered while the tab is in the background
 }
 
+/// Where a load was started from, when that changes what happens if it is not a folder.
+#[derive(Clone, Default)]
+pub enum Origin {
+    #[default]
+    Other,
+    AddressBar,        // typed in the address bar: a file is opened instead
+    Shortcut(PathBuf), // opened from this shortcut: if not a folder, Windows opens the shortcut
+}
+
 struct Pending {
     generation: u32,
     location: Location,
     nav: Nav,
     view: ViewState,
     tab_id: u32,
-    typed: bool,               // typed in the address bar: may turn out to be a file
-    shortcut: Option<PathBuf>, // opened from this shortcut: if not a folder, open the shortcut
+    origin: Origin,
 }
 
 pub struct State {
@@ -185,15 +194,13 @@ pub struct App {
     show_hidden: Cell<bool>,
     pub generation: Cell<u32>,
     use_settings: bool,
-    ini: Vec<u16>,
+    save_tabs: bool, // false with -n: the saved tabs are left as they are
+    ini: Vec<u16>, // settings file
     pub st: RefCell<State>,
     pub selftest: RefCell<Option<SelfTest>>,
     pub exit_code: Cell<i32>,
 }
 
-fn send(h: HWND, msg: u32, wp: usize, lp: isize) -> isize {
-    unsafe { SendMessageW(h, msg, Some(WPARAM(wp)), Some(LPARAM(lp))).0 }
-}
 
 fn loword(v: usize) -> u32 {
     (v & 0xFFFF) as u32
@@ -250,7 +257,9 @@ unsafe extern "system" fn middle_click_proc(h: HWND, msg: u32, wp: WPARAM, lp: L
 impl App {
     // ------------------------------------------------------------ setup
 
-    pub fn create(instance: HINSTANCE, start: Option<Location>, use_settings: bool) -> Option<Rc<App>> {
+    /// Opens the saved tabs plus the command line's folders, each once (with -n: only those).
+    pub fn create(instance: HINSTANCE, cmd: CommandLine, use_settings: bool) -> Option<Rc<App>> {
+        let name = wide(APP_NAME);
         unsafe {
             let class = WNDCLASSEXW {
                 cbSize: size_of::<WNDCLASSEXW>() as u32,
@@ -258,15 +267,15 @@ impl App {
                 hInstance: instance,
                 hCursor: LoadCursorW(None, IDC_ARROW).unwrap_or_default(),
                 hbrBackground: CreateSolidBrush(BACKGROUND), // lives as long as the process
-                lpszClassName: w!("CubicWindow"),
+                lpszClassName: pcwstr(&name),
                 ..Default::default()
             };
             RegisterClassExW(&class);
             let sys_dpi = GetDpiForSystem();
             let wnd = CreateWindowExW(
                 WINDOW_EX_STYLE(0),
-                w!("CubicWindow"),
-                w!("Cubic"),
+                pcwstr(&name),
+                pcwstr(&name),
                 WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN,
                 CW_USEDEFAULT,
                 CW_USEDEFAULT,
@@ -318,11 +327,14 @@ impl App {
                 PathBuf::from(from_wide(&buf[..n]))
             };
             // Without settings (self-test), read from a file that cannot exist: every value is a default.
-            let ini = if use_settings {
-                wide(exe.with_file_name("Cubic.ini"))
-            } else {
-                wide(exe.with_file_name("none?.ini"))
-            };
+            // Without settings (self-test), read from a file that cannot exist: every value is a default.
+            let ini = exe.with_file_name(if use_settings { format!("{APP_NAME}.ini") } else { "none?.ini".into() });
+            // Settings from before the app was renamed: Cubic.ini becomes Qoqdir.ini, once.
+            let old = exe.with_file_name("Cubic.ini");
+            if use_settings && !exists(&ini) && exists(&old) {
+                let _ = std::fs::copy(&old, &ini);
+            }
+            let ini = wide(ini);
 
             let app = Rc::new(App {
                 wnd,
@@ -351,6 +363,7 @@ impl App {
                 show_hidden: Cell::new(false),
                 generation: Cell::new(0),
                 use_settings,
+                save_tabs: !cmd.only_these,
                 ini,
                 st: RefCell::new(State {
                     tabs: Vec::new(),
@@ -393,7 +406,7 @@ impl App {
             send(app.tree.hwnd(), TVM_SETBKCOLOR, 0, BACKGROUND.0 as isize);
             app.apply_font();
             app.tree.fill();
-            app.load_settings(start);
+            app.load_settings(&cmd);
             app.layout();
             app.show_tabs();
             let (location, view) = app.with_tab(|t| (t.location.clone(), t.view.clone()));
@@ -591,21 +604,7 @@ impl App {
                     return LRESULT(0);
                 }
                 WM_APP_MIDDLECLICK => {
-                    // A folder opens in a new tab, in the background.
-                    let (from, pt) = (HWND(wp.0 as _), point_from(lp));
-                    if from == self.list.hwnd() {
-                        let mut hit = LVHITTESTINFO { pt, ..Default::default() };
-                        let _ = ScreenToClient(from, &mut hit.pt);
-                        let row = send(from, LVM_HITTEST, 0, &mut hit as *mut _ as isize);
-                        let folder = usize::try_from(row).ok().filter(|&r| self.list.item(r).is_some_and(|i| i.is_dir()));
-                        if let Some(location) = folder.and_then(|r| self.list.item_location(r)) {
-                            self.new_tab(location, false);
-                        }
-                    } else if from == self.tree.hwnd() {
-                        if let Some(location) = self.tree.location_at(pt) {
-                            self.new_tab(location, false);
-                        }
-                    }
+                    self.on_middle_click(HWND(wp.0 as _), point_from(lp));
                     return LRESULT(0);
                 }
                 WM_APP_CLOSETAB => {
@@ -622,30 +621,7 @@ impl App {
                     return LRESULT(0);
                 }
                 WM_TIMER => {
-                    match wp.0 {
-                        TIMER_REFRESH => {
-                            // Otherwise keep the timer and try again: never disturb a rename,
-                            // and never cancel a folder that is loading.
-                            if !self.list.renaming() && !self.is_loading() {
-                                let _ = KillTimer(Some(self.wnd), TIMER_REFRESH);
-                                self.refresh_queued.set(false);
-                                self.refresh(ViewState::default());
-                            }
-                        }
-                        TIMER_STATUS => {
-                            let _ = KillTimer(Some(self.wnd), TIMER_STATUS);
-                            self.show_status();
-                        }
-                        TIMER_LOADING => {
-                            let _ = KillTimer(Some(self.wnd), TIMER_LOADING);
-                            if self.is_loading() {
-                                self.set_message("Loading\u{2026}");
-                                self.loading_shown.set(true);
-                            }
-                        }
-                        TIMER_SELFTEST => self.self_test_tick(),
-                        _ => {}
-                    }
+                    self.on_timer(wp.0);
                     return LRESULT(0);
                 }
                 WM_APPCOMMAND => {
@@ -724,6 +700,55 @@ impl App {
                 _ => {}
             }
             DefWindowProcW(self.wnd, msg, wp, lp)
+        }
+    }
+
+    fn on_timer(&self, id: usize) {
+        unsafe {
+            match id {
+                TIMER_REFRESH => {
+                    // Otherwise keep the timer and try again: never disturb a rename,
+                    // and never cancel a folder that is loading.
+                    if !self.list.renaming() && !self.is_loading() {
+                        let _ = KillTimer(Some(self.wnd), TIMER_REFRESH);
+                        self.refresh_queued.set(false);
+                        self.refresh(ViewState::default());
+                    }
+                }
+                TIMER_STATUS => {
+                    let _ = KillTimer(Some(self.wnd), TIMER_STATUS);
+                    self.show_status();
+                }
+                TIMER_LOADING => {
+                    let _ = KillTimer(Some(self.wnd), TIMER_LOADING);
+                    if self.is_loading() {
+                        self.set_message("Loading\u{2026}"); // only when it is slow
+                        self.loading_shown.set(true);
+                    }
+                }
+                TIMER_SELFTEST => self.self_test_tick(),
+                _ => {}
+            }
+        }
+    }
+
+    /// Middle-click on a folder in the list or the tree opens it in a new tab, in the background.
+    fn on_middle_click(&self, from: HWND, pt: POINT) {
+        let location = if from == self.list.hwnd() {
+            let mut hit = LVHITTESTINFO { pt, ..Default::default() };
+            unsafe {
+                let _ = ScreenToClient(from, &mut hit.pt);
+            }
+            let row = send(from, LVM_HITTEST, 0, &mut hit as *mut _ as isize);
+            let folder = usize::try_from(row).ok().filter(|&r| self.list.item(r).is_some_and(|i| i.is_dir()));
+            folder.and_then(|r| self.list.item_location(r))
+        } else if from == self.tree.hwnd() {
+            self.tree.location_at(pt)
+        } else {
+            None
+        };
+        if let Some(location) = location {
+            self.new_tab(location, false);
         }
     }
 
@@ -1117,6 +1142,10 @@ impl App {
     // ------------------------------------------------------------ navigation
 
     pub fn open(&self, location: Location, nav: Nav, view: ViewState) {
+        self.open_from(location, nav, view, Origin::Other);
+    }
+
+    fn open_from(&self, location: Location, nav: Nav, view: ViewState, origin: Origin) {
         if self.list.renaming() {
             send(self.list.hwnd(), LVM_CANCELEDITLABEL, 0, 0);
         }
@@ -1125,7 +1154,7 @@ impl App {
         {
             let mut st = self.st.borrow_mut();
             let tab_id = st.tabs[st.active].id;
-            st.pending = Some(Pending { generation, location: location.clone(), nav, view, tab_id, typed: false, shortcut: None });
+            st.pending = Some(Pending { generation, location: location.clone(), nav, view, tab_id, origin });
         }
         unsafe {
             SetTimer(Some(self.wnd), TIMER_LOADING, 250, None); // say "Loading..." only if it is slow
@@ -1173,49 +1202,7 @@ impl App {
         }
 
         if let Some(error) = &listing.error {
-            if let Some(lnk) = &pending.shortcut {
-                open_file(self.wnd, lnk); // the shortcut does not lead to a folder: let Windows open it
-                return;
-            }
-            if pending.typed && listing.is_file {
-                // A file typed in the address bar: open it.
-                if let Location::Dir(path) = &listing.location {
-                    open_file(self.wnd, path);
-                }
-                set_text(self.address, self.location().text());
-                return;
-            }
-            if pending.typed {
-                // Let the user correct what they typed.
-                unsafe {
-                    let _ = SetFocus(Some(self.address));
-                }
-                send(self.address, EM_SETSEL, 0, -1);
-            }
-            let own_folder = matches!(pending.nav, Nav::Refresh | Nav::Switch);
-            if own_folder && matches!(listing.location, Location::Dir(_)) {
-                // The tab's own folder is gone (deleted, unplugged...): fall back to its parent.
-                self.set_message(&format!("\"{}\" is not available: {}", listing.location.text().to_string_lossy(), error.trim()));
-                self.open(listing.location.parent(), pending.nav, ViewState::default());
-                return;
-            }
-            if matches!(pending.nav, Nav::Back | Nav::Forward) {
-                // A history entry whose folder is gone is dropped, so Back/Forward can move past it.
-                let (can_back, can_forward) = self.with_tab(|t| {
-                    let history = if pending.nav == Nav::Back { &mut t.back } else { &mut t.forward };
-                    if history.last().is_some_and(|l| l.same(&listing.location)) {
-                        history.pop();
-                    }
-                    (!t.back.is_empty(), !t.forward.is_empty())
-                });
-                unsafe {
-                    let _ = EnableWindow(self.back, can_back);
-                    let _ = EnableWindow(self.forward, can_forward);
-                }
-            }
-            self.set_message(&format!("{}: {}", listing.location.display_name().to_string_lossy(), error.trim()));
-            self.warn();
-            return;
+            return self.on_load_failed(&listing, error, &pending);
         }
 
         let same_folder = self.list.location().same(&listing.location);
@@ -1283,7 +1270,7 @@ impl App {
             set_text(self.address, location.text()); // never overwrite what the user is typing
         }
         let mut title = location.display_name();
-        title.push(" - Cubic");
+        title.push(format!(" - {APP_NAME}"));
         set_text(self.wnd, title);
         let (can_back, can_forward) = self.with_tab(|t| (!t.back.is_empty(), !t.forward.is_empty()));
         unsafe {
@@ -1296,6 +1283,52 @@ impl App {
             self.set_message("");
         }
         self.show_status();
+    }
+
+    /// The folder could not be read: decide what to show or do instead.
+    fn on_load_failed(&self, listing: &Listing, error: &str, pending: &Pending) {
+        match (&pending.origin, &listing.location) {
+            (Origin::Shortcut(lnk), _) => {
+                open_file(self.wnd, lnk); // the shortcut does not lead to a folder: let Windows open it
+                return;
+            }
+            (Origin::AddressBar, Location::Dir(path)) if listing.is_file => {
+                open_file(self.wnd, path); // a file typed in the address bar: open it
+                set_text(self.address, self.location().text());
+                return;
+            }
+            (Origin::AddressBar, _) => {
+                // Let the user correct what they typed.
+                unsafe {
+                    let _ = SetFocus(Some(self.address));
+                }
+                send(self.address, EM_SETSEL, 0, -1);
+            }
+            _ => {}
+        }
+        let own_folder = matches!(pending.nav, Nav::Refresh | Nav::Switch);
+        if own_folder && matches!(listing.location, Location::Dir(_)) {
+            // The tab's own folder is gone (deleted, unplugged...): fall back to its parent.
+            self.set_message(&format!("\"{}\" is not available: {}", listing.location.text().to_string_lossy(), error.trim()));
+            self.open(listing.location.parent(), pending.nav, ViewState::default());
+            return;
+        }
+        if matches!(pending.nav, Nav::Back | Nav::Forward) {
+            // A history entry whose folder is gone is dropped, so Back/Forward can move past it.
+            let (can_back, can_forward) = self.with_tab(|t| {
+                let history = if pending.nav == Nav::Back { &mut t.back } else { &mut t.forward };
+                if history.last().is_some_and(|l| l.same(&listing.location)) {
+                    history.pop();
+                }
+                (!t.back.is_empty(), !t.forward.is_empty())
+            });
+            unsafe {
+                let _ = EnableWindow(self.back, can_back);
+                let _ = EnableWindow(self.forward, can_forward);
+            }
+        }
+        self.set_message(&format!("{}: {}", listing.location.display_name().to_string_lossy(), error.trim()));
+        self.warn();
     }
 
     fn go_back(&self) {
@@ -1328,21 +1361,10 @@ impl App {
 
     /// Like refresh, but also restarts a load in progress (e.g. after Ctrl+H).
     fn reload(&self) {
-        let loading = self.st.borrow().pending.as_ref().map(|p| (p.location.clone(), p.nav, p.view.clone(), p.typed, p.shortcut.clone()));
+        let loading = self.st.borrow().pending.as_ref().map(|p| (p.location.clone(), p.nav, p.view.clone(), p.origin.clone()));
         match loading {
-            Some((location, nav, view, typed, shortcut)) => {
-                self.open(location, nav, view);
-                self.mark_origin(typed, shortcut);
-            }
+            Some((location, nav, view, origin)) => self.open_from(location, nav, view, origin),
             None => self.refresh(ViewState::default()),
-        }
-    }
-
-    /// Records where the pending load came from (address bar, or a shortcut).
-    fn mark_origin(&self, typed: bool, shortcut: Option<PathBuf>) {
-        if let Some(p) = self.st.borrow_mut().pending.as_mut() {
-            p.typed = typed;
-            p.shortcut = shortcut;
         }
     }
 
@@ -1352,8 +1374,7 @@ impl App {
         if location.path().is_none_or(|p| p.is_absolute()) {
             // Checked by the folder loader on its worker thread, so a dead network
             // share cannot freeze the window. A file is opened when the result comes back.
-            self.open(location, Nav::New, ViewState::default());
-            self.mark_origin(true, None);
+            self.open_from(location, Nav::New, ViewState::default(), Origin::AddressBar);
             self.focus_list();
             return;
         }
@@ -1380,10 +1401,7 @@ impl App {
             if let (Some(it), Some(Location::Dir(lnk))) = (self.list.item(*row), self.list.item_location(*row)) {
                 if !it.is_dir() && extension_of(&it.name) == ".lnk".encode_utf16().collect::<Vec<_>>() {
                     match shortcut_target(&lnk).filter(|t| t.is_absolute()) {
-                        Some(target) => {
-                            self.open(Location::dir(target), Nav::New, ViewState::default());
-                            self.mark_origin(false, Some(lnk));
-                        }
+                        Some(target) => self.open_from(Location::dir(target), Nav::New, ViewState::default(), Origin::Shortcut(lnk)),
                         None => open_file(self.wnd, &lnk),
                     }
                     return;
@@ -1399,7 +1417,7 @@ impl App {
         }
         if files.len() > 15 {
             let text = wide(format!("Open {} files?", files.len()));
-            let answer = unsafe { MessageBoxW(Some(self.wnd), pcwstr(&text), w!("Cubic"), MB_OKCANCEL | MB_ICONQUESTION) };
+            let answer = unsafe { MessageBoxW(Some(self.wnd), pcwstr(&text), pcwstr(&wide(APP_NAME)), MB_OKCANCEL | MB_ICONQUESTION) };
             if answer.0 != 1 {
                 return; // not IDOK
             }
@@ -1643,7 +1661,7 @@ impl App {
         self.read_setting("Window", key).and_then(|v| v.to_string_lossy().trim().parse().ok()).unwrap_or(fallback)
     }
 
-    fn load_settings(&self, start: Option<Location>) {
+    fn load_settings(&self, cmd: &CommandLine) {
         let dpi = self.dpi.get();
         self.tree_width.set(self.number("TreeWidth", 220));
         self.show_hidden.set(self.number("ShowHidden", 0) != 0);
@@ -1653,35 +1671,23 @@ impl App {
         self.list.set_column_widths(&widths);
 
         let count: usize = self.read_setting("Tabs", "Count").and_then(|v| v.to_string_lossy().parse().ok()).unwrap_or(0);
-        let saved: Vec<Location> = (0..count)
+        let saved = if cmd.only_these { 0 } else { count }; // -n: only the command line's folders
+        let mut tabs: Vec<Location> = (0..saved)
             .filter_map(|i| self.read_setting("Tabs", &i.to_string()))
             .map(|p| if p.is_empty() { Location::ThisPc } else { Location::dir(p) })
             .collect();
-        let active: usize = self.read_setting("Tabs", "Active").and_then(|v| v.to_string_lossy().parse().ok()).unwrap_or(0);
+        let saved_active: usize = self.read_setting("Tabs", "Active").and_then(|v| v.to_string_lossy().parse().ok()).unwrap_or(0);
+        let active = add_start_folders(&mut tabs, saved_active, &cmd.folders);
+        if tabs.is_empty() {
+            tabs.push(known_folder(&FOLDERID_Profile).map(Location::dir).unwrap_or(Location::ThisPc));
+        }
         {
             let mut st = self.st.borrow_mut();
-            for location in saved {
+            for location in tabs {
                 let tab = Self::make_tab(&mut st, location);
                 st.tabs.push(tab);
             }
-            st.active = active;
-            if let Some(start) = start {
-                // A folder that is already open in a tab is switched to, not opened twice.
-                st.active = match st.tabs.iter().position(|t| t.location.same(&start)) {
-                    Some(i) => i,
-                    None => {
-                        let tab = Self::make_tab(&mut st, start);
-                        st.tabs.push(tab);
-                        st.tabs.len() - 1
-                    }
-                };
-            }
-            if st.tabs.is_empty() {
-                let home = known_folder(&FOLDERID_Profile).map(Location::dir).unwrap_or(Location::ThisPc);
-                let tab = Self::make_tab(&mut st, home);
-                st.tabs.push(tab);
-            }
-            st.active = st.active.min(st.tabs.len() - 1);
+            st.active = active.min(st.tabs.len() - 1);
         }
 
         let (w, h) = (self.number("Width", 0), self.number("Height", 0));
@@ -1740,6 +1746,9 @@ impl App {
                 number(&format!("Column{i}"), (*w as i64 * 96 / dpi) as i32);
             }
 
+            if !self.save_tabs {
+                return;
+            }
             let _ = WritePrivateProfileStringW(w!("Tabs"), PCWSTR::null(), PCWSTR::null(), pcwstr(&self.ini)); // drop old tabs
             let (paths, active): (Vec<OsString>, usize) = {
                 let st = self.st.borrow();

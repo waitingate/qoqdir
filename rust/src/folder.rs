@@ -120,7 +120,7 @@ impl Location {
     }
 }
 
-pub fn equal_no_case(a: &OsStr, b: &OsStr) -> bool {
+fn equal_no_case(a: &OsStr, b: &OsStr) -> bool {
     let a: Vec<u16> = a.encode_wide().collect();
     let b: Vec<u16> = b.encode_wide().collect();
     unsafe { CompareStringOrdinal(&a, &b, true) == CSTR_EQUAL }
@@ -179,9 +179,70 @@ pub fn normalize(text: &OsStr) -> Location {
     Location::dir(OsString::from_wide(&w))
 }
 
-/// A folder given on the command line, relative to the current one ("cubic.exe .").
+/// A folder given on the command line, relative to the current one ("qoqdir .").
 pub fn resolve_argument(arg: &OsStr) -> Location {
-    normalize(std::path::absolute(arg).as_deref().map_or(arg, |p| p.as_os_str()))
+    // "D:" alone means the drive's root (as in Explorer), not Windows' "current folder on D:".
+    let mut arg = arg.to_os_string();
+    if arg.len() == 2 && arg.to_string_lossy().ends_with(':') {
+        arg.push("\\");
+    }
+    normalize(std::path::absolute(&arg).as_deref().map_or(arg.as_os_str(), |p| p.as_os_str()))
+}
+
+/// Adds folders given on the command line to the saved tabs (each folder once) and
+/// returns the active tab: the first given folder, or `active` if none were given.
+pub fn add_start_folders(tabs: &mut Vec<Location>, mut active: usize, given: &[Location]) -> usize {
+    for (g, folder) in given.iter().enumerate() {
+        let index = match tabs.iter().position(|t| t.same(folder)) {
+            Some(i) => i,
+            None => {
+                tabs.push(folder.clone());
+                tabs.len() - 1
+            }
+        };
+        if g == 0 {
+            active = index;
+        }
+    }
+    active
+}
+
+/// The command line, 7z style: one-letter switches with the value attached.
+///   qoqdir [switches] [folders...]     (see USAGE in main.rs)
+#[derive(Default, Debug)]
+pub struct CommandLine {
+    pub folders: Vec<Location>, // -t{folder} and plain folders, in order
+    pub only_these: bool,       // -n: only these tabs; the saved tabs are left alone
+    pub help: bool,             // -h or -?
+    pub self_test: bool,        // --selftest
+    pub error: Option<String>,  // a mistake to show with the help
+}
+
+pub fn parse_command_line(args: &[OsString]) -> CommandLine {
+    let mut cmd = CommandLine::default();
+    for arg in args {
+        let text = arg.to_string_lossy();
+        if !text.starts_with('-') {
+            cmd.folders.push(resolve_argument(arg)); // a plain folder
+        } else if text.len() > 2 && text.starts_with("-t") {
+            // The folder part, taken from the original argument so any file name survives.
+            let folder: Vec<u16> = arg.encode_wide().skip(2).collect();
+            cmd.folders.push(resolve_argument(&OsString::from_wide(&folder)));
+        } else {
+            match text.as_ref() {
+                "--selftest" => cmd.self_test = true,
+                "-n" => cmd.only_these = true,
+                "-h" | "-?" | "--help" => cmd.help = true,
+                "-t" => cmd.error = Some("-t needs a folder right after it, with no space: -tD:\\logs".into()),
+                _ => cmd.error = Some(format!("Unknown switch: {text}")),
+            }
+        }
+        if cmd.error.is_some() {
+            break;
+        }
+    }
+    cmd.folders.retain(|l| matches!(l, Location::Dir(_)));
+    cmd
 }
 
 pub fn is_directory(path: &Path) -> bool {
@@ -469,8 +530,9 @@ mod tests {
         assert!(matches!(normalize(OsStr::new("this pc")), Location::ThisPc));
         assert!(matches!(normalize(OsStr::new("   ")), Location::ThisPc));
         let cwd = std::env::current_dir().unwrap();
-        assert!(resolve_argument(OsStr::new(".")).same(&Location::dir(cwd))); // "cubic.exe ." from a terminal
+        assert!(resolve_argument(OsStr::new(".")).same(&Location::dir(cwd))); // "qoqdir ." from a terminal
         assert_eq!(text(&resolve_argument(OsStr::new("C:\\Windows\\"))), "C:\\Windows");
+        assert_eq!(text(&resolve_argument(OsStr::new("C:"))), "C:\\"); // a drive alone is its root, as in Explorer
         assert_eq!(text(&normalize(OsStr::new("\\\\server\\share\\"))), "\\\\server\\share");
         let windir = std::env::var_os("SystemRoot").unwrap();
         assert!(normalize(OsStr::new("%SystemRoot%")).same(&Location::dir(windir)));
@@ -525,6 +587,38 @@ mod tests {
         v[2].type_text = Some("Microsoft Word Document".into());
         sort_items(&mut v, SortKey::Type, true);
         assert_eq!(names(&v), "a.zip,c.docx,b.txt");
+    }
+
+    #[test]
+    fn start_folders() {
+        // "qoqdir A B" adds A and B as tabs (each once) and shows the first.
+        let texts = |tabs: &[Location]| tabs.iter().map(text).collect::<Vec<_>>().join(",");
+        let mut tabs = vec![dir("C:\\A"), dir("C:\\B")];
+        assert_eq!(add_start_folders(&mut tabs, 0, &[]), 0); // nothing given: unchanged
+        assert_eq!(add_start_folders(&mut tabs, 0, &[dir("C:\\B")]), 1); // already open: just shown
+        assert_eq!(add_start_folders(&mut tabs, 0, &[dir("C:\\C"), dir("c:\\a"), dir("C:\\D")]), 2); // first given shown
+        assert_eq!(texts(&tabs), "C:\\A,C:\\B,C:\\C,C:\\D"); // c:\a matched C:\A
+        let mut none = Vec::new();
+        assert_eq!(add_start_folders(&mut none, 0, &[dir("C:\\X"), dir("C:\\X")]), 0);
+        assert_eq!(none.len(), 1);
+    }
+
+    #[test]
+    fn command_line() {
+        let args = |list: &[&str]| list.iter().map(OsString::from).collect::<Vec<_>>();
+        let cwd = std::env::current_dir().unwrap();
+        let c = parse_command_line(&args(&[".", "-tC:\\A", "-n", "-tC:\\My Files\\"]));
+        assert!(c.error.is_none() && c.only_these && !c.help && !c.self_test);
+        let texts: Vec<String> = c.folders.iter().map(text).collect();
+        assert_eq!(texts.len(), 3);
+        assert!(c.folders[0].same(&Location::dir(cwd)));
+        assert_eq!(texts[1..], ["C:\\A", "C:\\My Files"]);
+        assert!(parse_command_line(&[]).folders.is_empty());
+        assert!(parse_command_line(&args(&["-h"])).help && parse_command_line(&args(&["-?"])).help);
+        assert!(parse_command_line(&args(&["--selftest"])).self_test);
+        assert_eq!(parse_command_line(&args(&["-x"])).error.as_deref(), Some("Unknown switch: -x"));
+        assert!(parse_command_line(&args(&["-t"])).error.is_some()); // -t without a folder
+        assert!(parse_command_line(&args(&["-n", "-tC:\\A", "-q"])).error.is_some());
     }
 
     #[test]

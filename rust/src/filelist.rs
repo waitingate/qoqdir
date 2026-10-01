@@ -27,7 +27,7 @@ use windows::Win32::UI::Controls::{
     NMLVDISPINFOW, SetWindowTheme, EM_SETSEL, HEADER_CONTROL_FORMAT_FLAGS,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    CreateWindowExW, HMENU, PostMessageW, SendMessageW, WINDOW_EX_STYLE, WINDOW_STYLE, WS_CHILD,
+    CreateWindowExW, HMENU, PostMessageW, WINDOW_EX_STYLE, WINDOW_STYLE, WS_CHILD,
     WS_TABSTOP, WS_VISIBLE,
 };
 use windows::Win32::UI::Input::KeyboardAndMouse::SetFocus;
@@ -35,7 +35,7 @@ use windows::core::w;
 
 use crate::folder::{Item, Listing, Location, SortKey, matches_filter, sort_items, to_lower, format_size, format_time};
 use crate::shell::{icon_for, system_image_list, type_name};
-use crate::util::{copy_to, wide};
+use crate::util::{send, copy_to, wide};
 
 const COLUMNS: [&str; 4] = ["Name", "Date modified", "Type", "Size"];
 const LVSICF_NOSCROLL: isize = 2;
@@ -54,9 +54,6 @@ pub struct FileList {
     model: RefCell<Model>,
 }
 
-fn send(h: HWND, msg: u32, wp: usize, lp: isize) -> isize {
-    unsafe { SendMessageW(h, msg, Some(WPARAM(wp)), Some(LPARAM(lp))).0 }
-}
 
 impl FileList {
     pub fn create(parent: HWND, id: i32) -> FileList {

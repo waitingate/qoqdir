@@ -66,4 +66,7 @@ struct FontDeleter {
 };
 using Font = std::unique_ptr<std::remove_pointer_t<HFONT>, FontDeleter>;
 
+// The app's name: window title, settings file, logs. (The exe name is set in CMakeLists.txt.)
+constexpr wchar_t kAppName[] = L"Qoqdir";
+
 inline int scale(int px, UINT dpi) { return MulDiv(px, static_cast<int>(dpi), 96); }

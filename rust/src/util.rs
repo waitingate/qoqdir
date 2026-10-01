@@ -4,11 +4,11 @@
 use std::ffi::{OsStr, OsString};
 use std::os::windows::ffi::{OsStrExt, OsStringExt};
 
-use windows::Win32::Foundation::HWND;
+use windows::Win32::Foundation::{HWND, LPARAM, WPARAM};
 use windows::Win32::Graphics::Gdi::{DeleteObject, HFONT};
 use windows::Win32::System::Com::CoTaskMemFree;
 use windows::Win32::UI::Shell::Common::ITEMIDLIST;
-use windows::Win32::UI::WindowsAndMessaging::{DestroyMenu, GetWindowTextLengthW, GetWindowTextW, HMENU};
+use windows::Win32::UI::WindowsAndMessaging::{DestroyMenu, GetWindowTextLengthW, GetWindowTextW, HMENU, SendMessageW};
 use windows::core::PCWSTR;
 
 /// NUL-terminated UTF-16 copy of a string, ready to pass to Windows.
@@ -40,6 +40,11 @@ pub unsafe fn copy_to(buf: *mut u16, cap: i32, text: impl AsRef<OsStr>) {
         n += 1;
     }
     unsafe { *buf.add(n) = 0 };
+}
+
+/// SendMessage with plain numbers, for the many control messages that take them.
+pub fn send(h: HWND, msg: u32, wp: usize, lp: isize) -> isize {
+    unsafe { SendMessageW(h, msg, Some(WPARAM(wp)), Some(LPARAM(lp))).0 }
 }
 
 pub fn window_text(hwnd: HWND) -> OsString {

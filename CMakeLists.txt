@@ -1,5 +1,6 @@
 cmake_minimum_required(VERSION 3.20)
-project(Cubic LANGUAGES CXX RC)
+# The app's name. (In the code it is kAppName in src/common.h.)
+project(Qoqdir LANGUAGES CXX RC)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -20,20 +21,20 @@ endif()
 set(WIN_LIBS ole32 oleaut32 shell32 shlwapi comctl32 uxtheme uuid)
 
 # Path and folder logic, shared by the app and the tests.
-add_library(cubic_core STATIC src/folder.cpp)
-target_link_libraries(cubic_core PUBLIC ${WIN_LIBS})
+add_library(core STATIC src/folder.cpp)
+target_link_libraries(core PUBLIC ${WIN_LIBS})
 
-add_executable(Cubic WIN32
-  src/main.cpp src/app.cpp src/filelist.cpp src/tree.cpp src/shell.cpp src/selftest.cpp src/cubic.rc)
-target_link_libraries(Cubic PRIVATE cubic_core)
+add_executable(${PROJECT_NAME} WIN32
+  src/main.cpp src/app.cpp src/filelist.cpp src/tree.cpp src/shell.cpp src/selftest.cpp src/app.rc)
+target_link_libraries(${PROJECT_NAME} PRIVATE core)
 if(NOT MSVC)
-  target_link_options(Cubic PRIVATE -municode)
+  target_link_options(${PROJECT_NAME} PRIVATE -municode)
 endif()
 
 enable_testing()
-add_executable(cubic_tests tests/tests.cpp)
-target_link_libraries(cubic_tests PRIVATE cubic_core)
-target_include_directories(cubic_tests PRIVATE src)
-add_test(NAME cubic_tests COMMAND cubic_tests)
+add_executable(unit_tests tests/tests.cpp)
+target_link_libraries(unit_tests PRIVATE core)
+target_include_directories(unit_tests PRIVATE src)
+add_test(NAME unit_tests COMMAND unit_tests)
 # Drives the real app in-process (opens a window briefly; never sends global keystrokes).
-add_test(NAME cubic_selftest COMMAND Cubic --selftest)
+add_test(NAME selftest COMMAND ${PROJECT_NAME} --selftest)

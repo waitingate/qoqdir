@@ -40,10 +40,25 @@ bool matchesFilter(const Item& item, const std::wstring& filter);
 
 std::wstring normalizePath(std::wstring text);       // cleans up typed text; "" for This PC
 std::wstring resolveArgument(const std::wstring& arg); // a command-line folder, relative to the current one
+// Adds folders given on the command line to the saved tabs (each folder once) and returns
+// the active tab: the first given folder, or `active` if none were given.
+int addStartFolders(std::vector<std::wstring>& tabs, int active, const std::vector<std::wstring>& given);
+
+// The command line, 7z style: one-letter switches with the value attached.
+//   qoqdir [switches] [folders...]     (see kUsage in main.cpp)
+struct CommandLine {
+    std::vector<std::wstring> folders;   // -t{folder} and plain folders, in order
+    bool onlyThese = false;              // -n: only these tabs; the saved tabs are left alone
+    bool help = false;                   // -h or -?
+    bool selfTest = false;               // --selftest
+    std::wstring error;                  // a mistake to show with the help
+};
+CommandLine parseCommandLine(const std::vector<std::wstring>& args);
 std::wstring joinPath(const std::wstring& dir, const std::wstring& name);
 std::wstring parentPath(const std::wstring& path);   // "" when the parent is This PC
 std::wstring leafName(const std::wstring& path);
 std::wstring displayName(const std::wstring& path);  // leaf name, or "This PC"
+std::wstring locationText(const std::wstring& path); // for the address bar: the path, or "This PC"
 // Name of the child of 'ancestor' that leads to 'descendant', or "" if it is not inside.
 std::wstring childToward(const std::wstring& ancestor, const std::wstring& descendant);
 bool samePath(const std::wstring& a, const std::wstring& b);

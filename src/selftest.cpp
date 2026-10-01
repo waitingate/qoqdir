@@ -1,4 +1,4 @@
-// "Cubic.exe --selftest": drives the real app through a scripted session and
+// "qoqdir.exe --selftest": drives the real app through a scripted session and
 // checks the results on disk. Keys are fed straight into App::onKey, so the
 // test never sends global keyboard input to other windows.
 
@@ -32,7 +32,7 @@ namespace {
 std::wstring testRoot() {
     wchar_t temp[MAX_PATH] = {};
     GetTempPathW(MAX_PATH, temp);
-    return joinPath(temp, L"cubic-selftest");
+    return joinPath(temp, toLower(kAppName) + L"-selftest");
 }
 
 void writeFile(const std::wstring& p) {
@@ -228,7 +228,7 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
     add(L"a shortcut to a folder opens it here",
         [=, this] {
             makeShortcut(path(L"sub-link.lnk"), path(L"sub"));
-            refresh(ViewState{{L"sub-link.lnk"}, L"sub-link.lnk"});
+            refresh(ViewState::selecting(L"sub-link.lnk"));
         },
         [=, this] {
             if (!idle() || list_.focusedName() != L"sub-link.lnk") return false;
@@ -243,7 +243,7 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
             t0 = nowMs();
             makeShortcut(path(L"offline.lnk"), L"\\\\192.0.2.1\\share");
             selfTest_->note = L"shortcut made in " + std::to_wstring(int(nowMs() - t0)) + L" ms";
-            refresh(ViewState{{L"offline.lnk"}, L"offline.lnk"});
+            refresh(ViewState::selecting(L"offline.lnk"));
         },
         [=, this] { return idle() && list_.focusedName() == L"offline.lnk"; }, 60000);
     add(L"opening a shortcut to an unreachable network folder does not freeze the window",

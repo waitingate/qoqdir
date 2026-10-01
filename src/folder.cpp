@@ -129,9 +129,38 @@ std::wstring normalizePath(std::wstring p) {
 }
 
 std::wstring resolveArgument(const std::wstring& arg) {
+    // "D:" alone means the drive's root (as in Explorer), not Windows' "current folder on D:".
+    std::wstring path = arg.size() == 2 && arg[1] == L':' ? arg + L'\\' : arg;
     std::wstring full(32768, L'\0');
-    DWORD n = GetFullPathNameW(arg.c_str(), DWORD(full.size()), full.data(), nullptr);
-    return normalizePath(n > 0 && n < full.size() ? full.substr(0, n) : arg);
+    DWORD n = GetFullPathNameW(path.c_str(), DWORD(full.size()), full.data(), nullptr);
+    return normalizePath(n > 0 && n < full.size() ? full.substr(0, n) : path);
+}
+
+int addStartFolders(std::vector<std::wstring>& tabs, int active, const std::vector<std::wstring>& given) {
+    for (size_t g = 0; g < given.size(); ++g) {
+        auto same = std::find_if(tabs.begin(), tabs.end(), [&](const std::wstring& t) { return samePath(t, given[g]); });
+        if (same == tabs.end()) same = tabs.insert(tabs.end(), given[g]);
+        if (g == 0) active = int(same - tabs.begin());
+    }
+    return active;
+}
+
+CommandLine parseCommandLine(const std::vector<std::wstring>& args) {
+    CommandLine cmd;
+    auto addFolder = [&](const std::wstring& text) {
+        if (std::wstring folder = resolveArgument(text); !folder.empty()) cmd.folders.push_back(folder);
+    };
+    for (const std::wstring& arg : args) {
+        if (arg.empty() || arg[0] != L'-') addFolder(arg);   // a plain folder
+        else if (arg == L"--selftest") cmd.selfTest = true;
+        else if (arg == L"-n") cmd.onlyThese = true;
+        else if (arg == L"-h" || arg == L"-?" || arg == L"--help") cmd.help = true;
+        else if (arg.size() > 2 && arg[1] == L't') addFolder(arg.substr(2));
+        else if (arg == L"-t") cmd.error = L"-t needs a folder right after it, with no space: -tD:\\logs";
+        else cmd.error = L"Unknown switch: " + arg;
+        if (!cmd.error.empty()) break;
+    }
+    return cmd;
 }
 
 std::wstring joinPath(const std::wstring& dir, const std::wstring& name) {
@@ -163,6 +192,10 @@ std::wstring leafName(const std::wstring& path) {
 
 std::wstring displayName(const std::wstring& path) {
     return path.empty() ? L"This PC" : leafName(path);
+}
+
+std::wstring locationText(const std::wstring& path) {
+    return path.empty() ? L"This PC" : path;
 }
 
 std::wstring childToward(const std::wstring& ancestor, const std::wstring& descendant) {

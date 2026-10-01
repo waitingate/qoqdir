@@ -1,4 +1,4 @@
-//! `cubic.exe --selftest`: drives the real app through a scripted session and
+//! `qoqdir.exe --selftest`: drives the real app through a scripted session and
 //! checks the results on disk. Keys are fed straight into `App::on_key`, so the
 //! test never sends global keyboard input to other windows.
 
@@ -27,7 +27,7 @@ use windows::Win32::UI::Shell::{
     DragQueryFileW, FOLDERID_Desktop, HDROP, SHFILEINFOW, SHGFI_SMALLICON, SHGFI_SYSICONINDEX, SHGetFileInfoW,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    KillTimer, PostMessageW, SendMessageW, SetTimer, SetWindowTextW, WM_CHAR, WM_CLOSE, WM_KEYDOWN, WM_MBUTTONUP,
+    KillTimer, PostMessageW, SetTimer, SetWindowTextW, WM_CHAR, WM_CLOSE, WM_KEYDOWN, WM_MBUTTONUP,
     WM_SYSKEYDOWN, WM_TIMER,
 };
 
@@ -35,7 +35,7 @@ use crate::app::{App, Key, Nav, TIMER_LOADING, TIMER_REFRESH, TIMER_SELFTEST, Vi
 use crate::folder::{Location, SortKey, exists, is_directory, list_folder};
 use crate::shell::{copy_to_clipboard, data_object, item_menu, known_folder, type_name};
 use windows::Win32::UI::Shell::StrCmpLogicalW;
-use crate::util::{from_wide, pcwstr, wide, window_text};
+use crate::util::{send, from_wide, pcwstr, wide, window_text};
 
 type Act = Rc<dyn Fn(&App)>;
 type Check = Rc<dyn Fn(&App) -> bool>;
@@ -67,7 +67,7 @@ fn note(text: String) {
 }
 
 pub fn test_dir() -> PathBuf {
-    std::env::temp_dir().join("cubic-rs-selftest")
+    std::env::temp_dir().join(format!("{}-rs-selftest", crate::APP_NAME.to_lowercase()))
 }
 
 /// Makes a fresh test folder and returns it.
@@ -118,9 +118,6 @@ fn make_shortcut(lnk: &Path, target: &OsStr) {
     }
 }
 
-fn send(h: HWND, msg: u32, wp: usize, lp: isize) -> isize {
-    unsafe { SendMessageW(h, msg, Some(WPARAM(wp)), Some(LPARAM(lp))).0 }
-}
 
 impl App {
     fn test_key(&self, vk: VIRTUAL_KEY, ctrl: bool, shift: bool, alt: bool) {

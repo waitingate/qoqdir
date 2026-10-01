@@ -1,4 +1,4 @@
-# Cubic (Rust version)
+# Qoqdir (Rust version)
 
 The same file manager as the C++ version one folder up, written in Rust with
 Microsoft's official [`windows`](https://crates.io/crates/windows) crate.
@@ -50,12 +50,38 @@ call C:\rust\rust-env.bat     # cmd
 - Update Rust: `rustup update` (in a terminal set up as above).
 - Remove Rust completely: delete `C:\rust`. Nothing else was touched.
 
+## Run from a terminal
+
+```
+qoqdir [switches] [folders...]
+
+  {folder}     Open the folder in a tab (relative paths work: qoqdir .)
+  -t{folder}   The same, as a switch: -tD:\logs  -t"C:\My Files"
+  -n           Only the tabs given here; your saved tabs stay as they are
+  -h, -?       Show this help
+```
+
+Quote folders that contain spaces, but don't end them with `\` before the closing
+quote: Windows reads `\"` as a literal quote (write `-t"D:\My Files"`, not
+`-t"D:\My Files\"`).
+
+Without `-n`, the folders are added to your saved tabs (each folder once) and the
+first one is shown. Examples:
+
+```
+qoqdir .
+qoqdir -tD:\projects -tD:\logs
+qoqdir -n -tD:\build\out
+```
+
+Put `qoqdir.exe` in a folder on your PATH to type just `qoqdir`.
+
 ## Build, test, run
 
 ```powershell
-cargo build --release              # -> target\release\cubic.exe
+cargo build --release              # -> target\release\qoqdir.exe
 cargo test                         # path/sort/filter/listing unit tests
-target\release\cubic.exe --selftest  # drives the real app; log: %TEMP%\cubic-rs-selftest.log
+target\release\qoqdir.exe --selftest  # drives the real app; log: %TEMP%\qoqdir-rs-selftest.log
 ```
 
 The self-test opens a window without taking focus and never sends keystrokes
@@ -63,7 +89,7 @@ to other windows. It replaces the clipboard and leaves one small `file10.txt`
 in the Recycle Bin.
 
 If the app ever stops because of a bug, the reason is written to
-`%TEMP%\cubic-crash.log`.
+`%TEMP%\qoqdir-crash.log`.
 
 ## Code map
 

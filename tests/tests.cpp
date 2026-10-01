@@ -1,4 +1,4 @@
-// Tests for the path and folder rules. Run: ctest --test-dir build  (or build\cubic_tests.exe)
+// Tests for the path and folder rules. Run: ctest --test-dir build  (or build\unit_tests.exe)
 #include "folder.h"
 
 #include <cstdio>
@@ -65,8 +65,9 @@ int main() {
     {
         wchar_t cwd[MAX_PATH];
         GetCurrentDirectoryW(MAX_PATH, cwd);
-        CHECK_EQ(resolveArgument(L"."), normalizePath(cwd));   // "Cubic.exe ." from a terminal
+        CHECK_EQ(resolveArgument(L"."), normalizePath(cwd));   // "qoqdir ." from a terminal
         CHECK_EQ(resolveArgument(L"C:\\Windows\\"), L"C:\\Windows");
+        CHECK_EQ(resolveArgument(L"C:"), L"C:\\");   // a drive alone is its root, as in Explorer
     }
     CHECK_EQ(normalizePath(L"\\\\server\\share\\"), L"\\\\server\\share");
     {
@@ -92,6 +93,36 @@ int main() {
     CHECK(!isAbsolutePath(L"cmd"));
     CHECK(!isAbsolutePath(L"https://example.com"));
     CHECK(!isAbsolutePath(L"C:"));
+
+    // addStartFolders: "qoqdir A B" adds A and B as tabs (each once) and shows the first
+    {
+        std::vector<std::wstring> tabs = {L"C:\\A", L"C:\\B"};
+        CHECK(addStartFolders(tabs, 0, {}) == 0);                         // nothing given: unchanged
+        CHECK(addStartFolders(tabs, 0, {L"C:\\B"}) == 1);                 // already open: just shown
+        CHECK(tabs.size() == 2);
+        CHECK(addStartFolders(tabs, 0, {L"C:\\C", L"c:\\a", L"C:\\D"}) == 2);   // first given is shown
+        CHECK(tabs.size() == 4 && tabs[2] == L"C:\\C" && tabs[3] == L"C:\\D");   // c:\a matched C:\A
+        std::vector<std::wstring> none;
+        CHECK(addStartFolders(none, 0, {L"C:\\X", L"C:\\X"}) == 0 && none.size() == 1);
+    }
+
+    // parseCommandLine: 7z-style switches, plus plain folders
+    {
+        wchar_t cwd[MAX_PATH];
+        GetCurrentDirectoryW(MAX_PATH, cwd);
+        CommandLine c = parseCommandLine({L".", L"-tC:\\A", L"-n", L"-tC:\\My Files\\"});
+        CHECK(c.error.empty() && c.onlyThese && !c.help && !c.selfTest);
+        CHECK(c.folders.size() == 3);
+        CHECK_EQ(c.folders.size() == 3 ? c.folders[0] : L"", normalizePath(cwd));
+        CHECK_EQ(c.folders.size() == 3 ? c.folders[1] : L"", L"C:\\A");
+        CHECK_EQ(c.folders.size() == 3 ? c.folders[2] : L"", L"C:\\My Files");
+        CHECK(parseCommandLine({}).folders.empty());
+        CHECK(parseCommandLine({L"-h"}).help && parseCommandLine({L"-?"}).help);
+        CHECK(parseCommandLine({L"--selftest"}).selfTest);
+        CHECK_EQ(parseCommandLine({L"-x"}).error, L"Unknown switch: -x");
+        CHECK(!parseCommandLine({L"-t"}).error.empty());               // -t without a folder
+        CHECK(!parseCommandLine({L"-n", L"-tC:\\A", L"-q"}).error.empty());
+    }
 
     // samePath / extensionOf
     CHECK(samePath(L"C:\\Users", L"c:\\USERS"));

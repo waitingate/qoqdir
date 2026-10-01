@@ -20,6 +20,17 @@ struct ViewState {                  // what to select and scroll to after a fold
     std::wstring focus;
     int top = -1;
     bool rename = false;            // start renaming 'focus'
+
+    static ViewState selecting(const std::wstring& name) { return {{name}, name}; }
+};
+
+// Where a load was started from, when that changes what happens if it is not a folder.
+struct Origin {
+    bool typed = false;      // typed in the address bar: a file is opened instead
+    std::wstring shortcut;   // opened from this shortcut: if not a folder, Windows opens the shortcut
+
+    static Origin addressBar() { return {true, {}}; }
+    static Origin fromShortcut(std::wstring lnk) { return {false, std::move(lnk)}; }
 };
 
 struct Tab {
@@ -33,7 +44,8 @@ class App {
 public:
     App();
     ~App();
-    bool create(HINSTANCE instance, const std::wstring& startPath, bool useSettings = true);
+    // Opens the saved tabs plus the command line's folders, each once (with -n: only those).
+    bool create(HINSTANCE instance, const CommandLine& cmd, bool useSettings = true);
     bool handleKey(const MSG& msg);   // called for every message before dispatch
 
     // Self-test: drives the app from inside (no global keyboard input) and logs results.
@@ -58,16 +70,21 @@ private:
     static constexpr UINT_PTR kRefreshTimer = 1, kStatusTimer = 2, kLoadingTimer = 3, kSelfTestTimer = 50;
     int exitCode_ = 0;
     bool useSettings_ = true;
+    bool saveTabs_ = true;   // false with -n: the saved tabs are left as they are
 
     static LRESULT CALLBACK wndProc(HWND, UINT, WPARAM, LPARAM);
     LRESULT onMessage(UINT msg, WPARAM wp, LPARAM lp);
     LRESULT onNotify(NMHDR* nm);
     void onContextMenu(HWND from, POINT pt);
     void onTabMenu();
+    void onTimer(UINT_PTR id);
+    void onMiddleClick(HWND from, POINT screenPt);
 
     // Navigation
-    void open(const std::wstring& path, Nav nav, ViewState view = {});
+    void open(const std::wstring& path, Nav nav, ViewState view = {}, Origin origin = {});
     void onLoaded(Listing&& listing, UINT generation);
+    struct Pending;
+    void onLoadFailed(const Listing& listing, const Pending& p);
     void goBack();
     void goForward();
     void goUp();
@@ -98,7 +115,7 @@ private:
     void showStatus();
     void setMessage(const std::wstring& text);
     void warn();                    // error beep
-    void loadSettings(const std::wstring& startPath);
+    void loadSettings(const CommandLine& cmd);
     void saveSettings();
 
     HWND wnd_ = nullptr, back_ = nullptr, forward_ = nullptr, up_ = nullptr, address_ = nullptr, filter_ = nullptr,
@@ -128,8 +145,7 @@ private:
         Nav nav = Nav::New;
         ViewState view;
         int tabId = 0;
-        bool typed = false;      // typed in the address bar: may turn out to be a file
-        std::wstring shortcut;   // opened from this shortcut: if not a folder, open the shortcut
+        Origin origin;
     } pending_;
     UINT generation_ = 0;
 

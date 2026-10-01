@@ -20,14 +20,14 @@ use windows::Win32::UI::Shell::{
     FOLDERID_Desktop, FOLDERID_Documents, FOLDERID_Downloads, FOLDERID_Music, FOLDERID_Pictures, FOLDERID_Videos,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    CreateWindowExW, GetCursorPos, HMENU, PostMessageW, SendMessageW, WINDOW_EX_STYLE, WINDOW_STYLE, WS_CHILD,
+    CreateWindowExW, GetCursorPos, HMENU, PostMessageW, WINDOW_EX_STYLE, WINDOW_STYLE, WS_CHILD,
     WS_TABSTOP, WS_VISIBLE,
 };
 use windows::core::{PWSTR, w};
 
 use crate::folder::{Location, SortKey, list_folder, sort_items};
 use crate::shell::{describe, folder_icon, known_folder, system_image_list};
-use crate::util::wide;
+use crate::util::{send, wide};
 
 /// Subfolders of one node, read on a worker thread and posted to the tree's parent window.
 pub struct TreeBatch {
@@ -45,9 +45,6 @@ pub struct FolderTree {
     reading: RefCell<HashSet<isize>>, // nodes whose subfolders are being read
 }
 
-fn send(h: HWND, msg: u32, wp: usize, lp: isize) -> isize {
-    unsafe { SendMessageW(h, msg, Some(WPARAM(wp)), Some(LPARAM(lp))).0 }
-}
 
 /// Reads the subfolders of a location. Runs on a worker thread, so it may block.
 fn read_children(location: &Location) -> Vec<(Location, OsString, Option<i32>)> {
