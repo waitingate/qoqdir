@@ -39,6 +39,20 @@ void focusEdit(HWND edit) {   // with its text selected, ready to be typed over 
     SendMessageW(edit, EM_SETSEL, 0, -1);
 }
 
+// Ctrl+Backspace as in Explorer's boxes: deletes the selection, or else the word before the cursor.
+// A plain edit box would type a box character instead.
+void deleteWordBefore(HWND edit) {
+    DWORD start = 0, end = 0;
+    SendMessageW(edit, EM_GETSEL, WPARAM(&start), LPARAM(&end));
+    std::wstring text = windowText(edit);
+    if (start == end) {
+        while (start > 0 && iswspace(text[start - 1])) --start;
+        while (start > 0 && !iswspace(text[start - 1])) --start;
+    }
+    SendMessageW(edit, EM_SETSEL, start, end);
+    SendMessageW(edit, EM_REPLACESEL, TRUE, reinterpret_cast<LPARAM>(L""));
+}
+
 // A shortcut's target that opens in a tab: a folder path, or This PC (""). Anything else is for Windows.
 bool opensInTab(const std::optional<std::wstring>& target) {
     return target && (target->empty() || isAbsolutePath(*target));
@@ -624,7 +638,13 @@ bool App::onKey(const Key& key) {
     if (focus == filter_) {
         if (k == VK_ESCAPE) { SetWindowTextW(filter_, L""); focusList(); return true; }
         if (k == VK_DOWN) { focusList(); return true; }
-        if (k == VK_RETURN) { focusList(); activate(ctrl); return true; }
+        if (ctrl && k == VK_BACK) { deleteWordBefore(filter_); return true; }
+        if (k == VK_RETURN) {   // opens the highlighted item only (5.4), even if other matches are still selected
+            list_.select({}, list_.focusedName());
+            focusList();
+            activate(ctrl);
+            return true;
+        }
         return false;
     }
     if (focus == list) {

@@ -115,8 +115,10 @@ void App::selfTestKey(WPARAM vk, bool ctrl, bool shift, bool alt) {
     if (onKey({alt ? UINT(WM_SYSKEYDOWN) : UINT(WM_KEYDOWN), vk, GetFocus(), ctrl, shift, alt})) return;
     HWND focus = GetFocus();   // not ours: let the control handle it, as a real key press would
     SendMessageW(focus, WM_KEYDOWN, vk, 0);
-    // A real Enter/Esc also sends a character, but only while the control is still there to take it.
-    if (GetFocus() == focus && (vk == VK_RETURN || vk == VK_ESCAPE)) SendMessageW(focus, WM_CHAR, vk, 0);
+    // A real Enter, Esc or Backspace also sends a character (Ctrl+Backspace sends 127), but only while the
+    // control is still there to take it.
+    if (GetFocus() == focus && (vk == VK_RETURN || vk == VK_ESCAPE || vk == VK_BACK))
+        SendMessageW(focus, WM_CHAR, vk == VK_BACK && ctrl ? 127 : vk, 0);
 }
 
 void App::selfTestType(const std::wstring& text) {
@@ -183,6 +185,20 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
         },
         [=, this] { return GetFocus() == filter_ && GetWindowTextLengthW(filter_) == 1 && list_.count() == 0; });
     add(L"Esc clears that filter too", [=, this] { selfTestKey(VK_ESCAPE); },
+        [=, this] { return list_.count() == 6 && GetFocus() == list_.hwnd(); });
+    add(L"Ctrl+Backspace in the filter box deletes the last word, as in Explorer (not a box character)",
+        [=, this] {
+            SetFocus(list_.hwnd());
+            selfTestType(L"file 1");
+            selfTestKey(VK_BACK, true);
+        },
+        [=, this] {
+            wchar_t text[64] = {};
+            GetWindowTextW(filter_, text, 64);
+            selfTest_->note = L"filter \"" + std::wstring(text) + L"\"";
+            return std::wstring(text) == L"file ";
+        });
+    add(L"(Esc clears it)", [=, this] { selfTestKey(VK_ESCAPE); },
         [=, this] { return list_.count() == 6 && GetFocus() == list_.hwnd(); });
     add(L"Ctrl+C puts the file on the clipboard",
         [=, this] { list_.select({L"file1.txt"}, L"file1.txt"); selfTestKey('C', true); },
@@ -442,6 +458,22 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
             selfTest_->note = L"tab at " + tab().path;
             return at(path(L"%TEMP%\\other"));
         });
+    add(L"(back to the %TEMP% folder once more)", [=, this] { open(path(L"%TEMP%"), Nav::New); },
+        [=, this] { return at(path(L"%TEMP%")) && list_.count() == 2; });
+    add(L"Enter in the filter box opens only the highlighted match, not every selected one (5.4)",
+        [=, this] {
+            SetFocus(list_.hwnd());
+            list_.selectAll();      // both folders selected, "other" highlighted
+            selfTestType(L"*");     // a filter both still match
+            selfTestKey(VK_RETURN);
+        },
+        [=, this] {
+            selfTest_->note = L"tab at " + tab().path + L", " + std::to_wstring(tabs_.size()) + L" tab(s)";
+            return at(path(L"%TEMP%\\other")) && tabs_.size() == 1;
+        });
+    add(L"(close any tabs that opened)",
+        [=, this] { while (tabs_.size() > 1) closeTab(int(tabs_.size()) - 1); },
+        [=, this] { return idle() && tabs_.size() == 1; });
     add(L"(back to the test folder)", [=, this] { open(dir, Nav::New); }, [=, this] { return at(dir); });
     add(L"(remove the %TEMP% folder)",
         [=, this] {
