@@ -81,6 +81,7 @@ int main() {
         GetEnvironmentVariableW(L"SystemRoot", windir, MAX_PATH);
         CHECK(samePath(normalizePath(L"%SystemRoot%"), windir));
     }
+    CHECK_EQ(normalizePath(L"C:\\a\\%TEMP%\\.\\sub", false), L"C:\\a\\%TEMP%\\sub");   // a folder really named %TEMP%
 
     // childToward: selects the folder you came from after going up
     CHECK_EQ(childToward(L"C:\\Users", L"C:\\Users\\me\\Documents"), L"me");

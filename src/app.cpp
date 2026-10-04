@@ -864,10 +864,11 @@ void App::goToTyped() {
     // "..", a subfolder's name and anything written relative to this folder (".", ".\x", "a\b")
     // are resolved here and checked by the loader, so they never reach Windows, which would open
     // the folder in an Explorer window (4.4). The rest runs as a command (5.3).
+    // Only the typed text has its %VARS% expanded: the folder's own path may really contain "%TEMP%".
     bool relative = isRelativePath(path);
     if (path == L"..") path = parentPath(tab().path);
     else if (!tab().path.empty() && (list_.hasFolder(path) || relative))
-        path = normalizePath(joinPath(tab().path, path));   // GetFullPathName folds "." and ".." away
+        path = normalizePath(joinPath(tab().path, path), false);   // GetFullPathName folds "." and ".." away
     if (path.empty() || isAbsolutePath(path)) {
         // Checked by the folder loader on its worker thread, so a dead network
         // share cannot freeze the window. A file is opened when the result comes back.

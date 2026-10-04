@@ -103,7 +103,7 @@ bool matchesFilter(const Item& item, const std::wstring& filter) {
     return StrStrIW(item.shown().c_str(), filter.c_str()) != nullptr;
 }
 
-std::wstring normalizePath(std::wstring p) {
+std::wstring normalizePath(std::wstring p, bool expandVars) {
     auto junk = [](wchar_t c) { return c == L' ' || c == L'\t' || c == L'"'; };
     while (!p.empty() && junk(p.back())) p.pop_back();
     size_t start = 0;
@@ -111,7 +111,7 @@ std::wstring normalizePath(std::wstring p) {
     p.erase(0, start);
     if (p.empty() || equalNoCase(p.c_str(), -1, L"This PC", -1)) return L"";
 
-    if (p.find(L'%') != std::wstring::npos) {
+    if (expandVars && p.find(L'%') != std::wstring::npos) {
         std::wstring buf(32768, L'\0');
         DWORD n = ExpandEnvironmentStringsW(p.c_str(), buf.data(), DWORD(buf.size()));
         if (n > 0 && n <= buf.size()) p.assign(buf.c_str());

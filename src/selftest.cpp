@@ -419,6 +419,37 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
         });
     add(L"(back up to the test folder)", [=, this] { open(dir, Nav::New); }, [=, this] { return at(dir); });
 
+    // Stress runs: a folder whose name looks like an environment variable. Only what the user types is expanded.
+    add(L"(open a folder literally named %TEMP%, with sub and other in it)",
+        [=, this] {
+            for (const wchar_t* name : {L"%TEMP%", L"%TEMP%\\sub", L"%TEMP%\\other"})
+                CreateDirectoryW(path(name).c_str(), nullptr);
+            open(path(L"%TEMP%"), Nav::New);
+        },
+        [=, this] { return at(path(L"%TEMP%")) && list_.count() == 2; });
+    add(L"typing a subfolder's name in a folder named %TEMP% opens it (the folder's own path is not expanded)",
+        [=, this] { SetWindowTextW(address_, L"sub"); SetFocus(address_); selfTestKey(VK_RETURN); },
+        [=, this] {
+            selfTest_->note = L"tab at " + tab().path + L", status: " + statusMessage();
+            return at(path(L"%TEMP%\\sub"));
+        });
+    add(L"(back to the %TEMP% folder)", [=, this] { open(path(L"%TEMP%"), Nav::New); },
+        [=, this] { return at(path(L"%TEMP%")); });
+    add(L"typing .\\other there opens it too",
+        [=, this] { SetWindowTextW(address_, L".\\other"); SetFocus(address_); selfTestKey(VK_RETURN); },
+        [=, this] {
+            selfTest_->note = L"tab at " + tab().path;
+            return at(path(L"%TEMP%\\other"));
+        });
+    add(L"(back to the test folder)", [=, this] { open(dir, Nav::New); }, [=, this] { return at(dir); });
+    add(L"(remove the %TEMP% folder)",
+        [=, this] {
+            for (const wchar_t* name : {L"%TEMP%\\sub", L"%TEMP%\\other", L"%TEMP%"})
+                RemoveDirectoryW(path(name).c_str());
+            refresh();
+        },
+        [=, this] { return at(dir) && !list_.hasFolder(L"%TEMP%"); });
+
     // Second review: history entries for deleted folders, and shortcuts.
     add(L"(open a folder that will be deleted)",
         [=, this] { CreateDirectoryW(path(L"temp1").c_str(), nullptr); open(path(L"temp1"), Nav::New); },

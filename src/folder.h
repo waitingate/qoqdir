@@ -38,7 +38,9 @@ void sortItems(std::vector<Item>& items, SortKey key, bool ascending);
 // Case-insensitive substring match, or a wildcard match when the filter contains * or ?.
 bool matchesFilter(const Item& item, const std::wstring& filter);
 
-std::wstring normalizePath(std::wstring text);       // cleans up typed text; "" for This PC
+// Cleans up typed text; "" for This PC. A path that is already on disk passes expandVars false: a folder may
+// really be named "%TEMP%".
+std::wstring normalizePath(std::wstring text, bool expandVars = true);
 std::wstring resolveArgument(const std::wstring& arg); // a command-line folder, relative to the current one
 
 // The command line, 7z style: one-letter switches with the value attached.
