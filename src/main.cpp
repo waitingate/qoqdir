@@ -1,4 +1,5 @@
 #include "app.h"
+#include "crashlog.h"
 #include "shell.h"
 
 #include <shellapi.h>
@@ -23,6 +24,7 @@ const wchar_t kUsage[] =
 }  // namespace
 
 int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int) {
+    installCrashLog();
     std::vector<std::wstring> args;
     int argc = 0;
     if (LPWSTR* argv = CommandLineToArgvW(GetCommandLineW(), &argc)) {

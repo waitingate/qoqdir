@@ -28,7 +28,7 @@ add_library(core STATIC src/folder.cpp)
 target_link_libraries(core PUBLIC ${WIN_LIBS})
 
 add_executable(${PROJECT_NAME} WIN32
-  src/main.cpp src/app.cpp src/filelist.cpp src/tree.cpp src/shell.cpp src/selftest.cpp src/app.rc)
+  src/main.cpp src/crashlog.cpp src/app.cpp src/filelist.cpp src/tree.cpp src/shell.cpp src/selftest.cpp src/app.rc)
 target_link_libraries(${PROJECT_NAME} PRIVATE core)
 if(NOT MSVC)
   target_link_options(${PROJECT_NAME} PRIVATE -municode)

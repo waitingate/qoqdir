@@ -161,6 +161,12 @@ int main() {
         CHECK(!dots);
         CHECK(listFolder(L"C:\\definitely\\not\\here", false).error != 0);
         CHECK(!listFolder(L"", false).items.empty());   // at least one drive
+        // A path that is a file is reported as such (the app then opens the file instead).
+        wchar_t exe[MAX_PATH];
+        GetModuleFileNameW(nullptr, exe, MAX_PATH);
+        Listing asFile = listFolder(exe, false);
+        CHECK(asFile.error != 0 && asFile.isFile);
+        CHECK(!listFolder(L"C:\\definitely\\not\\here", false).isFile);
     }
 
     if (failures) {
