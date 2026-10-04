@@ -399,19 +399,27 @@ void dragOut(HWND owner, const std::wstring& dir, const std::vector<Item>& items
     SHDoDragDrop(owner, obj.get(), nullptr, DROPEFFECT_COPY | DROPEFFECT_MOVE | DROPEFFECT_LINK, &effect);
 }
 
-std::wstring shortcutTarget(const std::wstring& lnkPath, bool* folder) {
+std::optional<std::wstring> shortcutTarget(const std::wstring& lnkPath, bool* folder) {
     *folder = false;
     Com<IShellLinkW> link;
     if (FAILED(CoCreateInstance(CLSID_ShellLink, nullptr, CLSCTX_INPROC_SERVER, IID_IShellLinkW,
                                 reinterpret_cast<void**>(link.put()))))
-        return L"";
+        return std::nullopt;
     Com<IPersistFile> file = link.as<IPersistFile>();
-    if (!file || FAILED(file->Load(lnkPath.c_str(), STGM_READ))) return L"";
-    wchar_t target[MAX_PATH] = {};
-    WIN32_FIND_DATAW stored{};   // the target as it was when the shortcut was made
-    if (link->GetPath(target, MAX_PATH, &stored, 0) != S_OK) return L"";
-    *folder = (stored.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0;
-    return target;
+    if (!file || FAILED(file->Load(lnkPath.c_str(), STGM_READ))) return std::nullopt;
+    std::wstring target(32768, L'\0');   // not MAX_PATH: a folder deep in a network share has a longer path
+    WIN32_FIND_DATAW stored{};            // the target as it was when the shortcut was made
+    if (link->GetPath(target.data(), int(target.size()), &stored, 0) == S_OK && target[0]) {
+        *folder = (stored.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0;
+        return target.substr(0, target.find(L'\0'));
+    }
+    // No path: This PC is the one such target this app can show itself (as ""); Windows opens the rest.
+    PIDLIST_ABSOLUTE p = nullptr;
+    if (FAILED(link->GetIDList(&p)) || !p) return std::nullopt;
+    Pidl pidl(p), pc = pidlFromPath(L"");
+    if (!pc || !ILIsEqual(pidl.get(), pc.get())) return std::nullopt;
+    *folder = true;
+    return std::wstring();
 }
 
 namespace {

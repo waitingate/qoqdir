@@ -36,6 +36,7 @@ public:
     std::wstring focusedName() const;
     // Selects the named items (case-insensitive) and returns the row of 'focus', or -1.
     int select(const std::vector<std::wstring>& names, const std::wstring& focus);
+    int focusRow(int row);   // gives 'row' the keyboard focus (the selection stays); returns it, or -1 if none
     void selectAll();
     int topRow() const;
     void scrollToRow(int row);

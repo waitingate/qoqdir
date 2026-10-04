@@ -95,7 +95,7 @@ bool App::create(HINSTANCE instance, const CommandLine& cmd, bool useSettings) {
     exe.resize(GetModuleFileNameW(nullptr, exe.data(), DWORD(exe.size())));
     std::wstring bookmarks = joinPath(useSettings ? parentPath(exe) : cmd.folders.at(0), L"Bookmarks");
     CreateDirectoryW(bookmarks.c_str(), nullptr);   // fails harmlessly if it exists
-    tree_.create(wnd_, ID_TREE, WM_APP_TREE, bookmarks);
+    tree_.create(wnd_, ID_TREE, WM_APP_TREE, WM_APP_ICONS, bookmarks);
     list_.create(wnd_, ID_LIST);
     status_ = make(STATUSCLASSNAMEW, L"", SBARS_SIZEGRIP, 0, ID_STATUS);
 
@@ -273,6 +273,7 @@ LRESULT App::onMessage(UINT msg, WPARAM wp, LPARAM lp) {
         std::unique_ptr<IconBatch> batch(reinterpret_cast<IconBatch*>(lp));
         rememberIcons(*batch);
         if (samePath(list_.dir(), batch->dir)) InvalidateRect(list_.hwnd(), nullptr, FALSE);
+        tree_.setIcons(*batch);   // bookmark shortcuts get their own icons the same way
         return 0;
     }
     case WM_APP_TREE: {
@@ -307,7 +308,7 @@ LRESULT App::onMessage(UINT msg, WPARAM wp, LPARAM lp) {
     case WM_DEVICECHANGE:
         if ((wp == DBT_DEVICEARRIVAL || wp == DBT_DEVICEREMOVECOMPLETE) && lp &&
             reinterpret_cast<DEV_BROADCAST_HDR*>(lp)->dbch_devicetype == DBT_DEVTYP_VOLUME) {
-            tree_.fill();
+            tree_.refreshDrives();   // only This PC changes; the rest of the tree stays as the user left it
             // This PC lists the drives, and a tab's folder may sit on the drive that went: its
             // own watch cannot tell, since the event names the drive root, not a folder below it.
             // A tab already shown as not available waits for F5 (4.3), like a deleted folder does.
@@ -510,7 +511,8 @@ void App::onContextMenu(HWND from, POINT pt) {
         showMenu(wnd_, itemMenu(wnd_, path).get(), pt, [&](const std::wstring& verb) {
             if (is(verb, L"open") || is(verb, L"explore")) openNode(path, false);
             else if (is(verb, L"opennewtab") || is(verb, L"opennewwindow")) openNode(path, true);
-            else return is(verb, L"rename");   // renaming is done in the file list
+            else if (is(verb, L"rename")) renameNode(path);
+            else return false;
             return true;
         });
     }
@@ -729,7 +731,8 @@ void App::onLoaded(Listing&& listing, UINT generation) {
     if (t.forward.size() > kMaxHistory) t.forward.erase(t.forward.begin());
 
     ViewState view = std::move(p.view);
-    bool requested = !view.select.empty() || !view.focus.empty();   // an item a rename, delete or new folder asked for
+    // An item a rename, delete or new folder asked for (a tab switch restores the scroll exactly instead).
+    bool requested = p.nav == Nav::Refresh && (!view.select.empty() || !view.focus.empty());
     bool moved = p.nav == Nav::New || p.nav == Nav::Back || p.nav == Nav::Forward;
     if (p.nav == Nav::Refresh && sameFolder) {
         if (view.select.empty() && view.focus.empty()) view = currentView();
@@ -746,6 +749,8 @@ void App::onLoaded(Listing&& listing, UINT generation) {
     t.unavailable = false;
     list_.setListing(std::move(listing));
     int row = list_.select(view.select, view.focus);
+    if (row < 0 && !requested && view.focusRow >= 0 && list_.count() > 0)   // the focused item is gone (4.5):
+        row = list_.focusRow(std::min(view.focusRow, list_.count() - 1));   // the item in its place takes the focus
     if (view.top >= 0) list_.scrollToRow(view.top);   // a refresh keeps the scroll position (4.5)...
     if (view.top < 0 || requested) list_.ensureVisible(row);   // ...but what the user just made or renamed shows
     if (view.rename && row >= 0) list_.rename(row);
@@ -870,6 +875,7 @@ void App::goToTyped() {
     // Windows as the working folder would wait on the dead server before the program starts.
     if (!runCommand(wnd_, text, list_.dir())) {   // "cmd", "notepad", a web address...
         setMessage(L"Can't find \"" + text + L"\"");
+        SendMessageW(address_, EM_SETSEL, 0, -1);   // left selected, like a bad path, so it can be corrected (5.3)
         warn();
         return;
     }
@@ -891,8 +897,8 @@ void App::activate(bool inNewTab) {
         // A shortcut that says its target is a folder counts as that folder, so it opens in a tab
         // like the other folders (Windows would open it in Explorer); any other shortcut is a file.
         if (!folder && extensionOf(path) == L".lnk") {
-            std::wstring target = shortcutTarget(path, &folder);
-            if (folder && isAbsolutePath(target)) path = target;
+            std::optional<std::wstring> target = shortcutTarget(path, &folder);
+            if (folder && target && (target->empty() || isAbsolutePath(*target))) path = *target;
             else folder = false;
         }
         (folder ? dirs : files).push_back(path);
@@ -909,21 +915,30 @@ void App::activate(bool inNewTab) {
     }
 }
 
-// A shortcut that leads to a folder shows that folder here, or in a background tab when the
+// A shortcut that leads to a folder (or to This PC) shows it here, or in a background tab when the
 // shortcut says its target is a folder; Windows opens anything else. Whether the target really
 // is a folder is found out by the folder loader on its worker thread (it may be on a network).
 void App::openShortcut(const std::wstring& path, bool inNewTab) {
     bool folder = false;
-    std::wstring target = extensionOf(path) == L".lnk" ? shortcutTarget(path, &folder) : L"";
-    if (!isAbsolutePath(target)) {
-        openFile(wnd_, path);   // a web link, a program...
+    std::optional<std::wstring> target = extensionOf(path) == L".lnk" ? shortcutTarget(path, &folder) : std::nullopt;
+    if (!target || !(target->empty() || isAbsolutePath(*target))) {
+        openFile(wnd_, path);   // a web link, a program, a library...
         return;
     }
     // Like every other way into a tab, the path is normalised first: a stored "D:\photos\" would
     // otherwise give a blank caption and an Up that stays put. (String work only, no disk access.)
-    target = normalizePath(target);
-    if (inNewTab && folder) newTab(target, false);
-    else open(target, Nav::New, {}, Origin::fromShortcut(path));
+    std::wstring dir = normalizePath(*target);
+    if (inNewTab && folder) newTab(dir, false);
+    else open(dir, Nav::New, {}, Origin::fromShortcut(path));
+}
+
+// Rename on a tree node's menu: renaming is done in the file list, so the node's parent is shown with the
+// node selected and the rename box open.
+void App::renameNode(const std::wstring& path) {
+    if (parentPath(path).empty()) return;   // This PC, a drive or a share: nothing to rename here
+    ViewState v = ViewState::selecting(leafName(path));
+    v.rename = true;
+    open(parentPath(path), Nav::New, v);
 }
 
 // A node in the tree: a folder, or a bookmark shortcut.
@@ -935,11 +950,18 @@ void App::openNode(const std::wstring& path, bool inNewTab) {
 
 ViewState App::currentView() const {
     ViewState v;
-    if (!samePath(list_.dir(), tabs_[size_t(active_)].path)) return v;
     v.select = list_.selectedNames();
     v.focus = list_.focusedName();
+    v.focusRow = list_.focused();
     v.top = list_.topRow();
     return v;
+}
+
+// Not while the tab's own folder has yet to load since it was switched to: the list shows nothing of it
+// then, and storing that would forget what the tab showed before (a quick Ctrl+Tab past a slow folder).
+void App::rememberView() {
+    if (pending_.generation && pending_.nav == Nav::Switch) return;
+    if (samePath(list_.dir(), tab().path)) tab().view = currentView();
 }
 
 // ---------------------------------------------------------------- tabs
@@ -955,7 +977,7 @@ void App::newTab(const std::wstring& path, bool switchTo) {
     int at = active_ + 1;
     tabs_.insert(tabs_.begin() + at, makeTab(path));
     if (switchTo) {
-        tabs_[size_t(active_)].view = currentView();
+        rememberView();
         active_ = at;
         open(path, Nav::Switch);
     }
@@ -988,7 +1010,7 @@ void App::switchTab(int index) {
         showTabs();
         return;
     }
-    tab().view = currentView();
+    rememberView();
     active_ = index;
     showTabs();
     open(tab().path, Nav::Switch, tab().view);
@@ -1020,7 +1042,10 @@ void App::showTabs() {
     TabCtrl_DeleteAllItems(tabBar_);
     for (size_t i = 0; i < tabs_.size(); ++i) {
         std::wstring text = displayName(tabs_[i].path);
-        if (text.size() > 28) text = text.substr(0, 27) + L"…";
+        if (text.size() > 28) {
+            size_t cut = IS_HIGH_SURROGATE(text[26]) ? 26 : 27;   // never between the two halves of an emoji
+            text = text.substr(0, cut) + L"…";
+        }
         TCITEMW item{};
         item.mask = TCIF_TEXT;
         item.pszText = text.data();
@@ -1035,8 +1060,8 @@ void App::deleteSelection(bool permanently) {
     std::vector<int> rows = list_.selection();
     if (rows.empty() || list_.dir().empty()) return;
     // Afterwards, select the item that followed the deleted ones.
-    int next = rows.back() + 1 < list_.count() ? rows.back() + 1 : rows.front() - 1;
-    ViewState v = next >= 0 && next < list_.count() ? ViewState::selecting(list_.at(next).name) : ViewState{};
+    int next = rowAfterDeleting(rows, list_.count());
+    ViewState v = next >= 0 ? ViewState::selecting(list_.at(next).name) : ViewState{};
     v.top = list_.topRow();
     // Answering No to Windows' question (or an error) deletes nothing: then the selection stays where it
     // was. Anything deleted before a cancel still shows up through the folder watch.

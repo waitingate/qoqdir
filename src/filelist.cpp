@@ -115,7 +115,7 @@ std::wstring FileList::focusedName() const {
 
 int FileList::select(const std::vector<std::wstring>& names, const std::wstring& focus) {
     ListView_SetItemState(lv_, -1, 0, LVIS_SELECTED | LVIS_FOCUSED);
-    int focusRow = -1;
+    int found = -1;
     if (!names.empty() || !focus.empty()) {
         std::unordered_set<std::wstring> wanted;
         for (const auto& n : names) wanted.insert(toLower(n));
@@ -123,16 +123,19 @@ int FileList::select(const std::vector<std::wstring>& names, const std::wstring&
         for (int row = 0; row < count(); ++row) {
             std::wstring name = toLower(at(row).name);
             if (wanted.count(name)) ListView_SetItemState(lv_, row, LVIS_SELECTED, LVIS_SELECTED);
-            if (focusRow < 0 && name == focusLower) focusRow = row;
+            if (found < 0 && name == focusLower) found = row;
         }
     }
-    // Something always has keyboard focus, so arrow keys work right away.
-    int keyRow = focusRow >= 0 ? focusRow : (count() > 0 ? 0 : -1);
-    if (keyRow >= 0) {
-        ListView_SetItemState(lv_, keyRow, LVIS_FOCUSED, LVIS_FOCUSED);
-        ListView_SetSelectionMark(lv_, keyRow);
-    }
-    return focusRow;
+    focusRow(found >= 0 ? found : 0);   // something always has keyboard focus, so arrow keys work right away
+    return found;
+}
+
+int FileList::focusRow(int row) {
+    if (row < 0 || row >= count()) return -1;
+    ListView_SetItemState(lv_, -1, 0, LVIS_FOCUSED);
+    ListView_SetItemState(lv_, row, LVIS_FOCUSED, LVIS_FOCUSED);
+    ListView_SetSelectionMark(lv_, row);
+    return row;
 }
 
 void FileList::selectAll() {

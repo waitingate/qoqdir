@@ -49,8 +49,14 @@ void deleteTree(const std::wstring& dir) {
     for (const Item& it : l.items) {
         std::wstring p = joinPath(dir, it.name);
         SetFileAttributesW(p.c_str(), FILE_ATTRIBUTE_NORMAL);
-        if (it.isDir()) deleteTree(p);
-        else DeleteFileW(p.c_str());
+        if (it.attrs & FILE_ATTRIBUTE_REPARSE_POINT) {   // a junction or link: remove it, never what it points to
+            if (it.isDir()) RemoveDirectoryW(p.c_str());
+            else DeleteFileW(p.c_str());
+        } else if (it.isDir()) {
+            deleteTree(p);
+        } else {
+            DeleteFileW(p.c_str());
+        }
     }
     RemoveDirectoryW(dir.c_str());
 }
@@ -79,6 +85,17 @@ void makeShortcut(const std::wstring& lnk, const std::wstring& target) {
                                 reinterpret_cast<void**>(link.put()))))
         return;
     link->SetPath(target.c_str());
+    if (Com<IPersistFile> file = link.as<IPersistFile>()) file->Save(lnk.c_str(), TRUE);
+}
+
+void makePcShortcut(const std::wstring& lnk) {   // a shortcut whose target is This PC: it has no path
+    Com<IShellLinkW> link;
+    if (FAILED(CoCreateInstance(CLSID_ShellLink, nullptr, CLSCTX_INPROC_SERVER, IID_IShellLinkW,
+                                reinterpret_cast<void**>(link.put()))))
+        return;
+    PIDLIST_ABSOLUTE pc = nullptr;
+    if (SUCCEEDED(SHGetKnownFolderIDList(FOLDERID_ComputerFolder, 0, nullptr, &pc))) link->SetIDList(pc);
+    CoTaskMemFree(pc);
     if (Com<IPersistFile> file = link.as<IPersistFile>()) file->Save(lnk.c_str(), TRUE);
 }
 
@@ -182,7 +199,8 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
         [=, this] {
             bool folder = false;
             for (const Item& it : listFolder(path(L"sub"), false).items)
-                if (isShortcut(it.name) && samePath(shortcutTarget(path(L"sub\\" + it.name), &folder), path(L"file1.txt")))
+                if (isShortcut(it.name) &&
+                    samePath(shortcutTarget(path(L"sub\\" + it.name), &folder).value_or(L""), path(L"file1.txt")))
                     return true;
             return false;
         }, 10000);
@@ -325,7 +343,12 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
         [=, this] { return !list_.renaming(); });
     add(L"a command that does not exist says Can't find",
         [=, this] { SetWindowTextW(address_, L"no-such-program-qoqdir"); SetFocus(address_); selfTestKey(VK_RETURN); },
-        [=, this] { return at(dir) && statusMessage().find(L"Can't find") != std::wstring::npos; });
+        [=, this] {
+            DWORD from = 0, to = 0;   // the text stays selected, so it can be corrected (5.3)
+            SendMessageW(address_, EM_GETSEL, WPARAM(&from), LPARAM(&to));
+            return at(dir) && statusMessage().find(L"Can't find") != std::wstring::npos && from == 0 &&
+                   int(to) == GetWindowTextLengthW(address_);
+        });
 
     add(L"typing a folder path opens it",
         [=, this] { SetWindowTextW(address_, path(L"sub").c_str()); SetFocus(address_); selfTestKey(VK_RETURN); },
@@ -351,6 +374,28 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
         [=, this] { return at(path(L"sub")); });
     add(L"typing ..\\ goes up", [=, this] { SetWindowTextW(address_, L"..\\"); SetFocus(address_); selfTestKey(VK_RETURN); },
         [=, this] { return at(dir); });
+    add(L"a long folder name with an emoji where the caption is cut gives no broken character",
+        [=, this] {
+            std::wstring name(26, L'a');
+            name += L"\U0001F600bcd";   // the emoji is two UTF-16 units; the caption's cut lands between them
+            CreateDirectoryW(path(name).c_str(), nullptr);
+            open(path(name), Nav::New);
+        },
+        [=, this] {
+            if (!idle() || leafName(tab().path).size() != 31) return false;
+            wchar_t text[64] = {};
+            TCITEMW item{};
+            item.mask = TCIF_TEXT;
+            item.pszText = text;
+            item.cchTextMax = 64;
+            TabCtrl_GetItem(tabBar_, active_, &item);
+            std::wstring caption = text;
+            for (size_t i = 0; i < caption.size(); ++i)   // every high surrogate must be followed by its low one
+                if (IS_HIGH_SURROGATE(caption[i]) && (i + 1 >= caption.size() || !IS_LOW_SURROGATE(caption[i + 1])))
+                    return false;
+            return caption.size() <= 28;
+        });
+    add(L"(back up to the test folder)", [=, this] { open(dir, Nav::New); }, [=, this] { return at(dir); });
 
     // Second review: history entries for deleted folders, and shortcuts.
     add(L"(open a folder that will be deleted)",
@@ -444,6 +489,19 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
         });
     add(L"(the status bar names the missing folder, and the tab stays put)", nullptr,
         [=, this] { return at(dir) && statusMessage().find(L"no-such-folder") != std::wstring::npos; });
+    add(L"a shortcut to This PC opens This PC here (not in Explorer)",
+        [=, this] {
+            makePcShortcut(path(L"pc.lnk"));
+            refresh(ViewState::selecting(L"pc.lnk"));
+        },
+        [=, this] {
+            if (!idle() || list_.focusedName() != L"pc.lnk") return false;
+            SetFocus(list_.hwnd());
+            selfTestKey(VK_RETURN);
+            return true;
+        });
+    add(L"(This PC is shown, with its drives)", nullptr, [=, this] { return at(L"") && list_.count() > 0; });
+    add(L"(back to the test folder)", [=, this] { open(dir, Nav::New); }, [=, this] { return at(dir); });
 
     // Regression tests for bugs found in code review.
     add(L"holding F5 while a folder loads does not start more loads",
@@ -684,13 +742,29 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
             makeShortcut(path(L"Bookmarks\\sub.lnk"), path(L"sub"));
             tree_.fill();   // as at startup
         },
-        [=] { return bookmarkNodes() == L"one,sub"; });
+        [=, this] {
+            if (bookmarkNodes() != L"one,sub") return false;
+            SHFILEINFOW own{};   // the shortcut's own icon arrives after its node (it may wait on the target)
+            SHGetFileInfoW(path(L"Bookmarks\\sub.lnk").c_str(), 0, &own, sizeof own,
+                           SHGFI_SYSICONINDEX | SHGFI_SMALLICON);
+            HWND tv = tree_.hwnd();
+            TVITEMW item{};
+            item.mask = TVIF_IMAGE;
+            item.hItem = TreeView_GetNextSibling(tv, TreeView_GetChild(tv, TreeView_GetRoot(tv)));   // "sub"
+            TreeView_GetItem(tv, &item);
+            return item.iImage == own.iIcon;
+        });
     add(L"choosing a bookmark shortcut in the tree opens its folder",
         [=, this] {
             TreeView_SelectItem(tree_.hwnd(), TreeView_GetChild(tree_.hwnd(), TreeView_GetRoot(tree_.hwnd())));   // "one"
             SendMessageW(tree_.hwnd(), WM_KEYDOWN, VK_DOWN, 0);   // to "sub", as the user would
         },
         [=, this] { return at(path(L"sub")); });
+    add(L"Rename on a tree folder's menu opens the rename box for it in the list",
+        [=, this] { renameNode(path(L"sub")); },
+        [=, this] { return at(dir) && list_.renaming() && list_.focusedName() == L"sub"; });
+    add(L"(cancel that rename)", [=, this] { ListView_CancelEditLabel(list_.hwnd()); },
+        [=, this] { return !list_.renaming(); });
     add(L"collapsing and expanding a tree folder shows its new subfolders",
         [=, this] {
             CreateDirectoryW(path(L"Bookmarks\\two").c_str(), nullptr);
@@ -721,6 +795,29 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
                 return k;
             };
             return count(TreeView_GetRoot(tv)) == TreeView_GetCount(tv);
+        });
+    add(L"(expand a bookmark folder in the tree)",
+        [=, this] {
+            HWND tv = tree_.hwnd();
+            TreeView_Expand(tv, TreeView_GetChild(tv, TreeView_GetRoot(tv)), TVE_EXPAND);   // "one"
+        },
+        [=, this] {
+            HWND tv = tree_.hwnd();
+            return TreeView_GetChild(tv, TreeView_GetChild(tv, TreeView_GetRoot(tv))) != nullptr;   // "deep" is shown
+        });
+    add(L"a drive coming or going re-reads This PC and leaves the rest of the tree as it was (4.5)",
+        [=, this] {
+            DEV_BROADCAST_VOLUME vol{};
+            vol.dbcv_size = sizeof vol;
+            vol.dbcv_devicetype = DBT_DEVTYP_VOLUME;
+            SendMessageW(wnd_, WM_DEVICECHANGE, DBT_DEVICEARRIVAL, reinterpret_cast<LPARAM>(&vol));
+        },
+        [=, this] {
+            HWND tv = tree_.hwnd();
+            HTREEITEM one = TreeView_GetChild(tv, TreeView_GetRoot(tv)), last = TreeView_GetRoot(tv);
+            for (HTREEITEM n = last; n; n = TreeView_GetNextSibling(tv, n)) last = n;   // This PC
+            return bookmarkNodes() == L"one,two,sub" && one && TreeView_GetChild(tv, one) &&
+                   (TreeView_GetItemState(tv, one, TVIS_EXPANDED) & TVIS_EXPANDED) && TreeView_GetChild(tv, last);
         });
     add(L"(back to the test folder)", [=, this] { open(dir, Nav::New); }, [=, this] { return at(dir); });
 
@@ -780,7 +877,7 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
         [=, this] {
             SetFocus(list_.hwnd());
             list_.select({L"item 5000.dat"}, L"item 5000.dat");
-            list_.ensureVisible(list_.focused());
+            list_.scrollToRow(100);   // then scrolled away from it, as with the mouse wheel
             top = list_.topRow();
             selfTestKey('T', true);
         },
@@ -790,7 +887,42 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
             return idle() && active_ == 0 && list_.focusedName() == L"item 5000.dat" &&
                    list_.selectedNames() == std::vector<std::wstring>{L"item 5000.dat"} && list_.topRow() == top;
         });
+    add(L"(select an item in the second tab)", [=, this] { switchTab(1); },
+        [=, this] {
+            if (!at(path(L"big")) || active_ != 1) return false;
+            list_.select({L"item 7000.dat"}, L"item 7000.dat");
+            return true;
+        });
+    add(L"switching away from a tab before it has loaded keeps what both tabs remembered (4.6)",
+        [=, this] {
+            // Each switch leaves a tab whose folder has not loaded yet (as with a slow folder): what that tab
+            // showed before must survive, not be replaced by the empty list shown meanwhile.
+            switchTab(0);
+            switchTab(1);
+            switchTab(0);
+        },
+        [=, this] {
+            return idle() && active_ == 0 && list_.focusedName() == L"item 5000.dat" && list_.topRow() == top;
+        });
+    add(L"(and the second tab keeps its selection too)", [=, this] { switchTab(1); },
+        [=, this] { return idle() && active_ == 1 && list_.focusedName() == L"item 7000.dat"; });
+    add(L"(back to the first tab)", [=, this] { switchTab(0); }, [=, this] { return idle() && active_ == 0; });
     add(L"(close the other tab)", [=, this] { closeTab(1); }, [=, this] { return idle() && tabs_.size() == 1; });
+    add(L"when another program removes the focused item, the focus moves to the item that took its place (4.5)",
+        [=, this] {
+            SetFocus(list_.hwnd());
+            list_.select({L"item 5000.dat"}, L"item 5000.dat");
+            list_.ensureVisible(list_.focused());
+            top = list_.topRow();
+            DeleteFileW(path(L"big\\item 5000.dat").c_str());
+            selfTestKey(VK_F5);   // stands in for the change notification
+        },
+        [=, this] {
+            return idle() && !listed(L"item 5000.dat") && list_.focusedName() == L"item 5001.dat" &&
+                   list_.topRow() == top;
+        });
+    add(L"(put that file back)", [=, this] { writeFile(path(L"big\\item 5000.dat")); refresh(); },
+        [=, this] { return idle() && listed(L"item 5000.dat"); });
 
     add(L"copies 10,000 selected files to the clipboard",
         [=, this] {

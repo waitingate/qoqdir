@@ -226,6 +226,16 @@ bool isRelativePath(const std::wstring& text) {
     return text.find(L'\\') < end && text.find(L':') >= end;
 }
 
+int rowAfterDeleting(const std::vector<int>& rows, int count) {
+    if (rows.empty()) return -1;
+    int next = rows.front();
+    for (int row : rows) {   // past the block of selected rows that starts at the first one
+        if (row != next) break;
+        ++next;
+    }
+    return next < count ? next : rows.front() - 1;   // nothing after them: the one before, or -1
+}
+
 std::wstring toLower(std::wstring s) {
     if (!s.empty()) CharLowerBuffW(s.data(), DWORD(s.size()));
     return s;

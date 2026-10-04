@@ -195,6 +195,14 @@ int main() {
         CHECK_EQ(names(v), L"a.zip,c.docx,b.txt");
     }
 
+    // rowAfterDeleting: the item that takes the first deleted one's place, else the one before it
+    CHECK(rowAfterDeleting({3, 4, 5}, 10) == 6);
+    CHECK(rowAfterDeleting({9}, 10) == 8);
+    CHECK(rowAfterDeleting({0, 9}, 10) == 1);   // not contiguous: row 1 moves into row 0's place
+    CHECK(rowAfterDeleting({2, 7}, 10) == 3);
+    CHECK(rowAfterDeleting({0, 1, 2, 3, 4, 5, 6, 7, 8, 9}, 10) == -1);
+    CHECK(rowAfterDeleting({}, 5) == -1);
+
     // matchesFilter
     CHECK(matchesFilter(file(L"Holiday Photo.jpg"), L"photo"));
     CHECK(matchesFilter(file(L"Holiday Photo.jpg"), L""));

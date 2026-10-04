@@ -62,6 +62,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int) {
         shellRef.waitForShell();   // let background copies and Properties dialogs finish
         if (cmd.selfTest) result = app.exitCode();
     }
+    OleFlushClipboard();   // files copied here stay pasteable after the app has closed (nothing to do otherwise)
     OleUninitialize();
     return result;
 }

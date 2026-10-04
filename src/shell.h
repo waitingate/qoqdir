@@ -52,9 +52,10 @@ HRESULT renameItem(HWND owner, const std::wstring& path, const std::wstring& new
 void openFile(HWND owner, const std::wstring& path);
 bool runCommand(HWND owner, const std::wstring& command, const std::wstring& workDir);
 void dragOut(HWND owner, const std::wstring& dir, const std::vector<Item>& items);
-// The target path stored in a shortcut, and whether it was a folder when the shortcut was made
-// (false if not recorded). Reads only the shortcut file, never the target.
-std::wstring shortcutTarget(const std::wstring& lnkPath, bool* folder);
+// The target stored in a shortcut: a path, "" for This PC, or nothing (a web link, a library). 'folder'
+// says whether the target was a folder when the shortcut was made (false if not recorded). Reads only
+// the shortcut file, never the target, so a shortcut to a server that is off costs nothing.
+std::optional<std::wstring> shortcutTarget(const std::wstring& lnkPath, bool* folder);
 
 // Posts 'msg' to 'owner' when something inside 'dir' changes, or when 'dir' itself
 // is deleted or renamed (seen from its parent). Stops watching when destroyed.

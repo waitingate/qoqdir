@@ -30,10 +30,18 @@ void readChildren(TreeBatch& batch, const std::wstring& dir, bool shortcuts) {
         std::wstring path = joinPath(dir, it.name);
         if (it.isDir()) {
             children.push_back({path, it.name, -1});
-        } else if (shortcuts && isShortcut(it.name)) {   // shown as Windows names it ("Work", not "Work.lnk")
-            SHFILEINFOW sfi{};
-            SHGetFileInfoW(path.c_str(), 0, &sfi, sizeof sfi, SHGFI_DISPLAYNAME | SHGFI_SYSICONINDEX | SHGFI_SMALLICON);
-            children.push_back({path, sfi.szDisplayName[0] ? sfi.szDisplayName : it.name, sfi.iIcon, true});
+        } else if (shortcuts && isShortcut(it.name)) {
+            // From the shortcut file alone: asking Windows for the target's own icon waits on a server that is
+            // off, and would hold up the whole node. Windows' name for it ("Work", not "Work.lnk") and the icon
+            // of a folder or of the target's file type need no such lookup; its own icon follows (startWorker).
+            bool folder = false;
+            std::optional<std::wstring> target = shortcutTarget(path, &folder);
+            SHFILEINFOW name{}, icon{};
+            SHGetFileInfoW(path.c_str(), 0, &name, sizeof name, SHGFI_DISPLAYNAME);
+            std::wstring probe = folder ? L"x" : target.value_or(it.name);   // only the extension matters
+            SHGetFileInfoW(probe.c_str(), folder ? FILE_ATTRIBUTE_DIRECTORY : FILE_ATTRIBUTE_NORMAL, &icon, sizeof icon,
+                           SHGFI_USEFILEATTRIBUTES | SHGFI_SYSICONINDEX | SHGFI_SMALLICON);
+            children.push_back({path, name.szDisplayName[0] ? name.szDisplayName : it.name, icon.iIcon, true});
         }
     }
 }
@@ -56,10 +64,11 @@ void readUserFolders(TreeBatch& batch) {
 
 }  // namespace
 
-void FolderTree::create(HWND parent, int id, UINT batchMsg, const std::wstring& bookmarks) {
+void FolderTree::create(HWND parent, int id, UINT batchMsg, UINT iconMsg, const std::wstring& bookmarks) {
     parent_ = parent;
     bookmarks_ = bookmarks;
     batchMsg_ = batchMsg;
+    iconMsg_ = iconMsg;
     // TVS_LINESATROOT: without it the root items (Bookmarks, This PC) get no expand arrow at all.
     // No lines are drawn because TVS_HASLINES is absent, which is how Explorer does it.
     tv_ = CreateWindowExW(0, WC_TREEVIEWW, L"",
@@ -74,8 +83,7 @@ void FolderTree::create(HWND parent, int id, UINT batchMsg, const std::wstring& 
 
 void FolderTree::fill() {
     reading_.clear();   // results still being read for the old nodes will be dropped
-    TreeView_DeleteAllItems(tv_);
-    paths_.clear();
+    TreeView_DeleteAllItems(tv_);   // forgets each node's path too (TVN_DELETEITEM)
     HTREEITEM bookmarks = add(TVI_ROOT, bookmarks_, L"Bookmarks", folderIcon());
     startWorker(nullptr, readUserFolders);   // the user folders arrive later, like the drives
     SHFILEINFOW pc{};
@@ -89,26 +97,48 @@ void FolderTree::fill() {
     TreeView_Expand(tv_, thisPc, TVE_EXPAND);
 }
 
+// The shortcuts' own icons, read after their node was shown (startWorker).
+void FolderTree::setIcons(const IconBatch& batch) {
+    if (!samePath(batch.dir, bookmarks_)) return;   // shortcuts are shown only under Bookmarks
+    for (HTREEITEM c = TreeView_GetChild(tv_, TreeView_GetRoot(tv_)); c; c = TreeView_GetNextSibling(tv_, c)) {
+        for (const auto& [name, icon] : batch.icons) {
+            if (!samePath(pathOf(c), joinPath(batch.dir, name))) continue;
+            TVITEMW item{};
+            item.mask = TVIF_IMAGE | TVIF_SELECTEDIMAGE;
+            item.hItem = c;
+            item.iImage = item.iSelectedImage = icon;
+            TreeView_SetItem(tv_, &item);
+        }
+    }
+}
+
+// Drives came or went: This PC's children are read again, and nothing else, so the folders the user
+// expanded stay expanded (4.5). A read of This PC still in flight may list the drives as they were: dropped.
+void FolderTree::refreshDrives() {
+    HTREEITEM pc = TreeView_GetRoot(tv_);
+    for (HTREEITEM n = pc; n; n = TreeView_GetNextSibling(tv_, n)) pc = n;   // This PC is the last root
+    bool expanded = (TreeView_GetItemState(tv_, pc, TVIS_EXPANDED) & TVIS_EXPANDED) != 0;
+    reading_.erase(pc);
+    TreeView_Expand(tv_, pc, TVE_COLLAPSE | TVE_COLLAPSERESET);   // forget the drives; the next expand reads them
+    if (expanded) TreeView_Expand(tv_, pc, TVE_EXPAND);
+}
+
 HTREEITEM FolderTree::add(HTREEITEM parent, const std::wstring& path, const std::wstring& text, int icon, bool leaf,
                           HTREEITEM after) {
-    paths_.push_back(path);
     TVINSERTSTRUCTW ins{};
     ins.hParent = parent;
     ins.hInsertAfter = after;
-    ins.item.mask = TVIF_TEXT | TVIF_IMAGE | TVIF_SELECTEDIMAGE | TVIF_PARAM | TVIF_CHILDREN;
+    ins.item.mask = TVIF_TEXT | TVIF_IMAGE | TVIF_SELECTEDIMAGE | TVIF_CHILDREN;
     ins.item.pszText = const_cast<wchar_t*>(text.c_str());
     ins.item.iImage = ins.item.iSelectedImage = icon;
-    ins.item.lParam = LPARAM(paths_.size() - 1);
     ins.item.cChildren = leaf ? 0 : 1;   // a folder's are unknown until expanded
-    return TreeView_InsertItem(tv_, &ins);
+    HTREEITEM node = TreeView_InsertItem(tv_, &ins);
+    if (node) paths_[node] = path;
+    return node;
 }
 
 const std::wstring& FolderTree::pathOf(HTREEITEM node) const {
-    TVITEMW item{};
-    item.mask = TVIF_PARAM;
-    item.hItem = node;
-    TreeView_GetItem(tv_, &item);
-    return paths_.at(size_t(item.lParam));
+    return paths_.at(node);   // a node that is not there is a dead handle: stop loudly (4.10)
 }
 
 void FolderTree::startReading(HTREEITEM node) {
@@ -121,14 +151,26 @@ void FolderTree::startReading(HTREEITEM node) {
 void FolderTree::startWorker(HTREEITEM node, std::function<void(TreeBatch&)> reader) {
     unsigned read = reading_[node] = ++reads_;
     HWND parent = parent_;
-    UINT msg = batchMsg_;
-    std::thread([parent, msg, read, node, reader = std::move(reader)] {
+    UINT msg = batchMsg_, iconMsg = iconMsg_;
+    std::thread([parent, msg, iconMsg, read, node, reader = std::move(reader)] {
         HRESULT co = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE);
         auto batch = std::make_unique<TreeBatch>();
         batch->read = read;
         batch->node = node;
         reader(*batch);
+        std::wstring dir;
+        std::vector<std::wstring> shortcuts;
+        for (const auto& c : batch->children) {
+            if (!c.shortcut) continue;
+            dir = parentPath(c.path);
+            shortcuts.push_back(leafName(c.path));
+        }
         if (PostMessageW(parent, msg, 0, reinterpret_cast<LPARAM>(batch.get()))) batch.release();
+        // Then each shortcut's own icon, which asks the target (maybe a server that is off), as the list does.
+        if (!shortcuts.empty()) {
+            auto icons = std::make_unique<IconBatch>(readOwnIcons(dir, shortcuts));
+            if (PostMessageW(parent, iconMsg, 0, reinterpret_cast<LPARAM>(icons.get()))) icons.release();
+        }
         if (SUCCEEDED(co)) CoUninitialize();
     }).detach();
 }
@@ -191,6 +233,7 @@ bool FolderTree::onNotify(NMHDR* nm, std::wstring* open) {
     case TVN_DELETEITEMW:
         // The handle dies with the node (collapse, fill(), shutdown); a read still in flight must not insert under it.
         reading_.erase(reinterpret_cast<NMTREEVIEWW*>(nm)->itemOld.hItem);
+        paths_.erase(reinterpret_cast<NMTREEVIEWW*>(nm)->itemOld.hItem);
         return false;
     case TVN_SELCHANGEDW: {
         auto* tv = reinterpret_cast<NMTREEVIEWW*>(nm);
@@ -206,7 +249,7 @@ bool FolderTree::onNotify(NMHDR* nm, std::wstring* open) {
         GetCursorPos(&hit.pt);
         ScreenToClient(tv_, &hit.pt);
         HTREEITEM node = TreeView_HitTest(tv_, &hit);
-        if (node && node == TreeView_GetSelection(tv_) && (hit.flags & TVHT_ONITEM)) {
+        if (node && node == TreeView_GetSelection(tv_) && (hit.flags & (TVHT_ONITEM | TVHT_ONITEMRIGHT))) {
             *open = pathOf(node);
             return true;
         }

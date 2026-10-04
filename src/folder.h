@@ -62,6 +62,10 @@ bool isDirectory(const std::wstring& path);
 bool isAbsolutePath(const std::wstring& path);   // "C:\..." or "\\server\...", not a command like "cmd"
 bool isRelativePath(const std::wstring& text);   // ".", "..\x", "sub\deeper": a place here, not a command
 
+// The row to select after deleting 'rows' (ascending): the item that takes the first deleted one's place,
+// else the one before it; -1 when nothing is left. (4.6: "the item that followed the deleted ones")
+int rowAfterDeleting(const std::vector<int>& rows, int count);
+
 std::wstring toLower(std::wstring s);
 std::wstring extensionOf(const std::wstring& name);  // lower case with the dot, "" if none
 bool isShortcut(const std::wstring& name);           // .lnk or .url

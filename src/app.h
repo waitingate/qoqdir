@@ -19,6 +19,7 @@ struct ViewState {                  // what to select and scroll to after a fold
     std::vector<std::wstring> select;
     std::wstring focus;
     int top = -1;
+    int focusRow = -1;              // where 'focus' was: when it is gone, the item in its place takes the focus
     bool rename = false;            // start renaming 'focus'
 
     static ViewState selecting(const std::wstring& name) { return {{name}, name}; }
@@ -97,7 +98,9 @@ private:
     void activate(bool inNewTab);   // Enter / double-click on the selection
     void openShortcut(const std::wstring& path, bool inNewTab);
     void openNode(const std::wstring& path, bool inNewTab);   // a tree node: folder or bookmark
+    void renameNode(const std::wstring& path);                // a tree node's Rename, done in the file list
     ViewState currentView() const;
+    void rememberView();   // the tab leaves the screen: keep its selection and scroll for when it comes back
 
     // Tabs
     Tab& tab() { return tabs_[size_t(active_)]; }
