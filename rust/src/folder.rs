@@ -5,7 +5,9 @@ use std::ffi::{OsStr, OsString};
 use std::os::windows::ffi::{OsStrExt, OsStringExt};
 use std::path::{Component, Path, PathBuf, Prefix};
 
-use windows::Win32::Foundation::{ERROR_FILE_NOT_FOUND, FILETIME, HANDLE, SYSTEMTIME};
+use windows::Win32::Foundation::{
+    ERROR_FILE_NOT_FOUND, ERROR_NO_MORE_FILES, ERROR_OPERATION_ABORTED, FILETIME, HANDLE, SYSTEMTIME,
+};
 use windows::Win32::Globalization::{
     CSTR_EQUAL, CompareStringOrdinal, DATE_SHORTDATE, GetDateFormatEx, GetTimeFormatEx, TIME_NOSECONDS,
 };
@@ -134,7 +136,7 @@ pub fn to_lower(s: &OsStr) -> Vec<u16> {
     w
 }
 
-/// Cleans up what the user typed in the address bar.
+/// Cleans up a path (typed, or from a shortcut). Leaves %VARS% alone: a folder may really be named "%TEMP%".
 pub fn normalize(text: &OsStr) -> Location {
     let junk = |c: &u16| *c == b' ' as u16 || *c == b'\t' as u16 || *c == b'"' as u16;
     let mut w: Vec<u16> = text.encode_wide().collect();
@@ -145,14 +147,6 @@ pub fn normalize(text: &OsStr) -> Location {
     w.drain(..start);
     if w.is_empty() || equal_no_case(&OsString::from_wide(&w), OsStr::new("This PC")) {
         return Location::ThisPc;
-    }
-    if w.contains(&(b'%' as u16)) {
-        let src: Vec<u16> = w.iter().copied().chain(Some(0)).collect();
-        let mut buf = vec![0u16; 32768];
-        let n = unsafe { ExpandEnvironmentStringsW(pcwstr(&src), Some(&mut buf)) } as usize;
-        if n > 0 && n <= buf.len() {
-            w = from_wide(&buf).encode_wide().collect();
-        }
     }
     for c in w.iter_mut() {
         if *c == b'/' as u16 {
@@ -179,6 +173,13 @@ pub fn normalize(text: &OsStr) -> Location {
     Location::dir(OsString::from_wide(&w))
 }
 
+/// Expands %VARS%, only in what the user typed (5.3).
+pub fn expand_vars(text: &OsStr) -> OsString {
+    let mut buf = vec![0u16; 32768];
+    let n = unsafe { ExpandEnvironmentStringsW(pcwstr(&wide(text)), Some(&mut buf)) } as usize;
+    if n > 0 && n <= buf.len() { from_wide(&buf) } else { text.to_os_string() }
+}
+
 /// A folder given on the command line, relative to the current one ("qoqdir .").
 pub fn resolve_argument(arg: &OsStr) -> Location {
     // "D:" alone means the drive's root (as in Explorer), not Windows' "current folder on D:".
@@ -203,17 +204,19 @@ pub fn parse_command_line(args: &[OsString]) -> CommandLine {
     let mut cmd = CommandLine::default();
     for arg in args {
         let text = arg.to_string_lossy();
+        // "-t:D:\x" is -tD:\x, as other tools write switches: no folder name starts with a colon.
+        let at = if text.starts_with("-t:") { 3 } else { 2 };
         if !text.starts_with('-') {
             cmd.folders.push(resolve_argument(arg)); // a plain folder
-        } else if text.len() > 2 && text.starts_with("-t") {
+        } else if text.len() > at && text.starts_with("-t") {
             // The folder part, taken from the original argument so any file name survives.
-            let folder: Vec<u16> = arg.encode_wide().skip(2).collect();
+            let folder: Vec<u16> = arg.encode_wide().skip(at).collect();
             cmd.folders.push(resolve_argument(&OsString::from_wide(&folder)));
         } else {
             match text.as_ref() {
                 "--selftest" => cmd.self_test = true,
                 "-h" | "-?" | "--help" => cmd.help = true,
-                "-t" => cmd.error = Some("-t needs a folder right after it, with no space: -tD:\\logs".into()),
+                "-t" | "-t:" => cmd.error = Some("-t needs a folder right after it, with no space: -tD:\\logs".into()),
                 _ => cmd.error = Some(format!("Unknown switch: {text}")),
             }
         }
@@ -241,6 +244,36 @@ pub fn exists(path: &Path) -> bool {
     unsafe { GetFileAttributesW(pcwstr(&wide(path))) != INVALID_FILE_ATTRIBUTES }
 }
 
+/// Typed text that means a place in the current folder (".", "..\x", "sub\deeper"), not a command.
+pub fn is_relative_path(text: &OsStr) -> bool {
+    let w: Vec<u16> = text.encode_wide().collect();
+    if w.is_empty() || Path::new(text).is_absolute() {
+        return false;
+    }
+    if w[0] == b'.' as u16 {
+        return true; // ".", ".\sub", "..\other", "..\"
+    }
+    // Only the first word decides, so "notepad a\b.txt" and "cmd \c dir" (normalize turned the
+    // slash around) stay commands; a web address ("https:\\x") is told apart by its colon.
+    let end = w.iter().position(|&c| c == b' ' as u16 || c == b'\t' as u16).unwrap_or(w.len());
+    w[..end].contains(&(b'\\' as u16)) && !w[..end].contains(&(b':' as u16))
+}
+
+/// The row to select after deleting `rows` (ascending): the item that takes the first deleted one's place,
+/// else the one before it; None when nothing is left. (4.6: "the item that followed the deleted ones")
+pub fn row_after_deleting(rows: &[usize], count: usize) -> Option<usize> {
+    let first = *rows.first()?;
+    let mut next = first;
+    for &row in rows {
+        // past the block of selected rows that starts at the first one
+        if row != next {
+            break;
+        }
+        next += 1;
+    }
+    if next < count { Some(next) } else { first.checked_sub(1) }
+}
+
 #[derive(Clone, Debug, Default)]
 pub struct Item {
     pub name: OsString,              // file name, or "C:\" for a drive
@@ -264,12 +297,20 @@ impl Item {
 pub struct Listing {
     pub location: Location,
     pub items: Vec<Item>,
-    pub error: Option<String>,
+    pub error: Option<windows::core::Error>,
     pub is_file: bool, // with an error: the path exists but is a file
 }
 
-/// Reads a folder. Blocking: call it off the UI thread.
-pub fn list_folder(location: &Location, show_hidden: bool) -> Listing {
+impl Listing {
+    /// No items, and why.
+    pub fn failed(location: &Location, error: windows::core::Error) -> Listing {
+        Listing { location: location.clone(), items: Vec::new(), error: Some(error), is_file: false }
+    }
+}
+
+/// Reads a folder. Blocking: call it off the UI thread. `stop` is asked every few hundred entries; once it
+/// says true the read ends at once with ERROR_OPERATION_ABORTED and no items.
+pub fn list_folder(location: &Location, show_hidden: bool, stop: Option<&dyn Fn() -> bool>) -> Listing {
     let mut r = Listing { location: location.clone(), items: Vec::new(), error: None, is_file: false };
     let Location::Dir(dir) = location else {
         list_drives(&mut r);
@@ -300,13 +341,18 @@ pub fn list_folder(location: &Location, show_hidden: bool) -> Listing {
         Err(e) => {
             // An empty drive root has no "." entry, so "not found" just means empty.
             if !(e.code() == ERROR_FILE_NOT_FOUND.to_hresult() && is_directory(dir)) {
-                r.error = Some(e.message());
+                r.error = Some(e);
                 r.is_file = exists(dir) && !is_directory(dir);
             }
             return r;
         }
     };
+    let mut seen = 0usize;
     loop {
+        seen += 1;
+        if seen % 256 == 0 && stop.is_some_and(|stop| stop()) {
+            return Listing::failed(location, ERROR_OPERATION_ABORTED.to_hresult().into());
+        }
         let name = from_wide(&fd.cFileName);
         let dots = name == "." || name == "..";
         let hidden = fd.dwFileAttributes & FILE_ATTRIBUTE_HIDDEN.0 != 0;
@@ -321,7 +367,11 @@ pub fn list_folder(location: &Location, show_hidden: bool) -> Listing {
                 ..Default::default()
             });
         }
-        if unsafe { FindNextFileW(guard.0, &mut fd) }.is_err() {
+        if let Err(e) = unsafe { FindNextFileW(guard.0, &mut fd) } {
+            // ERROR_NO_MORE_FILES, or why the read broke off (e.g. the network went)
+            if e.code() != ERROR_NO_MORE_FILES.to_hresult() {
+                return Listing::failed(location, e); // never half a folder as all of it
+            }
             break;
         }
     }
@@ -490,6 +540,9 @@ mod tests {
     fn item(name: &str, size: u64, is_dir: bool) -> Item {
         Item { name: name.into(), size, attrs: if is_dir { FILE_ATTRIBUTE_DIRECTORY.0 } else { 0 }, ..Default::default() }
     }
+    fn dated(name: &str, modified: u64) -> Item {
+        Item { modified, ..item(name, 0, false) }
+    }
     fn names(items: &[Item]) -> String {
         items.iter().map(|i| i.name.to_string_lossy().into_owned()).collect::<Vec<_>>().join(",")
     }
@@ -527,7 +580,50 @@ mod tests {
         assert_eq!(text(&resolve_argument(OsStr::new("C:"))), "C:\\"); // a drive alone is its root, as in Explorer
         assert_eq!(text(&normalize(OsStr::new("\\\\server\\share\\"))), "\\\\server\\share");
         let windir = std::env::var_os("SystemRoot").unwrap();
-        assert!(normalize(OsStr::new("%SystemRoot%")).same(&Location::dir(windir)));
+        assert!(normalize(&expand_vars(OsStr::new("%SystemRoot%"))).same(&Location::dir(windir)));
+        // A folder may really be named "%TEMP%": only typed text has its variables expanded.
+        assert_eq!(text(&normalize(OsStr::new("C:\\a\\%TEMP%\\.\\sub"))), "C:\\a\\%TEMP%\\sub");
+        assert_eq!(text(&resolve_argument(OsStr::new("C:\\a\\%TEMP%"))), "C:\\a\\%TEMP%"); // "qoqdir ." in such a folder
+    }
+
+    #[test]
+    fn relative_paths() {
+        // Typed text that means a place in the current folder (after normalize), not a command
+        let rel = |s: &str| is_relative_path(OsStr::new(s));
+        let typed = |s: &str| is_relative_path(&normalize(OsStr::new(s)).text());
+        assert!(rel(".") && rel(".\\sub") && rel("..\\") && rel("..\\other") && rel("sub\\deeper"));
+        assert!(rel("a\\b.txt")); // a relative file: the loader opens it with Windows
+        assert!(typed("./sub"));
+        assert!(!rel("sub")); // a bare name: the list decides (has_folder)
+        assert!(!rel("cmd") && !typed("cmd /c dir") && !rel("notepad a\\b.txt"));
+        assert!(!typed("https://example.com") && !rel("shell:Downloads"));
+        assert!(!rel("C:\\Windows") && !rel("\\\\server\\share") && !rel(""));
+    }
+
+    #[test]
+    fn names_outside_ascii_and_long_paths() {
+        // Chinese, and an emoji (a surrogate pair in UTF-16)
+        let photo = dir("C:\\\u{5831}\u{544A}\\\u{1F600}.JPG");
+        assert_eq!(photo.display_name(), "\u{1F600}.JPG");
+        assert_eq!(text(&photo.parent()), "C:\\\u{5831}\u{544A}");
+        assert_eq!(dir("C:\\\u{5831}\u{544A}").join(OsStr::new("\u{1F600}.JPG")), PathBuf::from("C:\\\u{5831}\u{544A}\\\u{1F600}.JPG"));
+        assert_eq!(extension_of(OsStr::new("\u{1F600}.JPG")), ".jpg");
+        assert_eq!(text(&normalize(OsStr::new("c:/\u{5831}\u{544A}/"))), "C:\\\u{5831}\u{544A}");
+        let deep = format!("C:\\{}\\b", "a".repeat(300)); // 305 characters, far beyond MAX_PATH
+        assert_eq!(text(&normalize(OsStr::new(&format!("{deep}\\")))), deep);
+        assert_eq!(text(&dir(&deep).parent()), deep[..303]);
+        assert_eq!(dir(&deep).display_name(), "b");
+    }
+
+    #[test]
+    fn row_after_deleting_rows() {
+        // The item that takes the first deleted one's place, else the one before it
+        assert_eq!(row_after_deleting(&[3, 4, 5], 10), Some(6));
+        assert_eq!(row_after_deleting(&[9], 10), Some(8));
+        assert_eq!(row_after_deleting(&[0, 9], 10), Some(1)); // not contiguous: row 1 moves into row 0's place
+        assert_eq!(row_after_deleting(&[2, 7], 10), Some(3));
+        assert_eq!(row_after_deleting(&(0..10).collect::<Vec<_>>(), 10), None);
+        assert_eq!(row_after_deleting(&[], 5), None);
     }
 
     #[test]
@@ -569,8 +665,22 @@ mod tests {
         assert_eq!(names(&v), "b,a,notes.md,file10.txt,file2.txt");
         sort_items(&mut v, SortKey::Size, false);
         assert_eq!(names(&v), "b,a,file2.txt,file10.txt,notes.md");
+        sort_items(&mut v, SortKey::Size, true); // 7.1: each column in both directions, folders first either way
+        assert_eq!(names(&v), "a,b,notes.md,file10.txt,file2.txt");
         sort_items(&mut v, SortKey::Type, true);
         assert_eq!(names(&v), "a,b,notes.md,file2.txt,file10.txt");
+        sort_items(&mut v, SortKey::Type, false);
+        assert_eq!(names(&v), "b,a,file10.txt,file2.txt,notes.md");
+    }
+
+    #[test]
+    fn sorting_by_date() {
+        // Both directions; equal dates fall back to the name
+        let mut v = vec![dated("x.txt", 3), dated("y.txt", 1), dated("p.txt", 2), dated("q.txt", 2), item("a", 0, true)];
+        sort_items(&mut v, SortKey::Modified, true);
+        assert_eq!(names(&v), "a,y.txt,p.txt,q.txt,x.txt");
+        sort_items(&mut v, SortKey::Modified, false);
+        assert_eq!(names(&v), "a,x.txt,q.txt,p.txt,y.txt");
     }
 
     #[test]
@@ -598,6 +708,10 @@ mod tests {
         assert!(parse_command_line(&args(&["--selftest"])).self_test);
         assert_eq!(parse_command_line(&args(&["-x"])).error.as_deref(), Some("Unknown switch: -x"));
         assert!(parse_command_line(&args(&["-t"])).error.is_some()); // -t without a folder
+        // A network folder comes out as itself; "-t:" with a colon, as the user typed it, means the same as -t.
+        assert_eq!(parse_command_line(&args(&["-t\\\\nas\\share\\"])).folders.iter().map(text).collect::<Vec<_>>(), ["\\\\nas\\share"]);
+        assert_eq!(parse_command_line(&args(&["-t:\\\\nas\\share"])).folders.iter().map(text).collect::<Vec<_>>(), ["\\\\nas\\share"]);
+        assert!(parse_command_line(&args(&["-t:"])).error.is_some());
         assert!(parse_command_line(&args(&["-tC:\\A", "-q"])).error.is_some());
         assert!(parse_command_line(&args(&["-n"])).error.is_some()); // -n no longer exists
     }
@@ -614,11 +728,20 @@ mod tests {
 
     #[test]
     fn listing() {
-        let l = list_folder(&dir("C:\\Windows"), false);
+        let l = list_folder(&dir("C:\\Windows"), false, None);
         assert!(l.error.is_none());
         assert!(!l.items.is_empty());
         assert!(!l.items.iter().any(|i| i.name == "." || i.name == ".."));
-        assert!(list_folder(&dir("C:\\definitely\\not\\here"), false).error.is_some());
-        assert!(!list_folder(&Location::ThisPc, false).items.is_empty());
+        let missing = list_folder(&dir("C:\\definitely\\not\\here"), false, None);
+        assert!(missing.error.is_some() && !missing.is_file);
+        assert!(!list_folder(&Location::ThisPc, false, None).items.is_empty());
+        // A path that is a file is reported as such (the app then opens the file instead).
+        let as_file = list_folder(&Location::dir(std::env::current_exe().unwrap()), false, None);
+        assert!(as_file.error.is_some() && as_file.is_file);
+        // A read that a newer load replaced stops early, keeping nothing (System32 has hundreds of entries).
+        let system = Location::dir(PathBuf::from(std::env::var_os("SystemRoot").unwrap()).join("System32"));
+        let stopped = list_folder(&system, false, Some(&|| true));
+        assert!(stopped.error.is_some_and(|e| e.code() == ERROR_OPERATION_ABORTED.to_hresult()) && stopped.items.is_empty());
+        assert!(list_folder(&system, false, Some(&|| false)).items.len() > 256);
     }
 }

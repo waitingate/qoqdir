@@ -1,8 +1,8 @@
 # Qoqdir, Rust version
 
-An earlier version of Qoqdir written in Rust with Microsoft's `windows` crate. It
-has the same features and tests as the C++ version had in early October 2026, and
-is kept for reference: newer fixes go into the C++ version only.
+Qoqdir written in Rust with Microsoft's `windows` crate. Since 5 October 2026 it
+has the same features as the C++ version, which is the main one, and the same
+self-test steps.
 
 ## Portable Rust setup
 
@@ -51,8 +51,9 @@ The scripts in `..\tests` work with this exe too (`-Exe target\release\qoqdir.ex
 - `filelist.rs`, `tree.rs`: the file list and the folder tree
 - `app.rs`: main window, tabs, navigation, keys, settings
 - `selftest.rs`: the `--selftest` session
+- `crashlog.rs`: writes `%TEMP%\qoqdir-crash.log` when the app stops on a bug
 - `util.rs`: UTF-16 strings and owners that free Windows resources
 
 Shared state is never borrowed across a call into Windows, because Windows can
 call straight back into the app. A mistake there stops the app (`panic = "abort"`)
-instead of corrupting data.
+instead of corrupting data, and the crash log says where.

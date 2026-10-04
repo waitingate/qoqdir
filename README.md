@@ -88,6 +88,6 @@ Nothing goes in the registry or AppData. The only other file is
 
 - `src/` the program
 - `tests/` unit tests and the two check scripts
-- `rust/` an earlier Rust version, kept for reference
+- `rust/` the same program in Rust (see its README)
 - `QOQDIR-SPEC.md` what Qoqdir must do and how it must behave
 - `DEVELOPING.md` notes for working on the code

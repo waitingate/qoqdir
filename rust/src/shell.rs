@@ -9,11 +9,16 @@ use std::ffi::{OsStr, OsString};
 use std::mem::ManuallyDrop;
 use std::path::{Path, PathBuf};
 
-use windows::Win32::Foundation::{CloseHandle, E_FAIL, HANDLE, HWND, LPARAM, LRESULT, POINT, POINTL, WPARAM};
-use windows::Win32::Storage::FileSystem::{FILE_ATTRIBUTE_DIRECTORY, FILE_ATTRIBUTE_NORMAL, FILE_FLAGS_AND_ATTRIBUTES};
+use windows::Win32::Foundation::{
+    CloseHandle, E_FAIL, E_INVALIDARG, ERROR_CANCELLED, FILETIME, HANDLE, HWND, LPARAM, LRESULT, MAX_PATH, POINT, POINTL,
+    WPARAM,
+};
+use windows::Win32::Storage::FileSystem::{
+    FILE_ATTRIBUTE_DIRECTORY, FILE_ATTRIBUTE_NORMAL, FILE_FLAGS_AND_ATTRIBUTES, WIN32_FIND_DATAW,
+};
 use windows::Win32::System::Com::{
-    CLSCTX_ALL, CLSCTX_INPROC_SERVER, CoCreateInstance, CoTaskMemFree, DVASPECT_CONTENT, FORMATETC, IBindCtx,
-    IDataObject, IPersistFile, STGM_READ, STGMEDIUM, STGMEDIUM_0, TYMED_HGLOBAL,
+    BIND_OPTS, CLSCTX_ALL, CLSCTX_INPROC_SERVER, CoCreateInstance, CoTaskMemFree, CreateBindCtx, DVASPECT_CONTENT,
+    FORMATETC, IBindCtx, IDataObject, IPersistFile, STGM_CREATE, STGM_READ, STGMEDIUM, STGMEDIUM_0, TYMED_HGLOBAL,
 };
 use windows::Win32::System::DataExchange::{IsClipboardFormatAvailable, RegisterClipboardFormatW};
 use windows::Win32::System::Memory::{GMEM_MOVEABLE, GlobalAlloc, GlobalLock, GlobalUnlock};
@@ -31,7 +36,8 @@ use windows::Win32::UI::Shell::{
     CMINVOKECOMMANDINFO, CMINVOKECOMMANDINFOEX, CLSID_DragDropHelper, FOF_ALLOWUNDO,
     FOF_NOCONFIRMATION, FOF_WANTNUKEWARNING, FOFX_RECYCLEONDELETE, FOLDERID_ComputerFolder, FileOperation,
     GCS_VERBW, IContextMenu, IContextMenu2, IContextMenu3, IDropTargetHelper, IFileOperation,
-    IFileOperationProgressSink, IShellFolder, IShellItem, IShellLinkW, ILFindLastID, KF_FLAG_DEFAULT,
+    IFileOperationProgressSink, IFileSystemBindData, IFileSystemBindData_Impl, ILFindLastID, ILIsEqual, IShellFolder,
+    IShellItem, IShellLinkW, KF_FLAG_DEFAULT, STR_FILE_SYS_BIND_DATA,
     SEE_MASK_FLAG_NO_UI, SHBindToParent, SHCNE_ATTRIBUTES, SHCNE_CREATE, SHCNE_DELETE, SHCNE_DRIVEADD,
     SHCNE_DRIVEREMOVED, SHCNE_MEDIAINSERTED, SHCNE_MEDIAREMOVED, SHCNE_MKDIR, SHCNE_RENAMEFOLDER,
     SHCNE_RENAMEITEM, SHCNE_RMDIR, SHCNE_UPDATEDIR, SHCNE_UPDATEITEM, SHCNRF_InterruptLevel, SHCNRF_NewDelivery,
@@ -109,7 +115,7 @@ pub fn has_own_icon(it: &Item) -> bool {
 
 pub struct IconBatch {
     pub dir: Location,
-    icons: Vec<(OsString, i32)>, // file name, icon
+    pub icons: Vec<(OsString, i32)>, // file name, icon
 }
 
 /// Worker thread: looks up the own icons of these files.
@@ -125,11 +131,11 @@ pub fn read_own_icons(dir: &Location, names: Vec<OsString>) -> IconBatch {
 }
 
 /// UI thread: keeps the icons so they show from now on (also after refreshes).
-pub fn remember_icons(batch: IconBatch) {
+pub fn remember_icons(batch: &IconBatch) {
     OWN_ICONS.with(|cache| {
         let mut cache = cache.borrow_mut();
-        for (name, icon) in batch.icons {
-            cache.insert(batch.dir.join(&name), icon);
+        for (name, icon) in &batch.icons {
+            cache.insert(batch.dir.join(name), *icon);
         }
     });
 }
@@ -161,6 +167,25 @@ pub fn known_folder(id: &GUID) -> Option<PathBuf> {
     }
 }
 
+/// How a shortcut looks before its own icon is read: Windows' name for it ("Work", not "Work.lnk"), and the
+/// icon of a folder or of the target's file type. From the shortcut file alone: asking Windows for the
+/// target's own icon waits on a server that is off.
+pub fn describe_shortcut(lnk: &Path) -> (OsString, i32) {
+    use windows::Win32::UI::Shell::SHGFI_DISPLAYNAME;
+    let (target, folder) = shortcut_target(lnk).map_or((None, false), |(t, folder)| (Some(t), folder));
+    let name = file_info(&wide(lnk), FILE_FLAGS_AND_ATTRIBUTES(0), SHGFI_DISPLAYNAME)
+        .map(|s| from_wide(&s.szDisplayName))
+        .filter(|n| !n.is_empty())
+        .unwrap_or_else(|| lnk.file_name().unwrap_or_default().to_os_string());
+    let (probe, attrs) = match target {
+        _ if folder => (wide("x"), FILE_ATTRIBUTE_DIRECTORY),
+        Some(Location::Dir(t)) => (wide(t), FILE_ATTRIBUTE_NORMAL), // only the extension matters
+        _ => (wide(lnk), FILE_ATTRIBUTE_NORMAL),
+    };
+    let icon = file_info(&probe, attrs, SHGFI_USEFILEATTRIBUTES | SHGFI_SYSICONINDEX | SHGFI_SMALLICON).map_or(0, |s| s.iIcon);
+    (name, icon)
+}
+
 /// Display name and icon of a location, as Explorer shows it.
 pub fn describe(location: &Location) -> (OsString, i32) {
     use windows::Win32::UI::Shell::{SHGFI_DISPLAYNAME, SHGFI_PIDL};
@@ -186,46 +211,91 @@ fn pidl_from(location: &Location) -> Option<Pidl> {
     }
 }
 
-/// Asks the parent folder for an interface covering all `items` (a context
-/// menu, a data object, a drop target...). All items must share one parent.
-///
-/// The parent is opened once and each item is looked up by name inside it: resolving
-/// every full path from the desktop down took ~9 ms per file (90 s for 10,000 files).
-fn ui_object<T: Interface>(owner: HWND, items: &[Location]) -> Result<T> {
-    let first = items.first().ok_or(E_FAIL)?;
+/// Asks the shell for an interface on one item given by its full path (a context menu, a
+/// data object, a drop target...). Resolving the full path exactly also covers items without
+/// an ordinary parent folder: This PC, and a network share's top (\\server\share).
+fn ui_object_at<T: Interface>(owner: HWND, location: &Location) -> Result<T> {
+    let pidl = pidl_from(location).ok_or(E_FAIL)?;
     unsafe {
-        if let [item] = items {
-            // One item: resolve its full path exactly. This also covers items without an
-            // ordinary parent folder: This PC, and a network share's top (\server\share).
-            let pidl = pidl_from(item).ok_or(E_FAIL)?;
-            let parent: IShellFolder = SHBindToParent(pidl.0, None)?;
-            return parent.GetUIObjectOf(owner, &[ILFindLastID(pidl.0) as *const _], None);
-        }
-        let parent_pidl = pidl_from(&first.parent()).ok_or(E_FAIL)?;
-        let desktop = SHGetDesktopFolder()?;
-        let parent: IShellFolder =
-            if (*parent_pidl.0).mkid.cb == 0 { desktop } else { desktop.BindToObject(parent_pidl.0, None::<&IBindCtx>)? };
-        let mut owned: Vec<Pidl> = Vec::with_capacity(items.len());
-        for item in items {
-            let Location::Dir(path) = item else { return Err(E_FAIL.into()) };
-            // "C:\" (a drive under This PC) has no file name: its name is the whole path.
-            let name = wide(path.file_name().unwrap_or(path.as_os_str()));
-            let mut child: *mut ITEMIDLIST = std::ptr::null_mut();
-            parent.ParseDisplayName(owner, None::<&IBindCtx>, pcwstr(&name), None, &mut child, std::ptr::null_mut())?;
-            owned.push(Pidl(child));
-        }
-        let children: Vec<*const ITEMIDLIST> = owned.iter().map(|p| p.0 as *const _).collect();
-        parent.GetUIObjectOf(owner, &children, None)
+        let parent: IShellFolder = SHBindToParent(pidl.0, None)?;
+        parent.GetUIObjectOf(owner, &[ILFindLastID(pidl.0) as *const _], None)
     }
 }
 
-/// The items as a shell data object (what copy, drag and drop hand around).
-pub fn data_object(owner: HWND, items: &[Location]) -> Option<IDataObject> {
-    ui_object(owner, items).ok()
+/// What the folder listing already said about an item, handed to the shell through a bind
+/// context (STR_FILE_SYS_BIND_DATA) so that parsing the item's name needs no disk access.
+/// Without it the shell asks the disk about every item: one round trip each on a network
+/// folder, tens of seconds for 10,000 selected files.
+#[implement(IFileSystemBindData)]
+struct FindData(RefCell<WIN32_FIND_DATAW>);
+
+impl IFileSystemBindData_Impl for FindData_Impl {
+    fn SetFindData(&self, fd: *const WIN32_FIND_DATAW) -> Result<()> {
+        *self.0.borrow_mut() = unsafe { *fd };
+        Ok(())
+    }
+    fn GetFindData(&self, fd: *mut WIN32_FIND_DATAW) -> Result<()> {
+        unsafe { *fd = *self.0.borrow() };
+        Ok(())
+    }
 }
 
-pub fn item_menu(owner: HWND, items: &[Location]) -> Option<IContextMenu> {
-    ui_object(owner, items).ok()
+/// The same for items of one folder, as the list read them. The folder is opened once and each
+/// item is looked up by name inside it, from its own find data: resolving every full path from
+/// the desktop down took ~9 ms per file (90 s for 10,000 files), and even the name lookup cost
+/// one disk query per item (the 1.5-2.5 s of spec 4.7 on an SSD, far more on a network folder).
+fn ui_object_of<T: Interface>(owner: HWND, dir: &Location, items: &[Item]) -> Result<T> {
+    match items {
+        [] => return Err(E_INVALIDARG.into()),
+        [item] => return ui_object_at(owner, &Location::dir(dir.join(&item.name))),
+        _ => {}
+    }
+    unsafe {
+        let dir_pidl = pidl_from(dir).ok_or(E_FAIL)?;
+        let desktop = SHGetDesktopFolder()?;
+        let folder: IShellFolder =
+            if (*dir_pidl.0).mkid.cb == 0 { desktop } else { desktop.BindToObject(dir_pidl.0, None::<&IBindCtx>)? };
+        // STGM_CREATE tells the shell to take the find data as given instead of checking the disk.
+        let known: IFileSystemBindData = FindData(RefCell::new(WIN32_FIND_DATAW::default())).into();
+        let bind = CreateBindCtx(0)?;
+        bind.SetBindOptions(&BIND_OPTS { cbStruct: size_of::<BIND_OPTS>() as u32, grfMode: STGM_CREATE.0, ..Default::default() })?;
+        bind.RegisterObjectParam(STR_FILE_SYS_BIND_DATA, &known)?;
+        let mut owned: Vec<Pidl> = Vec::with_capacity(items.len());
+        for it in items {
+            let mut fd = WIN32_FIND_DATAW {
+                dwFileAttributes: it.attrs,
+                ftLastWriteTime: FILETIME { dwLowDateTime: it.modified as u32, dwHighDateTime: (it.modified >> 32) as u32 },
+                nFileSizeHigh: (it.size >> 32) as u32,
+                nFileSizeLow: it.size as u32,
+                ..Default::default()
+            };
+            for (to, from) in fd.cFileName.iter_mut().zip(wide(&it.name).into_iter().take(MAX_PATH as usize - 1)) {
+                *to = from; // "C:\" for a drive under This PC
+            }
+            known.SetFindData(&fd)?;
+            let mut child: *mut ITEMIDLIST = std::ptr::null_mut();
+            folder.ParseDisplayName(owner, &bind, PCWSTR(fd.cFileName.as_ptr()), None, &mut child, std::ptr::null_mut())?;
+            owned.push(Pidl(child));
+        }
+        let children: Vec<*const ITEMIDLIST> = owned.iter().map(|p| p.0 as *const _).collect();
+        folder.GetUIObjectOf(owner, &children, None)
+    }
+}
+
+/// One item by its full path, as a shell data object (what copy, drag and drop hand around). The file
+/// list's own items go through `ui_object_of` (copy, delete, drag), which builds them from the listing.
+pub fn data_object_at(owner: HWND, location: &Location) -> Option<IDataObject> {
+    ui_object_at(owner, location).ok()
+}
+
+/// Context menu for items of one folder.
+pub fn item_menu(owner: HWND, dir: &Location, items: &[Item]) -> Option<IContextMenu> {
+    ui_object_of(owner, dir, items).ok()
+}
+
+/// Context menu for one item given by its full path (the tree's folders, This PC, a drive).
+pub fn item_menu_at(owner: HWND, location: &Location) -> Option<IContextMenu> {
+    ui_object_at(owner, location).ok()
 }
 
 pub fn background_menu(owner: HWND, dir: &Location) -> Option<IContextMenu> {
@@ -340,8 +410,10 @@ pub fn invoke_verb(owner: HWND, cm: Option<IContextMenu>, verb: &str) -> bool {
     }
 }
 
-pub fn copy_to_clipboard(owner: HWND, items: &[Location], cut: bool) {
-    let Ok(obj) = ui_object::<IDataObject>(owner, items) else { return };
+/// False when the files could not be put on the clipboard: Windows could not describe them (a path too
+/// long for the shell) or another program holds the clipboard open.
+pub fn copy_to_clipboard(owner: HWND, dir: &Location, items: &[Item], cut: bool) -> bool {
+    let Ok(obj) = ui_object_of::<IDataObject>(owner, dir, items) else { return false };
     unsafe {
         // Tells the paste target whether to move (cut) or copy.
         let fmt = FORMATETC {
@@ -366,7 +438,7 @@ pub fn copy_to_clipboard(owner: HWND, items: &[Location], cut: bool) {
                 ReleaseStgMedium(&mut med);
             }
         }
-        let _ = OleSetClipboard(&obj);
+        OleSetClipboard(&obj).is_ok()
     }
 }
 
@@ -384,18 +456,25 @@ fn file_operation(owner: HWND, flags: u32, add: impl FnOnce(&IFileOperation) -> 
         op.SetOwnerWindow(owner)?;
         op.SetOperationFlags(windows::Win32::UI::Shell::FILEOPERATION_FLAGS(flags))?;
         add(&op)?;
-        op.PerformOperations()
+        op.PerformOperations()?;
+        // The user answered No or Cancel: nothing (or not everything) was done.
+        if op.GetAnyOperationsAborted().is_ok_and(|aborted| aborted.as_bool()) {
+            return Err(ERROR_CANCELLED.to_hresult().into());
+        }
+        Ok(())
     }
 }
 
-pub fn delete_items(owner: HWND, items: &[Location], permanently: bool) {
-    let Ok(obj) = ui_object::<IDataObject>(owner, items) else { return };
-    let flags = if permanently {
-        FOF_WANTNUKEWARNING.0 as u32
-    } else {
-        FOF_ALLOWUNDO.0 as u32 | FOFX_RECYCLEONDELETE.0 as u32 | FOF_NOCONFIRMATION.0 as u32
-    };
-    let _ = file_operation(owner, flags, |op| unsafe { op.DeleteItems(&obj) });
+/// False when nothing was deleted: the user said No to Windows' question, or it failed.
+pub fn delete_items(owner: HWND, dir: &Location, items: &[Item], permanently: bool) -> bool {
+    let Ok(obj) = ui_object_of::<IDataObject>(owner, dir, items) else { return false };
+    // FOF_WANTNUKEWARNING in both cases: Windows still asks before destroying an item it cannot recycle
+    // (network share, USB stick, oversized file); without it FOF_NOCONFIRMATION answers Yes for the user.
+    let mut flags = FOF_WANTNUKEWARNING.0 as u32;
+    if !permanently {
+        flags |= FOF_ALLOWUNDO.0 as u32 | FOFX_RECYCLEONDELETE.0 as u32 | FOF_NOCONFIRMATION.0 as u32;
+    }
+    file_operation(owner, flags, |op| unsafe { op.DeleteItems(&obj) }).is_ok()
 }
 
 pub fn rename_item(owner: HWND, path: &Path, new_name: &OsStr) -> Result<()> {
@@ -450,26 +529,31 @@ pub fn run_command(owner: HWND, command: &OsStr, work_dir: Option<&Path>) -> boo
     }
 }
 
-pub fn drag_out(owner: HWND, items: &[Location]) {
-    if let Ok(obj) = ui_object::<IDataObject>(owner, items) {
+pub fn drag_out(owner: HWND, dir: &Location, items: &[Item]) {
+    if let Ok(obj) = ui_object_of::<IDataObject>(owner, dir, items) {
         let effects = DROPEFFECT_COPY | DROPEFFECT_MOVE | DROPEFFECT_LINK;
         let _ = unsafe { SHDoDragDrop(Some(owner), &obj, None::<&IDropSource>, effects) };
     }
 }
 
-/// The target path stored in a shortcut, and whether it was a folder when the shortcut was made
-/// (false if not recorded). Reads only the shortcut file, never the target (it may be on a network).
-pub fn shortcut_target(lnk: &Path) -> Option<(PathBuf, bool)> {
-    use windows::Win32::Storage::FileSystem::WIN32_FIND_DATAW;
+/// The target stored in a shortcut: a path (as stored: normalize it before use), This PC, or nothing (a
+/// web link, a library); and whether the target was a folder when the shortcut was made (false if not
+/// recorded). Reads only the shortcut file, never the target, so a shortcut to a server that is off costs nothing.
+pub fn shortcut_target(lnk: &Path) -> Option<(Location, bool)> {
     unsafe {
         let link: IShellLinkW = CoCreateInstance(&ShellLink, None, CLSCTX_INPROC_SERVER).ok()?;
         let file: IPersistFile = link.cast().ok()?;
         file.Load(pcwstr(&wide(lnk)), STGM_READ).ok()?;
-        let mut target = [0u16; 260];
+        let mut target = vec![0u16; 32768]; // not MAX_PATH: a folder deep in a network share has a longer path
         let mut stored = WIN32_FIND_DATAW::default(); // the target as it was when the shortcut was made
-        link.GetPath(&mut target, &mut stored, 0).ok()?;
-        let folder = stored.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY.0 != 0;
-        Some((PathBuf::from(from_wide(&target)), folder)).filter(|(t, _)| !t.as_os_str().is_empty())
+        if link.GetPath(&mut target, &mut stored, 0).is_ok() && target[0] != 0 {
+            let folder = stored.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY.0 != 0;
+            return Some((Location::Dir(PathBuf::from(from_wide(&target))), folder));
+        }
+        // No path: This PC is the one such target this app can show itself; Windows opens the rest.
+        let pidl = Pidl(link.GetIDList().ok().filter(|p| !p.is_null())?);
+        let pc = pidl_from(&Location::ThisPc)?;
+        ILIsEqual(pidl.0, pc.0).as_bool().then_some((Location::ThisPc, true))
     }
 }
 
@@ -562,7 +646,7 @@ impl DropTarget {
             if let Some(old) = old {
                 let _ = old.DragLeave();
             }
-            let folder = dir.as_ref().and_then(|d| ui_object::<IDropTarget>(self.owner, std::slice::from_ref(d)).ok());
+            let folder = dir.as_ref().and_then(|d| ui_object_at::<IDropTarget>(self.owner, d).ok());
             let entered = folder.filter(|f| f.DragEnter(data.as_ref(), keys, *pt, effect).is_ok());
             if entered.is_none() {
                 *effect = DROPEFFECT_NONE;

@@ -15,10 +15,11 @@ use std::ffi::{OsStr, OsString};
 
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
 use windows::Win32::Graphics::Gdi::InvalidateRect;
+use windows::Win32::Storage::FileSystem::FILE_ATTRIBUTE_HIDDEN;
 use windows::Win32::UI::Controls::{
     HDI_FORMAT, HDITEMW, HDF_SORTDOWN, HDF_SORTUP, HDM_GETITEMW, HDM_SETITEMW, LIST_VIEW_ITEM_STATE_FLAGS,
     LVCF_FMT, LVCF_TEXT, LVCF_WIDTH, LVCFMT_LEFT, LVCFMT_RIGHT, LVCOLUMNW, LVIF_IMAGE, LVIF_TEXT, LVIR_BOUNDS,
-    LVIS_FOCUSED, LVIS_SELECTED, LVITEMW, LVM_EDITLABELW, LVM_ENSUREVISIBLE, LVM_GETCOLUMNWIDTH,
+    LVIS_FOCUSED, LVIS_SELECTED, LVITEMW, LVM_CANCELEDITLABEL, LVM_EDITLABELW, LVM_ENSUREVISIBLE, LVM_GETCOLUMNWIDTH,
     LVM_GETEDITCONTROL, LVM_GETHEADER, LVM_GETITEMRECT, LVM_GETNEXTITEM, LVM_GETTOPINDEX, LVM_INSERTCOLUMNW,
     LVM_SCROLL, LVM_SETCOLUMNWIDTH, LVM_SETEXTENDEDLISTVIEWSTYLE, LVM_SETIMAGELIST, LVM_SETITEMCOUNT,
     LVM_SETITEMSTATE, LVM_SETSELECTIONMARK, LVN_BEGINLABELEDITW, LVN_COLUMNCLICK, LVN_GETDISPINFOW,
@@ -44,7 +45,9 @@ struct Model {
     location: Location,
     items: Vec<Item>,
     view: Vec<usize>,
-    filter: Vec<u16>, // NUL-terminated
+    filter: Vec<u16>,  // NUL-terminated
+    show_hidden: bool, // hidden items are always read; they are listed only while this is on
+    total: usize,      // the items a filter would narrow down (not the hidden ones)
     key: SortKey,
     ascending: bool,
 }
@@ -100,6 +103,8 @@ impl FileList {
                 items: Vec::new(),
                 view: Vec::new(),
                 filter: vec![0],
+                show_hidden: false,
+                total: 0,
                 key: SortKey::Name,
                 ascending: true,
             }),
@@ -129,12 +134,23 @@ impl FileList {
     }
 
     pub fn set_filter(&self, filter: &OsStr) {
-        let w = wide(filter);
+        // A run of stars means one star; the matcher would try every way of splitting the name between them.
+        let mut w = wide(filter);
+        w.dedup_by(|a, b| *a == b'*' as u16 && *b == b'*' as u16);
         if self.model.borrow().filter == w {
             return;
         }
         self.update(true, |m| m.filter = w);
         self.ensure_visible(self.focused().or(Some(0))); // the old scroll position may be past the end
+    }
+
+    pub fn set_show_hidden(&self, show: bool) {
+        self.update(true, |m| m.show_hidden = show);
+        self.ensure_visible(self.focused().or(Some(0)));
+    }
+
+    pub fn show_hidden(&self) -> bool {
+        self.model.borrow().show_hidden
     }
 
     pub fn set_sort(&self, key: SortKey, ascending: bool) {
@@ -157,11 +173,19 @@ impl FileList {
     /// (or a missing) item. The ListView's selection is reset with it.
     fn update(&self, keep_selection: bool, change: impl FnOnce(&mut Model)) {
         let (names, focus) = if keep_selection { (self.selected_names(), self.focused_name()) } else { (Vec::new(), None) };
+        // The edit box remembers a row number, not a file: close it before the rows move, or Enter
+        // would rename whatever lands on that row (a navigation, a new sort or a filter under it).
+        if self.renaming() {
+            send(self.hwnd, LVM_CANCELEDITLABEL, 0, 0);
+        }
         let count = {
             let mut m = self.model.borrow_mut();
             change(&mut m);
-            let view: Vec<usize> = (0..m.items.len()).filter(|&i| matches_filter(&m.items[i], &m.filter)).collect();
-            m.view = view;
+            let m = &mut *m;
+            let listed: Vec<usize> =
+                (0..m.items.len()).filter(|&i| m.show_hidden || m.items[i].attrs & FILE_ATTRIBUTE_HIDDEN.0 == 0).collect();
+            m.total = listed.len();
+            m.view = listed.into_iter().filter(|&i| matches_filter(&m.items[i], &m.filter)).collect();
             m.view.len()
         };
         self.set_state(None, LIST_VIEW_ITEM_STATE_FLAGS(0), LIST_VIEW_ITEM_STATE_FLAGS(LVIS_SELECTED.0 | LVIS_FOCUSED.0));
@@ -183,8 +207,9 @@ impl FileList {
     pub fn count(&self) -> usize {
         self.model.borrow().view.len()
     }
+    /// The items a filter would narrow down (not the hidden ones).
     pub fn total(&self) -> usize {
-        self.model.borrow().items.len()
+        self.model.borrow().total
     }
     pub fn item(&self, row: usize) -> Option<Item> {
         let m = self.model.borrow();
@@ -213,8 +238,11 @@ impl FileList {
         rows
     }
 
-    pub fn selected_items(&self) -> Vec<Location> {
-        self.selection().into_iter().filter_map(|r| self.item_location(r)).collect()
+    /// With their attributes, size and date: see `shell::data_object`.
+    pub fn selected_items(&self) -> Vec<Item> {
+        let rows = self.selection();
+        let m = self.model.borrow();
+        rows.into_iter().filter_map(|r| m.view.get(r).map(|&i| m.items[i].clone())).collect()
     }
 
     pub fn selected_names(&self) -> Vec<OsString> {
@@ -235,7 +263,7 @@ impl FileList {
     /// Selects the named items (case-insensitive) and returns the row of `focus`.
     pub fn select(&self, names: &[OsString], focus: Option<&OsStr>) -> Option<usize> {
         self.set_state(None, LIST_VIEW_ITEM_STATE_FLAGS(0), LIST_VIEW_ITEM_STATE_FLAGS(LVIS_SELECTED.0 | LVIS_FOCUSED.0));
-        let (rows, focus_row, count) = {
+        let (rows, found) = {
             let m = self.model.borrow();
             let wanted: HashSet<Vec<u16>> = names.iter().map(|n| to_lower(n)).collect();
             let focus = focus.map(to_lower);
@@ -252,17 +280,24 @@ impl FileList {
                     }
                 }
             }
-            (rows, focus_row, m.view.len())
+            (rows, focus_row)
         };
         for row in rows {
             self.set_state(Some(row), LVIS_SELECTED, LVIS_SELECTED);
         }
-        // Something always has keyboard focus, so arrow keys work right away.
-        if let Some(key_row) = focus_row.or((count > 0).then_some(0)) {
-            self.set_state(Some(key_row), LVIS_FOCUSED, LVIS_FOCUSED);
-            send(self.hwnd, LVM_SETSELECTIONMARK, 0, key_row as isize);
+        self.focus_row(found.unwrap_or(0)); // something always has keyboard focus, so arrow keys work right away
+        found
+    }
+
+    /// Gives `row` the keyboard focus (the selection stays); returns it, or None if there is no such row.
+    pub fn focus_row(&self, row: usize) -> Option<usize> {
+        if row >= self.count() {
+            return None;
         }
-        focus_row
+        self.set_state(None, LIST_VIEW_ITEM_STATE_FLAGS(0), LVIS_FOCUSED);
+        self.set_state(Some(row), LVIS_FOCUSED, LVIS_FOCUSED);
+        send(self.hwnd, LVM_SETSELECTIONMARK, 0, row as isize);
+        Some(row)
     }
 
     pub fn select_all(&self) {

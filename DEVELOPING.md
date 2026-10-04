@@ -105,5 +105,5 @@ test that fails, then fix it.
   with CRLF in the working folder).
 - 4-space indent, lines up to about 120 columns, members end in `_`. Comments
   say why, not what.
-- `rust/` is the earlier Rust version, kept for reference. Only the C++ version
-  gets new work.
+- `rust/` is the same program in Rust, level with the C++ version since 5 October
+  2026 (same features, same self-test steps). The C++ version is the main one.

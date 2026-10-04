@@ -5,6 +5,7 @@
 #![windows_subsystem = "windows"]
 
 mod app;
+mod crashlog;
 mod filelist;
 mod folder;
 mod selftest;
@@ -12,8 +13,10 @@ mod shell;
 mod tree;
 mod util;
 
+use windows::Win32::System::Diagnostics::Debug::{SEM_FAILCRITICALERRORS, SetErrorMode};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
-use windows::Win32::System::Ole::{OleInitialize, OleUninitialize};
+use windows::Win32::System::Ole::{OleFlushClipboard, OleInitialize, OleUninitialize};
+use windows::Win32::System::SystemInformation::GetSystemDirectoryW;
 use windows::Win32::UI::Controls::{
     ICC_BAR_CLASSES, ICC_LISTVIEW_CLASSES, ICC_STANDARD_CLASSES, ICC_TAB_CLASSES, ICC_TREEVIEW_CLASSES,
     INITCOMMONCONTROLSEX, InitCommonControlsEx,
@@ -24,7 +27,7 @@ use std::ffi::OsString;
 
 use windows::Win32::UI::WindowsAndMessaging::{MB_ICONINFORMATION, MB_ICONWARNING, MessageBoxW};
 
-use crate::util::{pcwstr, wide};
+use crate::util::{from_wide, pcwstr, wide};
 
 const USAGE: &str = "Usage: qoqdir [switches] [folders...]\n\
 \n\
@@ -44,17 +47,17 @@ Examples:\n\
 pub const APP_NAME: &str = "Qoqdir";
 
 fn main() {
-    // A bug stops the app (panic = "abort"); leave a note saying where, since there is no console.
-    std::panic::set_hook(Box::new(|info| {
-        use std::io::Write;
-        let trace = std::backtrace::Backtrace::force_capture();
-        let log = std::env::temp_dir().join(format!("{}-crash.log", APP_NAME.to_lowercase()));
-        if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(log) {
-            let _ = writeln!(f, "{info}\n\n{trace}\n");
-        }
-    }));
+    crashlog::install();
+    unsafe {
+        SetErrorMode(SEM_FAILCRITICALERRORS); // a drive without a disk fails quietly, not with Windows' "No Disk" box
+    }
     let args: Vec<OsString> = std::env::args_os().skip(1).collect();
-    let mut cmd = folder::parse_command_line(&args);
+    let mut cmd = folder::parse_command_line(&args); // "qoqdir ." is resolved here, against the terminal's folder
+    // Then leave it: a program's working folder cannot be renamed, deleted or ejected. Explorer's is System32.
+    let mut system = [0u16; 260];
+    if unsafe { GetSystemDirectoryW(Some(&mut system)) } > 0 {
+        let _ = std::env::set_current_dir(from_wide(&system));
+    }
     if cmd.help || cmd.error.is_some() {
         // There is no console, so the help is a small window.
         let text = match &cmd.error {
@@ -95,10 +98,11 @@ fn main() {
                     DispatchMessageW(&msg);
                 }
                 shell_ref.wait_for_shell(); // let background copies and Properties dialogs finish
-                app.exit_code.get()
+                if self_test { app.exit_code.get() } else { 0 }
             }
             None => 1,
         };
+        let _ = OleFlushClipboard(); // files copied here stay pasteable after the app has closed (nothing to do otherwise)
         OleUninitialize();
         code
     };

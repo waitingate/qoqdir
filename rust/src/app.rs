@@ -11,12 +11,15 @@
 
 use std::cell::{Cell, RefCell};
 use std::ffi::{OsStr, OsString};
+use std::os::windows::ffi::OsStrExt;
 use std::path::PathBuf;
 use std::rc::{Rc, Weak};
+use std::sync::atomic::{AtomicU32, Ordering};
 
-use windows::Win32::Foundation::{COLORREF, HINSTANCE, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
+use windows::Win32::Foundation::{COLORREF, ERROR_OPERATION_ABORTED, HINSTANCE, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
 use windows::Win32::Graphics::Gdi::{
-    ClientToScreen, CreateFontIndirectW, CreateSolidBrush, InvalidateRect, GetDC, GetTextMetricsW, ReleaseDC, ScreenToClient, SelectObject, TEXTMETRICW,
+    ClientToScreen, CreateFontIndirectW, CreateSolidBrush, InvalidateRect, GetDC, GetTextMetricsW, MONITOR_DEFAULTTONULL,
+    MonitorFromRect, ReleaseDC, ScreenToClient, SelectObject, TEXTMETRICW,
 };
 use windows::Win32::Storage::FileSystem::CreateDirectoryW;
 use windows::Win32::System::Diagnostics::Debug::MessageBeep;
@@ -25,7 +28,7 @@ use windows::Win32::System::LibraryLoader::GetModuleFileNameW;
 use windows::Win32::System::Ole::{IDropTarget, RegisterDragDrop, RevokeDragDrop};
 use windows::Win32::System::WindowsProgramming::{GetPrivateProfileStringW, WritePrivateProfileStringW};
 use windows::Win32::UI::Controls::{
-    EM_SETCUEBANNER, EM_SETSEL, LVIR_LABEL, LVIS_SELECTED, LVITEMW, LVM_CANCELEDITLABEL,
+    EM_GETSEL, EM_REPLACESEL, EM_SETCUEBANNER, EM_SETSEL, LVIR_LABEL, LVIS_SELECTED, LVITEMW, LVM_CANCELEDITLABEL,
     LVHITTESTINFO, LVM_GETITEMRECT, LVM_HITTEST, LVM_SETITEMSTATE, LVN_BEGINDRAG, LVN_BEGINRDRAG, LVN_ENDLABELEDITW, LVN_ITEMACTIVATE,
     LVM_SETBKCOLOR, LVM_SETTEXTBKCOLOR, TVM_SETBKCOLOR, LVN_ITEMCHANGED, LVN_ODSTATECHANGED, NM_RCLICK, NMHDR, NMLVDISPINFOW, SB_SETPARTS, SB_SETTEXTW,
     TCHITTESTINFO, TCIF_TEXT, TCITEMW, TCM_DELETEALLITEMS, TCM_GETCURSEL, TCM_HITTEST, TCM_INSERTITEMW,
@@ -47,7 +50,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
     SetWindowLongPtrW, SetWindowPlacement, SetWindowPos, SetWindowTextW, ShowWindow, TPM_RETURNCMD,
     TPM_RIGHTBUTTON, TrackPopupMenuEx, WINDOW_EX_STYLE, WINDOW_STYLE, WINDOWPLACEMENT, WM_ACTIVATE, WM_APP,
     WM_APPCOMMAND, WM_CAPTURECHANGED, WM_CHAR, WM_CLOSE, WM_COMMAND, WM_CONTEXTMENU, WM_DESTROY, WM_DEVICECHANGE,
-    WM_DPICHANGED, WM_DRAWITEM, WM_GETMINMAXINFO, WM_INITMENUPOPUP, WM_KEYDOWN, WM_LBUTTONDOWN, WM_LBUTTONUP,
+    WM_DPICHANGED, WM_DRAWITEM, WM_ENDSESSION, WM_GETMINMAXINFO, WM_INITMENUPOPUP, WM_KEYDOWN, WM_LBUTTONDOWN, WM_LBUTTONUP,
     WM_MBUTTONUP, WM_MEASUREITEM, WM_MENUCHAR, WM_MOUSEMOVE, WM_NOTIFY, WM_SETCURSOR, WM_SETFONT, WM_SIZE,
     WM_SYSKEYDOWN, WM_TIMER, WNDCLASSEXW, WS_CHILD, WS_CLIPCHILDREN, WS_EX_CLIENTEDGE, WS_OVERLAPPEDWINDOW,
     WS_TABSTOP, WS_VISIBLE,
@@ -56,11 +59,14 @@ use windows::core::{PCWSTR, PWSTR, w};
 
 use crate::filelist::FileList;
 use crate::APP_NAME;
-use crate::folder::{CommandLine, Listing, Location, SortKey, byte_size, extension_of, is_shortcut, list_folder, normalize};
+use crate::folder::{
+    CommandLine, Listing, Location, SortKey, byte_size, expand_vars, extension_of, is_relative_path, is_shortcut,
+    list_folder, normalize, row_after_deleting,
+};
 use crate::selftest::SelfTest;
 use crate::shell::{
     FolderWatch, IconBatch, acknowledge_change, has_own_icon, read_own_icons, remember_icons, background_menu, copy_to_clipboard, delete_items, drag_out,
-    shortcut_target, forward_menu_message, invoke_verb, item_menu, known_folder, new_drop_target, open_file,
+    shortcut_target, forward_menu_message, invoke_verb, item_menu, item_menu_at, known_folder, new_drop_target, open_file,
     paste_into, rename_item, run_command, show_menu,
 };
 use crate::tree::{FolderTree, TreeBatch};
@@ -93,8 +99,13 @@ pub const TIMER_SELFTEST: usize = 50;
 const MAX_HISTORY: usize = 100;
 /// Soft gray (#EBEBEB): less glare than white.
 const BACKGROUND: COLORREF = COLORREF(0x00EBEBEB);
+const SPLITTER_WIDTH: i32 = 5; // in 96-DPI units
 const EN_CHANGE: u32 = 0x0300;
 const BN_CLICKED: u32 = 0;
+
+/// The newest folder load's generation, for the load threads: one that a newer load has replaced stops reading
+/// (4.2). Not a field: a detached thread can outlive the window.
+static NEWEST_LOAD: AtomicU32 = AtomicU32::new(0);
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Nav {
@@ -111,12 +122,19 @@ pub struct ViewState {
     pub select: Vec<OsString>,
     pub focus: Option<OsString>,
     pub top: Option<usize>,
-    pub rename: bool, // start renaming `focus`
+    pub focus_row: Option<usize>, // where `focus` was: when it is gone, the item in its place takes the focus
+    pub rename: bool,             // start renaming `focus`
 }
 
 impl ViewState {
-    fn selecting(name: OsString) -> ViewState {
+    pub fn selecting(name: impl Into<OsString>) -> ViewState {
+        let name = name.into();
         ViewState { select: vec![name.clone()], focus: Some(name), ..Default::default() }
+    }
+
+    /// For an item, as a rename or new folder does.
+    fn asks(&self) -> bool {
+        !self.select.is_empty() || self.focus.is_some()
     }
 }
 
@@ -125,8 +143,8 @@ pub struct Tab {
     pub location: Location,
     pub back: Vec<Location>,
     pub forward: Vec<Location>,
-    view: ViewState,   // remembered while the tab is in the background
-    unavailable: bool, // its folder failed to load: no drops onto it until it loads again
+    view: ViewState,       // remembered while the tab is in the background
+    pub unavailable: bool, // not loaded here yet, or failed: no drops onto it (asking Windows could freeze)
 }
 
 /// Where a load was started from, when that changes what happens if it is not a folder.
@@ -140,11 +158,11 @@ pub enum Origin {
 
 struct Pending {
     generation: u32,
-    location: Location,
     nav: Nav,
     view: ViewState,
     tab_id: u32,
     origin: Origin,
+    filter: OsString, // the filter box before this load cleared it: a failed one puts it back
 }
 
 pub struct State {
@@ -152,8 +170,11 @@ pub struct State {
     pub active: usize,
     next_tab_id: u32,
     pending: Option<Pending>,
+    // Kept by refresh() while a load is pending: what a delete, rename or new folder wanted selected, in
+    // that folder. The queued refresh applies it if the folder is still shown.
+    pub queued_view: Option<(Location, ViewState)>,
     rename: Option<(PathBuf, OsString)>, // done after the edit box has closed
-    watch: Option<FolderWatch>,
+    pub watch: Option<FolderWatch>,
     last_focus: Option<HWND>,
 }
 
@@ -190,10 +211,11 @@ pub struct App {
     splitter_x: Cell<i32>,
     dragging: Cell<bool>,       // moving the tree/list splitter
     dragging_files: Cell<bool>, // a drag started from our own list is in progress
-    refresh_queued: Cell<bool>,
+    pub refresh_queued: Cell<bool>,
     load_message_shown: Cell<bool>, // "Loading..." or "not available": cleared when a folder loads
-    show_hidden: Cell<bool>,
     pub generation: Cell<u32>,
+    pub loads_done: Cell<u32>,   // folder reads that reported back (self-test)
+    pub loads_wasted: Cell<u32>, // ...of which a newer load had replaced, yet they read the whole folder (self-test)
     use_settings: bool,
     ini: Vec<u16>, // settings file
     pub st: RefCell<State>,
@@ -219,6 +241,38 @@ fn set_text(h: HWND, text: impl AsRef<OsStr>) {
     unsafe {
         let _ = SetWindowTextW(h, pcwstr(&w));
     }
+}
+
+/// With its text selected, ready to be typed over or corrected.
+fn focus_edit(edit: HWND) {
+    unsafe {
+        let _ = SetFocus(Some(edit));
+    }
+    send(edit, EM_SETSEL, 0, -1);
+}
+
+/// Ctrl+Backspace as in Explorer's boxes: deletes the selection, or else the word before the cursor.
+/// A plain edit box would type a box character instead.
+fn delete_word_before(edit: HWND) {
+    let (mut start, mut end) = (0u32, 0u32);
+    send(edit, EM_GETSEL, &mut start as *mut _ as usize, &mut end as *mut _ as isize);
+    let text: Vec<u16> = window_text(edit).encode_wide().collect();
+    let space = |i: u32| char::from_u32(u32::from(text[i as usize - 1])).is_some_and(char::is_whitespace);
+    if start == end {
+        while start > 0 && space(start) {
+            start -= 1;
+        }
+        while start > 0 && !space(start) {
+            start -= 1;
+        }
+    }
+    send(edit, EM_SETSEL, start as usize, end as isize);
+    send(edit, EM_REPLACESEL, 1, wide("").as_ptr() as isize);
+}
+
+/// A shortcut's target that opens in a tab: a folder path, or This PC. Anything else is for Windows.
+fn opens_in_tab(target: &Location) -> bool {
+    target.path().is_none_or(|p| p.is_absolute())
 }
 
 /// Middle-click closes a tab.
@@ -327,7 +381,7 @@ impl App {
                 _ => exe.with_file_name("Bookmarks"),
             };
             let _ = std::fs::create_dir(&bookmarks); // fails harmlessly if it exists
-            let tree = FolderTree::create(wnd, ID_TREE, WM_APP_TREE, Location::dir(bookmarks));
+            let tree = FolderTree::create(wnd, ID_TREE, WM_APP_TREE, WM_APP_ICONS, Location::dir(bookmarks));
             let list = FileList::create(wnd, ID_LIST);
             const SBARS_SIZEGRIP: u32 = 0x100;
             let status = make(w!("msctls_statusbar32"), w!(""), SBARS_SIZEGRIP, 0, ID_STATUS);
@@ -359,8 +413,9 @@ impl App {
                 dragging_files: Cell::new(false),
                 refresh_queued: Cell::new(false),
                 load_message_shown: Cell::new(false),
-                show_hidden: Cell::new(false),
                 generation: Cell::new(0),
+                loads_done: Cell::new(0),
+                loads_wasted: Cell::new(0),
                 use_settings,
                 ini,
                 st: RefCell::new(State {
@@ -368,12 +423,13 @@ impl App {
                     active: 0,
                     next_tab_id: 1,
                     pending: None,
+                    queued_view: None,
                     rename: None,
                     watch: None,
                     last_focus: None,
                 }),
                 selftest: RefCell::new(None),
-                exit_code: Cell::new(0),
+                exit_code: Cell::new(1), // a self-test that never finishes (closed by hand, no window) has not passed
             });
             SetWindowLongPtrW(wnd, GWLP_USERDATA, Rc::as_ptr(&app) as isize);
 
@@ -500,7 +556,7 @@ impl App {
             place(self.plus, w - btn - pad, y + (tab_h - row) / 2, btn, row);
             y += tab_h;
 
-            let split_w = scale(5, dpi);
+            let split_w = scale(SPLITTER_WIDTH, dpi);
             let tree_w = scale(self.tree_width.get(), dpi).clamp(scale(80, dpi), scale(80, dpi).max(w - scale(200, dpi)));
             let body_h = h - status_h - y;
             place(self.tree.hwnd(), 0, y, tree_w, body_h);
@@ -582,19 +638,16 @@ impl App {
                 }
                 WM_APP_CHANGED => {
                     acknowledge_change(wp, lp);
-                    // At most one refresh per interval, even while a folder changes nonstop.
-                    if !self.refresh_queued.replace(true) {
-                        SetTimer(Some(self.wnd), TIMER_REFRESH, 400, None);
-                    }
+                    self.queue_refresh();
                     return LRESULT(0);
                 }
                 WM_APP_ICONS => {
                     let batch = Box::from_raw(lp.0 as *mut IconBatch);
-                    let visible = self.list.location().same(&batch.dir);
-                    remember_icons(*batch);
-                    if visible {
+                    remember_icons(&batch);
+                    if self.list.location().same(&batch.dir) {
                         let _ = InvalidateRect(Some(self.list.hwnd()), None, false);
                     }
+                    self.tree.set_icons(&batch); // bookmark shortcuts get their own icons the same way
                     return LRESULT(0);
                 }
                 WM_APP_TREE => {
@@ -637,10 +690,10 @@ impl App {
                     const DBT_DEVTYP_VOLUME: u32 = 2;
                     let volume = lp.0 != 0 && *((lp.0 as *const u32).add(1)) == DBT_DEVTYP_VOLUME;
                     if (wp.0 == DBT_DEVICEARRIVAL || wp.0 == DBT_DEVICEREMOVECOMPLETE) && volume {
-                        self.tree.fill();
-                        if matches!(self.location(), Location::ThisPc) && !self.is_loading() {
-                            self.refresh(ViewState::default());
-                        }
+                        self.tree.refresh_drives(); // only This PC changes; the rest of the tree stays as the user left it
+                        // This PC lists the drives, and a tab's folder may sit on the drive that went: its
+                        // own watch cannot tell, since the event names the drive root, not a folder below it.
+                        self.queue_refresh();
                     }
                     return LRESULT(1);
                 }
@@ -649,17 +702,14 @@ impl App {
                         let mut p = POINT::default();
                         let _ = GetCursorPos(&mut p);
                         let _ = ScreenToClient(self.wnd, &mut p);
-                        let sx = self.splitter_x.get();
-                        if p.x >= sx && p.x < sx + scale(5, dpi) {
+                        if self.over_splitter(p.x) {
                             SetCursor(LoadCursorW(None, IDC_SIZEWE).ok());
                             return LRESULT(1);
                         }
                     }
                 }
                 WM_LBUTTONDOWN => {
-                    let x = point_from(lp).x;
-                    let sx = self.splitter_x.get();
-                    if x >= sx && x < sx + scale(5, dpi) {
+                    if self.over_splitter(point_from(lp).x) {
                         self.dragging.set(true);
                         SetCapture(self.wnd);
                     }
@@ -682,6 +732,13 @@ impl App {
                     self.dragging.set(false);
                     return LRESULT(0);
                 }
+                WM_ENDSESSION => {
+                    // Shutdown or sign-out ends the process without a WM_CLOSE: save here too (5.11).
+                    if wp.0 != 0 {
+                        self.save_settings();
+                    }
+                    return LRESULT(0);
+                }
                 WM_CLOSE => {
                     self.save_settings();
                     let _ = DestroyWindow(self.wnd);
@@ -701,6 +758,21 @@ impl App {
         }
     }
 
+    fn over_splitter(&self, x: i32) -> bool {
+        let sx = self.splitter_x.get();
+        x >= sx && x < sx + scale(SPLITTER_WIDTH, self.dpi.get())
+    }
+
+    /// At most one refresh per interval, even while a folder changes nonstop. The timer waits
+    /// while a rename or a load is in progress (on_timer), so it disturbs neither.
+    pub fn queue_refresh(&self) {
+        if !self.refresh_queued.replace(true) {
+            unsafe {
+                SetTimer(Some(self.wnd), TIMER_REFRESH, 400, None);
+            }
+        }
+    }
+
     fn on_timer(&self, id: usize) {
         unsafe {
             match id {
@@ -710,7 +782,14 @@ impl App {
                     if !self.list.renaming() && !self.is_loading() {
                         let _ = KillTimer(Some(self.wnd), TIMER_REFRESH);
                         self.refresh_queued.set(false);
-                        self.refresh(ViewState::default());
+                        // The item a delete, rename or new folder wanted selected, unless another folder is shown
+                        // by now. A tab shown as not available waits for F5 (4.3), even if this refresh was
+                        // queued before it failed.
+                        let queued = self.st.borrow_mut().queued_view.take();
+                        if !self.with_tab(|t| t.unavailable) {
+                            let shown = self.list.location();
+                            self.refresh(queued.filter(|(dir, _)| dir.same(&shown)).map(|(_, view)| view).unwrap_or_default());
+                        }
                     }
                 }
                 TIMER_STATUS => {
@@ -782,7 +861,7 @@ impl App {
                     let items = self.list.selected_items();
                     if !items.is_empty() {
                         self.dragging_files.set(true);
-                        drag_out(self.wnd, &items);
+                        drag_out(self.wnd, &self.list.location(), &items);
                         self.dragging_files.set(false);
                     }
                 }
@@ -826,35 +905,45 @@ impl App {
                 }
             }
             let rows = self.list.selection();
+            // The menu is modal and a folder load can land while it is open: the app's own commands (paste, rename,
+            // delete, open here) then do nothing. Windows' own (Copy, Properties...) act on the menu's own items.
+            let dir = self.list.location();
+            let names = self.list.selected_names();
             if rows.is_empty() {
                 // The folder's own menu, with Paste; none when the list shows no folder.
-                let location = self.list.location();
-                if matches!(location, Location::Dir(_))
-                    && let Some(cm) = background_menu(self.wnd, &location)
+                if matches!(dir, Location::Dir(_))
+                    && let Some(cm) = background_menu(self.wnd, &dir)
                 {
-                    show_menu(self.wnd, &cm, pt, &mut |_| false, Some(&|shortcuts| paste_into(self.wnd, &location, shortcuts)));
+                    let paste = |shortcuts| {
+                        if self.list.location().same(&dir) {
+                            paste_into(self.wnd, &dir, shortcuts);
+                        }
+                    };
+                    show_menu(self.wnd, &cm, pt, &mut |_| false, Some(&paste));
                 }
                 return;
             }
-            // Folders (and a shortcut's folder) open here, not in a separate Explorer window.
-            let opens_here = rows.iter().all(|&r| self.list.item(r).is_some_and(|i| i.is_dir()))
-                || (rows.len() == 1 && self.list.item(rows[0]).is_some_and(|i| is_shortcut(&i.name)));
-            let Some(cm) = item_menu(self.wnd, &self.list.selected_items()) else { return };
+            // With a folder or shortcut among them, activate opens them all (folders here, files with Windows).
+            let opens_here = rows.iter().any(|&r| self.list.item(r).is_some_and(|i| i.is_dir() || is_shortcut(&i.name)));
+            let Some(cm) = item_menu(self.wnd, &dir, &self.list.selected_items()) else { return };
             show_menu(self.wnd, &cm, pt, &mut |verb| {
                 let is = |name: &str| verb.eq_ignore_ascii_case(name);
+                let open = is("open") || is("explore");
+                let in_new_tab = is("opennewtab") || is("opennewwindow");
+                if !is("rename") && !is("delete") && !(opens_here && (open || in_new_tab)) {
+                    return false;
+                }
+                if !self.list.location().same(&dir) || self.list.selected_names() != names {
+                    return true; // changed: do nothing
+                }
                 if is("rename") {
                     self.list.rename(self.list.focused().or(rows.first().copied()));
-                    return true;
+                } else if is("delete") {
+                    self.delete_selection(key_down(VK_SHIFT)); // like the Delete key (4.6)
+                } else {
+                    self.activate(in_new_tab);
                 }
-                if opens_here && (is("open") || is("explore")) {
-                    self.activate(false);
-                    return true;
-                }
-                if opens_here && (is("opennewtab") || is("opennewwindow")) {
-                    self.activate(true);
-                    return true;
-                }
-                false
+                true
             }, None);
             return;
         }
@@ -867,15 +956,17 @@ impl App {
                 }
                 pt = POINT { x: r.left + scale(24, self.dpi.get()), y: r.top + scale(24, self.dpi.get()) };
             }
-            let Some(cm) = item_menu(self.wnd, std::slice::from_ref(&location)) else { return };
+            let Some(cm) = item_menu_at(self.wnd, &location) else { return };
             show_menu(self.wnd, &cm, pt, &mut |verb| {
                 let is = |name: &str| verb.eq_ignore_ascii_case(name);
                 if is("open") || is("explore") {
                     self.open_node(location.clone(), false);
                 } else if is("opennewtab") || is("opennewwindow") {
                     self.open_node(location.clone(), true);
+                } else if is("rename") {
+                    self.rename_node(location.clone());
                 } else {
-                    return is("rename"); // renaming is done in the file list
+                    return false;
                 }
                 true
             }, None);
@@ -945,7 +1036,10 @@ impl App {
             return false; // the rename box handles its own keys
         }
         let (focus, list) = (key.focus, self.list.hwnd());
-        let (ctrl, shift, alt) = (key.ctrl, key.shift, key.alt);
+        let (mut ctrl, shift, mut alt) = (key.ctrl, key.shift, key.alt);
+        if ctrl && alt {
+            (ctrl, alt) = (false, false); // AltGr reads as Ctrl+Alt and types a character; no shortcut uses both
+        }
 
         if key.message == WM_CHAR {
             // Typing in the file list filters it.
@@ -966,12 +1060,6 @@ impl App {
         let letter = |c: u8| k == c as u16;
         let tab_count = self.st.borrow().tabs.len();
         let active = self.st.borrow().active;
-        let focus_edit = |edit: HWND| {
-            unsafe {
-                let _ = SetFocus(Some(edit));
-            }
-            send(edit, EM_SETSEL, 0, -1);
-        };
 
         // Anywhere in the window.
         if ctrl && letter(b'T') {
@@ -1004,10 +1092,9 @@ impl App {
             return true;
         }
         if ctrl && letter(b'H') {
-            let hidden = !self.show_hidden.get();
-            self.show_hidden.set(hidden);
-            self.set_message(if hidden { "Showing hidden files" } else { "Hiding hidden files" });
-            self.reload();
+            // Hidden items are always read: the list just shows or hides them.
+            self.list.set_show_hidden(!self.list.show_hidden());
+            self.set_message(if self.list.show_hidden() { "Showing hidden files" } else { "Hiding hidden files" });
             return true;
         }
         if alt && is(VK_LEFT) {
@@ -1023,7 +1110,7 @@ impl App {
             return true;
         }
         if alt && is(VK_RETURN) && focus == list {
-            invoke_verb(self.wnd, item_menu(self.wnd, &self.list.selected_items()), "properties");
+            invoke_verb(self.wnd, item_menu(self.wnd, &self.list.location(), &self.list.selected_items()), "properties");
             return true;
         }
         if is(VK_TAB) && !ctrl && !alt {
@@ -1067,7 +1154,13 @@ impl App {
                 self.focus_list();
                 return true;
             }
+            if ctrl && is(VK_BACK) {
+                delete_word_before(self.filter);
+                return true;
+            }
             if is(VK_RETURN) {
+                // Opens the highlighted item only (5.4), even if other matches are still selected.
+                self.list.select(&[], self.list.focused_name().as_deref());
                 self.focus_list();
                 self.activate(ctrl);
                 return true;
@@ -1108,10 +1201,15 @@ impl App {
             }
             if ctrl && (letter(b'C') || letter(b'X')) {
                 let items = self.list.selected_items();
-                if !items.is_empty() {
-                    let cut = letter(b'X');
-                    copy_to_clipboard(self.wnd, &items, cut);
+                let cut = letter(b'X');
+                if items.is_empty() {
+                    return true;
+                }
+                if copy_to_clipboard(self.wnd, &self.list.location(), &items, cut) {
                     self.set_message(&format!("{} item(s) {}", items.len(), if cut { "cut" } else { "copied" }));
+                } else {
+                    self.set_message("Can't put the items on the clipboard");
+                    self.warn();
                 }
                 return true;
             }
@@ -1150,28 +1248,43 @@ impl App {
         if self.list.renaming() {
             send(self.list.hwnd(), LVM_CANCELEDITLABEL, 0, 0);
         }
+        // A new folder starts unfiltered (5.4): cleared now, so letters typed while it loads filter it.
+        let filter = window_text(self.filter);
+        if nav != Nav::Refresh && !filter.is_empty() {
+            set_text(self.filter, "");
+        }
         let generation = self.generation.get() + 1;
         self.generation.set(generation);
+        NEWEST_LOAD.store(generation, Ordering::SeqCst);
         {
             let mut st = self.st.borrow_mut();
             let tab_id = st.tabs[st.active].id;
-            st.pending = Some(Pending { generation, location: location.clone(), nav, view, tab_id, origin });
+            st.pending = Some(Pending { generation, nav, view, tab_id, origin, filter });
         }
         unsafe {
             SetTimer(Some(self.wnd), TIMER_LOADING, 250, None); // say "Loading..." only if it is slow
         }
+        if nav == Nav::Switch {
+            // The tab strip already shows the new tab: show its location at once instead of the old tab's list
+            // and address until its folder loads. Meanwhile the list has no folder, so paste, new folder, menus
+            // and drops have nothing to act on (the same mechanism as an unavailable folder).
+            self.list.set_listing(Listing { location: Location::ThisPc, items: Vec::new(), error: None, is_file: false });
+            self.show_location(nav);
+            self.show_status();
+        }
         let wnd = self.wnd.0 as usize; // HWND is just a handle; the thread only posts to it
-        let hidden = self.show_hidden.get();
         std::thread::spawn(move || unsafe {
             let co = CoInitializeEx(None, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE);
-            let listing = list_folder(&location, hidden);
+            let replaced = || NEWEST_LOAD.load(Ordering::SeqCst) != generation;
+            // Hidden items too: Ctrl+H only shows or hides them.
+            let listing = list_folder(&location, true, Some(&replaced));
             let own: Vec<OsString> = listing.items.iter().filter(|it| has_own_icon(it)).map(|it| it.name.clone()).collect();
             let result = Box::into_raw(Box::new(listing));
             if PostMessageW(Some(HWND(wnd as _)), WM_APP_LOADED, WPARAM(generation as usize), LPARAM(result as isize)).is_err() {
                 drop(Box::from_raw(result)); // the window is gone
             }
             // Then the icons that need a disk (or network) lookup, so they never hold up the list.
-            if !own.is_empty() {
+            if !own.is_empty() && !replaced() {
                 let icons = Box::into_raw(Box::new(read_own_icons(&location, own)));
                 if PostMessageW(Some(HWND(wnd as _)), WM_APP_ICONS, WPARAM(0), LPARAM(icons as isize)).is_err() {
                     drop(Box::from_raw(icons));
@@ -1184,16 +1297,14 @@ impl App {
     }
 
     fn on_loaded(&self, listing: Listing, generation: u32) {
-        if generation != self.generation.get() {
-            return; // superseded by a newer request
-        }
-        let pending = {
-            let mut st = self.st.borrow_mut();
-            let pending = st.pending.take();
-            match pending {
-                Some(p) if p.generation == generation && st.tabs[st.active].id == p.tab_id => p,
-                _ => return,
+        self.loads_done.set(self.loads_done.get() + 1);
+        let pending = self.st.borrow_mut().pending.take_if(|p| p.generation == generation);
+        let Some(pending) = pending else {
+            // Superseded by a newer request.
+            if !listing.error.as_ref().is_some_and(|e| e.code() == ERROR_OPERATION_ABORTED.to_hresult()) {
+                self.loads_wasted.set(self.loads_wasted.get() + 1);
             }
+            return;
         };
         unsafe {
             let _ = KillTimer(Some(self.wnd), TIMER_LOADING);
@@ -1201,16 +1312,37 @@ impl App {
         if self.load_message_shown.replace(false) {
             self.set_message(""); // any load, not only navigation, may have shown it
         }
+        if self.with_tab(|t| t.id) != pending.tab_id {
+            return;
+        }
+        if pending.nav == Nav::Refresh && self.list.renaming() {
+            // 4.2: a refresh never interrupts a rename. The box opened after this load started
+            // (open() closes any box it finds), so drop the result and retry once the box has closed,
+            // as the timer does; applying it would move the rows under the box, and Enter would
+            // rename whatever row sits there now. What it was asked to select (a new folder, a renamed item)
+            // is kept for that retry, unless a newer request is queued already (refresh() during this load).
+            let shown = self.list.location();
+            {
+                let mut st = self.st.borrow_mut();
+                if pending.view.asks() && st.queued_view.is_none() {
+                    st.queued_view = Some((shown, pending.view));
+                }
+            }
+            self.queue_refresh();
+            return;
+        }
 
         if let Some(error) = &listing.error {
-            return self.on_load_failed(&listing, error, &pending);
+            return self.on_load_failed(&listing, &error.message(), &pending);
         }
 
         let same_folder = self.list.location().same(&listing.location);
         let moved = matches!(pending.nav, Nav::New | Nav::Back | Nav::Forward);
         let mut view = pending.view;
+        // An item a rename, delete or new folder asked for (a tab switch restores the scroll exactly instead).
+        let requested = pending.nav == Nav::Refresh && view.asks();
         if pending.nav == Nav::Refresh && same_folder {
-            if view.select.is_empty() && view.focus.is_none() {
+            if !view.asks() {
                 view = self.current_view();
             }
             if view.top.is_none() {
@@ -1244,22 +1376,27 @@ impl App {
             t.unavailable = false;
             old
         });
-        if moved && view.select.is_empty() && view.focus.is_none() {
+        if moved && !view.asks() {
             // Going up (or back to a parent) selects the folder you came from.
             if let Some(child) = listing.location.child_toward(&old) {
                 view = ViewState::selecting(child);
             }
         }
-        if !(pending.nav == Nav::Refresh && same_folder) && !window_text(self.filter).is_empty() {
-            set_text(self.filter, "");
-        }
 
         let location = listing.location.clone();
         self.list.set_listing(listing);
-        let row = self.list.select(&view.select, view.focus.as_deref());
-        match view.top {
-            Some(top) => self.list.scroll_to_row(top),
-            None => self.list.ensure_visible(row),
+        let mut row = self.list.select(&view.select, view.focus.as_deref());
+        if row.is_none() && !requested && self.list.count() > 0 {
+            // The focused item is gone (4.5): the item in its place takes the focus.
+            if let Some(gone) = view.focus_row {
+                row = self.list.focus_row(gone.min(self.list.count() - 1));
+            }
+        }
+        if let Some(top) = view.top {
+            self.list.scroll_to_row(top); // a refresh keeps the scroll position (4.5)...
+        }
+        if view.top.is_none() || requested {
+            self.list.ensure_visible(row); // ...but what the user just made or renamed shows
         }
         if view.rename && row.is_some() {
             self.list.rename(row);
@@ -1295,6 +1432,10 @@ impl App {
 
     /// The folder could not be read: decide what to show or do instead.
     fn on_load_failed(&self, listing: &Listing, error: &str, pending: &Pending) {
+        // A navigation that fails or opens a file leaves the folder shown: its filter comes back, unless retyped.
+        if !matches!(pending.nav, Nav::Refresh | Nav::Switch) && window_text(self.filter).is_empty() {
+            set_text(self.filter, &pending.filter);
+        }
         match (&pending.origin, &listing.location) {
             // The shortcut leads to a file: let Windows open it. (Not when its folder is unreachable:
             // Windows would only show its own error, after the same long wait.)
@@ -1307,13 +1448,10 @@ impl App {
                 set_text(self.address, self.location().text());
                 return;
             }
-            (Origin::AddressBar, _) => {
-                // Let the user correct what they typed.
-                unsafe {
-                    let _ = SetFocus(Some(self.address));
-                }
-                send(self.address, EM_SETSEL, 0, -1);
-            }
+            // Let the user correct what they typed (5.3), unless they have moved on since Enter left the focus on
+            // the list: a dead share fails a minute later, and taking the focus then would commit a half-typed
+            // rename or interrupt the filter box.
+            (Origin::AddressBar, _) if unsafe { GetFocus() } == self.list.hwnd() => focus_edit(self.address),
             _ => {}
         }
         if matches!(pending.nav, Nav::Refresh | Nav::Switch) {
@@ -1342,9 +1480,6 @@ impl App {
     /// The list gets no folder (as for This PC), so paste, new folder, menus and drops have nothing
     /// to act on: asking Windows about an unreachable folder can freeze the window for 20-40 s.
     pub fn show_unavailable(&self, location: &Location, error: &str, nav: Nav) {
-        if !window_text(self.filter).is_empty() {
-            set_text(self.filter, "");
-        }
         self.list.set_listing(Listing { location: Location::ThisPc, items: Vec::new(), error: None, is_file: false });
         self.with_tab(|t| t.unavailable = true);
         let old_watch = self.st.borrow_mut().watch.take();
@@ -1377,31 +1512,36 @@ impl App {
     pub fn refresh(&self, view: ViewState) {
         // A folder is already loading, and what it shows will be fresh: start nothing new.
         // (Refreshing the old folder would cancel it; restarting it on every held-down F5
-        // would pile up stuck threads on a slow network share.)
-        if !self.is_loading() {
-            self.open(self.location(), Nav::Refresh, view);
+        // would pile up stuck threads on a slow network share.) But that load started before
+        // the change the caller made, so what it wants selected (the new, renamed or next item)
+        // may be missing from it: keep it for a queued refresh, as after a change notification.
+        if self.is_loading() {
+            if view.asks() {
+                let shown = self.list.location();
+                self.st.borrow_mut().queued_view = Some((shown, view));
+                self.queue_refresh();
+            }
+            return;
         }
-    }
-
-    /// Like refresh, but also restarts a load in progress (e.g. after Ctrl+H).
-    fn reload(&self) {
-        let loading = self.st.borrow().pending.as_ref().map(|p| (p.location.clone(), p.nav, p.view.clone(), p.origin.clone()));
-        match loading {
-            Some((location, nav, view, origin)) => self.open_from(location, nav, view, origin),
-            None => self.refresh(ViewState::default()),
+        if view.asks() {
+            self.st.borrow_mut().queued_view = None; // newer than any request still waiting
         }
+        self.open(self.location(), Nav::Refresh, view);
     }
 
     fn go_to_typed(&self) {
         let text = window_text(self.address);
-        let mut location = normalize(&text);
-        // ".." and the name of a subfolder here open in Qoqdir (Windows would open them in Explorer).
+        let mut location = normalize(&expand_vars(&text)); // only what the user typed has its %VARS% expanded
+        // "..", a subfolder's name and anything written relative to this folder (".", ".\x", "a\b")
+        // are resolved here and checked by the loader, so they never reach Windows, which would open
+        // the folder in an Explorer window (4.4). The rest runs as a command (5.3).
+        let relative = is_relative_path(&location.text());
         let here = self.location();
         if let Location::Dir(typed) = &location {
             if typed.as_os_str() == ".." {
                 location = here.parent();
-            } else if matches!(here, Location::Dir(_)) && self.list.has_folder(typed.as_os_str()) {
-                location = Location::dir(here.join(typed.as_os_str()));
+            } else if matches!(here, Location::Dir(_)) && (relative || self.list.has_folder(typed.as_os_str())) {
+                location = normalize(here.join(typed.as_os_str()).as_os_str()); // GetFullPathName folds "." and ".." away
             }
         }
         if location.path().is_none_or(|p| p.is_absolute()) {
@@ -1411,14 +1551,19 @@ impl App {
             self.focus_list();
             return;
         }
-        let current = self.location();
-        if !run_command(self.wnd, &text, current.path()) {
-            // "cmd", "notepad", a web address... none of those either.
+        // The folder shown, not the tab's: a tab keeps an unavailable folder (4.3), but handing it to
+        // Windows as the working folder would wait on the dead server before the program starts.
+        // On This PC a relative place (".", "a\b") has no folder to be relative to: Windows would use
+        // the app's own start folder and open it in Explorer.
+        // The rest is a command: "cmd", "notepad", a web address...
+        let shown = self.list.location();
+        if (relative && matches!(here, Location::ThisPc)) || !run_command(self.wnd, &text, shown.path()) {
             self.set_message(&format!("Can't find \"{}\"", text.to_string_lossy()));
+            focus_edit(self.address); // left selected, like a bad path, so it can be corrected (5.3)
             self.warn();
             return;
         }
-        set_text(self.address, current.text());
+        set_text(self.address, here.text());
         self.focus_list();
     }
 
@@ -1441,7 +1586,17 @@ impl App {
             let (Some(it), Some(Location::Dir(path))) = (self.list.item(row), self.list.item_location(row)) else {
                 continue;
             };
-            if it.is_dir() { dirs.push(Location::dir(path)) } else { files.push(path) }
+            if it.is_dir() {
+                dirs.push(Location::dir(path));
+                continue;
+            }
+            // A shortcut that says its target is a folder counts as that folder, so it opens in a tab
+            // like the other folders (Windows would open it in Explorer); any other shortcut is a file.
+            let target = if extension_of(path.as_os_str()) == ".lnk" { shortcut_target(&path) } else { None };
+            match target {
+                Some((target, true)) if opens_in_tab(&target) => dirs.push(normalize(&target.text())), // as open_shortcut does
+                _ => files.push(path),
+            }
         }
         if files.len() > 15 {
             let text = wide(format!("Open {} files?", files.len()));
@@ -1462,17 +1617,35 @@ impl App {
         }
     }
 
-    /// A shortcut that leads to a folder shows that folder here, or in a background tab when the
+    /// A shortcut that leads to a folder (or to This PC) shows it here, or in a background tab when the
     /// shortcut says its target is a folder; Windows opens anything else. Whether the target really
     /// is a folder is found out by the folder loader on its worker thread (it may be on a network).
-    fn open_shortcut(&self, path: PathBuf, in_new_tab: bool) {
+    pub fn open_shortcut(&self, path: PathBuf, in_new_tab: bool) {
         let lnk = extension_of(path.as_os_str()) == ".lnk";
-        let target = if lnk { shortcut_target(&path).filter(|(t, _)| t.is_absolute()) } else { None };
-        match target {
-            None => open_file(self.wnd, &path), // a web link, a program...
-            Some((target, true)) if in_new_tab => self.new_tab(Location::dir(target), false),
-            Some((target, _)) => self.open_from(Location::dir(target), Nav::New, ViewState::default(), Origin::Shortcut(path)),
+        let target = if lnk { shortcut_target(&path).filter(|(t, _)| opens_in_tab(t)) } else { None };
+        let Some((target, folder)) = target else {
+            open_file(self.wnd, &path); // a web link, a program, a library...
+            return;
+        };
+        // Like every other way into a tab, the path is normalized first: a stored "D:\photos\" would
+        // otherwise give a blank caption and an Up that stays put. (String work only, no disk access.)
+        let dir = normalize(&target.text());
+        if in_new_tab && folder {
+            self.new_tab(dir, false);
+        } else {
+            self.open_from(dir, Nav::New, ViewState::default(), Origin::Shortcut(path));
         }
+    }
+
+    /// Rename on a tree node's menu: renaming is done in the file list, so the node's parent is shown with the
+    /// node selected and the rename box open.
+    pub fn rename_node(&self, location: Location) {
+        let parent = location.parent();
+        // This PC, a drive or a share: nothing to rename here.
+        let (Location::Dir(_), Some(name)) = (&parent, location.path().and_then(|p| p.file_name())) else { return };
+        let mut view = ViewState::selecting(name);
+        view.rename = true;
+        self.open(parent, Nav::New, view);
     }
 
     /// A node in the tree: a folder, or a bookmark shortcut.
@@ -1485,10 +1658,27 @@ impl App {
     }
 
     fn current_view(&self) -> ViewState {
-        if !self.list.location().same(&self.location()) {
-            return ViewState::default();
+        ViewState {
+            select: self.list.selected_names(),
+            focus: self.list.focused_name(),
+            top: Some(self.list.top_row()),
+            focus_row: self.list.focused(),
+            rename: false,
         }
-        ViewState { select: self.list.selected_names(), focus: self.list.focused_name(), top: Some(self.list.top_row()), rename: false }
+    }
+
+    /// The tab leaves the screen: keep its selection and scroll for when it comes back. Not while the tab's own
+    /// folder has yet to load since it was switched to: the list shows nothing of it then, and storing that
+    /// would forget what the tab showed before (a quick Ctrl+Tab past a slow folder).
+    fn remember_view(&self) {
+        if self.st.borrow().pending.as_ref().is_some_and(|p| p.nav == Nav::Switch) {
+            return;
+        }
+        set_text(self.filter, ""); // the tab comes back unfiltered (5.4): remember the unfiltered rows
+        if self.list.location().same(&self.location()) {
+            let view = self.current_view();
+            self.with_tab(|t| t.view = view);
+        }
     }
 
     // ------------------------------------------------------------ tabs
@@ -1496,19 +1686,19 @@ impl App {
     fn make_tab(st: &mut State, location: Location) -> Tab {
         let id = st.next_tab_id;
         st.next_tab_id += 1;
-        Tab { id, location, back: Vec::new(), forward: Vec::new(), view: ViewState::default(), unavailable: false }
+        Tab { id, location, back: Vec::new(), forward: Vec::new(), view: ViewState::default(), unavailable: true }
     }
 
     pub fn new_tab(&self, location: Location, switch_to: bool) {
-        let view = if switch_to { Some(self.current_view()) } else { None };
+        if switch_to {
+            self.remember_view();
+        }
         {
             let mut st = self.st.borrow_mut();
             let at = st.active + 1;
             let tab = Self::make_tab(&mut st, location.clone());
             st.tabs.insert(at, tab);
-            if let Some(view) = view {
-                let active = st.active;
-                st.tabs[active].view = view;
+            if switch_to {
                 st.active = at;
             }
         }
@@ -1558,7 +1748,7 @@ impl App {
         }
     }
 
-    fn switch_tab(&self, index: usize) {
+    pub fn switch_tab(&self, index: usize) {
         let (count, active) = {
             let st = self.st.borrow();
             (st.tabs.len(), st.active)
@@ -1567,10 +1757,9 @@ impl App {
             self.show_tabs();
             return;
         }
-        let view = self.current_view();
+        self.remember_view();
         let (location, view) = {
             let mut st = self.st.borrow_mut();
-            st.tabs[active].view = view;
             st.active = index;
             (st.tabs[index].location.clone(), st.tabs[index].view.clone())
         };
@@ -1597,7 +1786,7 @@ impl App {
             self.drop_tab.set(hover);
         }
         let (location, unavailable) = self.st.borrow().tabs.get(hover?).map(|t| (t.location.clone(), t.unavailable))?;
-        // Not into This PC, not into a folder that failed to load, and not back where the files come from.
+        // Not into This PC, not into a folder that has not loaded here, and not back where the files come from.
         let from_here = self.dragging_files.get() && location.same(&self.list.location());
         (matches!(location, Location::Dir(_)) && !unavailable && !from_here).then_some(location)
     }
@@ -1610,11 +1799,13 @@ impl App {
         };
         send(self.tab_bar, TCM_DELETEALLITEMS, 0, 0);
         for (i, name) in names.iter().enumerate() {
-            let mut text: Vec<u16> = wide(name);
-            if text.len() > 29 {
-                text.truncate(27);
-                text.extend_from_slice(&[0x2026, 0]);
+            let mut text: Vec<u16> = name.encode_wide().collect();
+            if text.len() > 28 {
+                let cut = if (0xD800..0xDC00).contains(&text[26]) { 26 } else { 27 }; // never between the two halves of an emoji
+                text.truncate(cut);
+                text.push(0x2026);
             }
+            text.push(0);
             let item = TCITEMW { mask: TCIF_TEXT, pszText: PWSTR(text.as_mut_ptr()), ..Default::default() };
             send(self.tab_bar, TCM_INSERTITEMW, i, &item as *const _ as isize);
         }
@@ -1625,16 +1816,21 @@ impl App {
 
     fn delete_selection(&self, permanently: bool) {
         let rows = self.list.selection();
-        let (Some(&first), Some(&last)) = (rows.first(), rows.last()) else { return };
-        if matches!(self.list.location(), Location::ThisPc) {
+        let dir = self.list.location();
+        if rows.is_empty() || matches!(dir, Location::ThisPc) {
             return;
         }
         // Afterwards, select the item that followed the deleted ones.
-        let next = if last + 1 < self.list.count() { Some(last + 1) } else { first.checked_sub(1) };
+        let next = row_after_deleting(&rows, self.list.count());
         let mut view = next.and_then(|r| self.list.item(r)).map(|it| ViewState::selecting(it.name)).unwrap_or_default();
         view.top = Some(self.list.top_row());
-        delete_items(self.wnd, &self.list.selected_items(), permanently);
-        self.refresh(view);
+        // Answering No to Windows' question (or an error) deletes nothing: then the selection stays where it was.
+        // Anything deleted before a cancel still shows up through the folder watch. After a delete nothing is
+        // selected until the reload lands, so a second Delete cannot hit the deleted files.
+        if delete_items(self.wnd, &dir, &self.list.selected_items(), permanently) {
+            self.list.select(&[], view.focus.as_deref());
+            self.refresh(view);
+        }
     }
 
     fn new_folder(&self) {
@@ -1651,6 +1847,7 @@ impl App {
                 }
                 Err(e) => {
                     self.set_message(e.message().trim());
+                    self.warn(); // 4.9: an impossible action beeps
                     return;
                 }
             }
@@ -1711,7 +1908,7 @@ impl App {
     fn load_settings(&self, cmd: &CommandLine) {
         let dpi = self.dpi.get();
         self.tree_width.set(self.number("TreeWidth", 220));
-        self.show_hidden.set(self.number("ShowHidden", 0) != 0);
+        self.list.set_show_hidden(self.number("ShowHidden", 0) != 0);
         self.list.set_sort(SortKey::from_index(self.number("SortColumn", 0)), self.number("SortAscending", 1) != 0);
         let widths: Vec<i32> =
             [320, 150, 170, 90].iter().enumerate().map(|(i, &d)| scale(self.number(&format!("Column{i}"), d), dpi)).collect();
@@ -1735,13 +1932,19 @@ impl App {
         unsafe {
             if w > 0 && h > 0 {
                 let (x, y) = (self.number("X", 0), self.number("Y", 0));
+                let show = if self.number("Maximized", 0) != 0 { SW_SHOWMAXIMIZED } else { SW_SHOWNORMAL };
                 let wp = WINDOWPLACEMENT {
                     length: size_of::<WINDOWPLACEMENT>() as u32,
                     rcNormalPosition: RECT { left: x, top: y, right: x + w, bottom: y + h },
-                    showCmd: if self.number("Maximized", 0) != 0 { SW_SHOWMAXIMIZED.0 as u32 } else { SW_SHOWNORMAL.0 as u32 },
+                    showCmd: show.0 as u32,
                     ..Default::default()
                 };
-                let _ = SetWindowPlacement(self.wnd, &wp);
+                // A position on a monitor that is gone (a laptop undocked) would put the window out of sight.
+                if MonitorFromRect(&wp.rcNormalPosition, MONITOR_DEFAULTTONULL).is_invalid() {
+                    let _ = ShowWindow(self.wnd, show);
+                } else {
+                    let _ = SetWindowPlacement(self.wnd, &wp);
+                }
             } else {
                 // A self-test never steals focus.
                 let _ = ShowWindow(self.wnd, if self.use_settings { SW_SHOWNORMAL } else { SW_SHOWNOACTIVATE });
@@ -1771,7 +1974,7 @@ impl App {
             let maximized = wp.showCmd == SW_SHOWMAXIMIZED.0 as u32 || wp.flags.0 & WPF_RESTORETOMAXIMIZED.0 != 0;
             number("Maximized", maximized as i32);
             number("TreeWidth", self.tree_width.get());
-            number("ShowHidden", self.show_hidden.get() as i32);
+            number("ShowHidden", self.list.show_hidden() as i32);
             let (key, asc) = self.list.sort();
             number("SortColumn", key as i32);
             number("SortAscending", asc as i32);
