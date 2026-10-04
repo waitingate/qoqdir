@@ -38,7 +38,7 @@ struct Tab {
     std::wstring path;              // "" = This PC
     std::vector<std::wstring> back, forward;
     ViewState view;                 // remembered while the tab is in the background
-    bool unavailable = false;       // its folder failed to load: no drops onto it until it loads again
+    bool unavailable = true;        // not loaded here yet, or failed: no drops onto it (asking Windows could freeze)
 };
 
 class App {
@@ -78,6 +78,7 @@ private:
     void onContextMenu(HWND from, POINT pt);
     void onTabMenu();
     void onTimer(UINT_PTR id);
+    void queueRefresh();   // one coalesced refresh of the current tab, once no rename or load is in progress
     void onMiddleClick(HWND from, POINT screenPt);
 
     // Navigation
@@ -135,6 +136,10 @@ private:
     bool dragging_ = false;         // moving the tree/list splitter
     bool draggingFiles_ = false;    // a drag started from our own list is in progress
     bool refreshQueued_ = false;
+    struct QueuedView {             // kept by refresh() while a load is pending: what a delete, rename or new
+        std::wstring dir;           // folder wanted selected. The queued refresh applies it if 'dir' is still shown.
+        ViewState view;
+    } queuedView_;
     bool loadMessageShown_ = false; // "Loading..." or "not available": cleared when a folder loads
     bool showHidden_ = false;
 

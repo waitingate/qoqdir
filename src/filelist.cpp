@@ -65,6 +65,9 @@ void FileList::update(bool keepSelection, const std::function<void()>& change) {
         names = selectedNames();
         focus = focusedName();
     }
+    // The edit box remembers a row number, not a file: close it before the rows move, or Enter
+    // would rename whatever lands on that row (a navigation, a new sort or a filter under it).
+    if (renaming()) ListView_CancelEditLabel(lv_);
     // Change the items and rebuild view_ before any ListView call: those can ask
     // for row text right away, and every row must already point at a valid item.
     change();
@@ -88,10 +91,10 @@ std::vector<int> FileList::selection() const {
     return rows;
 }
 
-std::vector<std::wstring> FileList::selectedPaths() const {
-    std::vector<std::wstring> paths;
-    for (int row : selection()) paths.push_back(pathAt(row));
-    return paths;
+std::vector<Item> FileList::selectedItems() const {
+    std::vector<Item> items;
+    for (int row : selection()) items.push_back(at(row));
+    return items;
 }
 
 std::vector<std::wstring> FileList::selectedNames() const {

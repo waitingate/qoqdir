@@ -94,6 +94,24 @@ int main() {
     CHECK(!isAbsolutePath(L"https://example.com"));
     CHECK(!isAbsolutePath(L"C:"));
 
+    // isRelativePath: typed text that means a place in the current folder (after normalizePath), not a command
+    CHECK(isRelativePath(L"."));
+    CHECK(isRelativePath(L".\\sub"));
+    CHECK(isRelativePath(L"..\\"));
+    CHECK(isRelativePath(L"..\\other"));
+    CHECK(isRelativePath(L"sub\\deeper"));
+    CHECK(isRelativePath(L"a\\b.txt"));                    // a relative file: the loader opens it with Windows
+    CHECK(isRelativePath(normalizePath(L"./sub")));
+    CHECK(!isRelativePath(L"sub"));                      // a bare name: the list decides (hasFolder)
+    CHECK(!isRelativePath(L"cmd"));
+    CHECK(!isRelativePath(normalizePath(L"cmd /c dir")));
+    CHECK(!isRelativePath(L"notepad a\\b.txt"));
+    CHECK(!isRelativePath(normalizePath(L"https://example.com")));
+    CHECK(!isRelativePath(L"shell:Downloads"));
+    CHECK(!isRelativePath(L"C:\\Windows"));
+    CHECK(!isRelativePath(L"\\\\server\\share"));
+    CHECK(!isRelativePath(L""));
+
     // parseCommandLine: 7z-style switches, plus plain folders
     {
         wchar_t cwd[MAX_PATH];

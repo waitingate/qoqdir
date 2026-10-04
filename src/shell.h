@@ -24,10 +24,15 @@ int folderIcon();
 const std::wstring& typeName(const Item& it);          // UI thread only (cached)
 std::wstring knownFolder(REFKNOWNFOLDERID id);
 
-// The items as a shell data object (what copy, drag and drop hand around).
-Com<IDataObject> dataObject(HWND owner, const std::vector<std::wstring>& paths);
-// Context menu for items that share one parent folder, or for a folder's background.
-Com<IContextMenu> itemMenu(HWND owner, const std::vector<std::wstring>& paths);
+// Items of one folder, as the file list read them, as a shell data object (what copy, drag
+// and drop hand around). Taking the listed items, not paths, lets the shell build them from
+// the listing's find data instead of asking the disk about each one.
+Com<IDataObject> dataObject(HWND owner, const std::wstring& dir, const std::vector<Item>& items);
+Com<IDataObject> dataObject(HWND owner, const std::wstring& path);   // one item by its full path
+// Context menu for items of one folder, for one item given by its full path (the tree's
+// folders, This PC, a drive), or for a folder's background.
+Com<IContextMenu> itemMenu(HWND owner, const std::wstring& dir, const std::vector<Item>& items);
+Com<IContextMenu> itemMenu(HWND owner, const std::wstring& path);
 Com<IContextMenu> backgroundMenu(HWND owner, const std::wstring& dir);
 // Shows the menu. 'intercept' sees the chosen verb first and returns true if it handled it.
 // With 'paste', Paste and Paste shortcut come first: a folder's own menu has neither (Explorer
@@ -39,13 +44,13 @@ void showMenu(HWND owner, IContextMenu* menu, POINT screenPt,
 bool forwardMenuMessage(UINT msg, WPARAM wp, LPARAM lp, LRESULT* result);
 bool invokeVerb(HWND owner, IContextMenu* menu, const char* verb);
 
-void copyToClipboard(HWND owner, const std::vector<std::wstring>& paths, bool cut);
+void copyToClipboard(HWND owner, const std::wstring& dir, const std::vector<Item>& items, bool cut);
 void pasteInto(HWND owner, const std::wstring& dir, bool shortcuts = false);   // shortcuts: "Paste shortcut"
-void deleteItems(HWND owner, const std::vector<std::wstring>& paths, bool permanently);
+void deleteItems(HWND owner, const std::wstring& dir, const std::vector<Item>& items, bool permanently);
 HRESULT renameItem(HWND owner, const std::wstring& path, const std::wstring& newName);
 void openFile(HWND owner, const std::wstring& path);
 bool runCommand(HWND owner, const std::wstring& command, const std::wstring& workDir);
-void dragOut(HWND owner, const std::vector<std::wstring>& paths);
+void dragOut(HWND owner, const std::wstring& dir, const std::vector<Item>& items);
 // The target path stored in a shortcut, and whether it was a folder when the shortcut was made
 // (false if not recorded). Reads only the shortcut file, never the target.
 std::wstring shortcutTarget(const std::wstring& lnkPath, bool* folder);

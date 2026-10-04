@@ -60,6 +60,7 @@ std::wstring childToward(const std::wstring& ancestor, const std::wstring& desce
 bool samePath(const std::wstring& a, const std::wstring& b);
 bool isDirectory(const std::wstring& path);
 bool isAbsolutePath(const std::wstring& path);   // "C:\..." or "\\server\...", not a command like "cmd"
+bool isRelativePath(const std::wstring& text);   // ".", "..\x", "sub\deeper": a place here, not a command
 
 std::wstring toLower(std::wstring s);
 std::wstring extensionOf(const std::wstring& name);  // lower case with the dot, "" if none

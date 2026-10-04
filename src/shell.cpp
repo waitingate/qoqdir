@@ -18,36 +18,92 @@ Pidl pidlFromPath(const std::wstring& path) {
 
 using ChildPidl = std::unique_ptr<std::remove_pointer_t<PITEMID_CHILD>, CoTaskMemDeleter>;
 
-// Asks the parent folder of 'paths' for an interface covering all of them
-// (a context menu, a data object, a drop target...). All paths must share one parent.
-// The parent is opened once and each item is looked up by name inside it: resolving
-// every full path from the desktop down took ~9 ms per file (90 s for 10,000 files).
-HRESULT uiObject(HWND owner, const std::vector<std::wstring>& paths, REFIID iid, void** out) {
+// Asks the shell for an interface on one item given by its full path (a context menu, a
+// data object, a drop target...). Resolving the full path exactly also covers items without
+// an ordinary parent folder: This PC, and a network share's top (\server\share).
+HRESULT uiObject(HWND owner, const std::wstring& path, REFIID iid, void** out) {
     *out = nullptr;
-    if (paths.empty()) return E_INVALIDARG;
-    if (paths.size() == 1) {
-        // One item: resolve its full path exactly. This also covers items without an
-        // ordinary parent folder: This PC, and a network share's top (\server\share).
-        Pidl pidl = pidlFromPath(paths[0]);
-        Com<IShellFolder> parent;
-        PCUITEMID_CHILD child = nullptr;
-        if (!pidl || FAILED(SHBindToParent(pidl.get(), IID_IShellFolder, reinterpret_cast<void**>(parent.put()), &child)))
-            return E_FAIL;
-        return parent->GetUIObjectOf(owner, 1, &child, iid, nullptr, out);
+    Pidl pidl = pidlFromPath(path);
+    Com<IShellFolder> parent;
+    PCUITEMID_CHILD child = nullptr;
+    if (!pidl || FAILED(SHBindToParent(pidl.get(), IID_IShellFolder, reinterpret_cast<void**>(parent.put()), &child)))
+        return E_FAIL;
+    return parent->GetUIObjectOf(owner, 1, &child, iid, nullptr, out);
+}
+
+// What the folder listing already said about an item, handed to the shell through a bind
+// context (STR_FILE_SYS_BIND_DATA) so that parsing the item's name needs no disk access.
+// Without it the shell asks the disk about every item: one round trip each on a network
+// folder, tens of seconds for 10,000 selected files.
+class FindData final : public IFileSystemBindData {
+public:
+    HRESULT STDMETHODCALLTYPE QueryInterface(REFIID iid, void** out) override {
+        if (iid == IID_IUnknown || iid == IID_IFileSystemBindData) {
+            *out = static_cast<IFileSystemBindData*>(this);
+            AddRef();
+            return S_OK;
+        }
+        *out = nullptr;
+        return E_NOINTERFACE;
     }
-    Pidl parentPidl = pidlFromPath(parentPath(paths[0]));
+    ULONG STDMETHODCALLTYPE AddRef() override { return ULONG(InterlockedIncrement(&refs_)); }
+    ULONG STDMETHODCALLTYPE Release() override {
+        LONG n = InterlockedDecrement(&refs_);
+        if (n == 0) delete this;
+        return ULONG(n);
+    }
+    HRESULT STDMETHODCALLTYPE SetFindData(const WIN32_FIND_DATAW* fd) override {
+        fd_ = *fd;
+        return S_OK;
+    }
+    HRESULT STDMETHODCALLTYPE GetFindData(WIN32_FIND_DATAW* fd) override {
+        *fd = fd_;
+        return S_OK;
+    }
+
+private:
+    LONG refs_ = 1;
+    WIN32_FIND_DATAW fd_{};
+};
+
+// The same for items of one folder, as the list read them. The folder is opened once and each
+// item is looked up by name inside it, from its own find data: resolving every full path from
+// the desktop down took ~9 ms per file (90 s for 10,000 files), and even the name lookup cost
+// one disk query per item (the 1.5-2.5 s of spec 4.7 on an SSD, far more on a network folder).
+HRESULT uiObject(HWND owner, const std::wstring& dir, const std::vector<Item>& items, REFIID iid, void** out) {
+    *out = nullptr;
+    if (items.empty()) return E_INVALIDARG;
+    if (items.size() == 1) return uiObject(owner, joinPath(dir, items[0].name), iid, out);
+    Pidl dirPidl = pidlFromPath(dir);
     Com<IShellFolder> desktop, parent;
-    if (!parentPidl || FAILED(SHGetDesktopFolder(desktop.put()))) return E_FAIL;
-    HRESULT hr = parentPidl->mkid.cb == 0   // the parent is the desktop itself
+    if (!dirPidl || FAILED(SHGetDesktopFolder(desktop.put()))) return E_FAIL;
+    HRESULT hr = dirPidl->mkid.cb == 0   // the folder is the desktop itself
                      ? desktop->QueryInterface(IID_IShellFolder, reinterpret_cast<void**>(parent.put()))
-                     : desktop->BindToObject(parentPidl.get(), nullptr, IID_IShellFolder, reinterpret_cast<void**>(parent.put()));
+                     : desktop->BindToObject(dirPidl.get(), nullptr, IID_IShellFolder, reinterpret_cast<void**>(parent.put()));
     if (FAILED(hr)) return hr;
+    // STGM_CREATE tells the shell to take the find data as given instead of checking the disk.
+    // (RegisterObjectParam wants a writable key string but never writes it.)
+    Com<IFileSystemBindData> known;
+    *known.put() = new FindData;
+    Com<IBindCtx> bind;
+    BIND_OPTS opts{};
+    opts.cbStruct = sizeof opts;
+    opts.grfMode = STGM_CREATE;
+    if (FAILED(CreateBindCtx(0, bind.put())) || FAILED(bind->SetBindOptions(&opts)) ||
+        FAILED(bind->RegisterObjectParam(const_cast<LPOLESTR>(STR_FILE_SYS_BIND_DATA), known.get())))
+        return E_FAIL;
     std::vector<ChildPidl> owned;
     std::vector<PCUITEMID_CHILD> children;
-    for (const auto& p : paths) {
-        std::wstring name = leafName(p);   // "C:\" for a drive under This PC
+    for (const Item& it : items) {
+        WIN32_FIND_DATAW fd{};
+        fd.dwFileAttributes = it.attrs;
+        fd.ftLastWriteTime = it.modified;
+        fd.nFileSizeHigh = DWORD(it.size >> 32);
+        fd.nFileSizeLow = DWORD(it.size);
+        it.name.copy(fd.cFileName, MAX_PATH - 1);   // "C:\" for a drive under This PC
+        known->SetFindData(&fd);
         PIDLIST_RELATIVE child = nullptr;
-        hr = parent->ParseDisplayName(owner, nullptr, name.data(), nullptr, &child, nullptr);
+        hr = parent->ParseDisplayName(owner, bind.get(), fd.cFileName, nullptr, &child, nullptr);
         if (FAILED(hr)) return hr;
         owned.emplace_back(static_cast<PITEMID_CHILD>(child));
         children.push_back(owned.back().get());
@@ -156,15 +212,27 @@ std::wstring knownFolder(REFKNOWNFOLDERID id) {
     return r;
 }
 
-Com<IDataObject> dataObject(HWND owner, const std::vector<std::wstring>& paths) {
+Com<IDataObject> dataObject(HWND owner, const std::wstring& dir, const std::vector<Item>& items) {
     Com<IDataObject> obj;
-    uiObject(owner, paths, IID_IDataObject, reinterpret_cast<void**>(obj.put()));
+    uiObject(owner, dir, items, IID_IDataObject, reinterpret_cast<void**>(obj.put()));
     return obj;
 }
 
-Com<IContextMenu> itemMenu(HWND owner, const std::vector<std::wstring>& paths) {
+Com<IDataObject> dataObject(HWND owner, const std::wstring& path) {
+    Com<IDataObject> obj;
+    uiObject(owner, path, IID_IDataObject, reinterpret_cast<void**>(obj.put()));
+    return obj;
+}
+
+Com<IContextMenu> itemMenu(HWND owner, const std::wstring& dir, const std::vector<Item>& items) {
     Com<IContextMenu> cm;
-    uiObject(owner, paths, IID_IContextMenu, reinterpret_cast<void**>(cm.put()));
+    uiObject(owner, dir, items, IID_IContextMenu, reinterpret_cast<void**>(cm.put()));
+    return cm;
+}
+
+Com<IContextMenu> itemMenu(HWND owner, const std::wstring& path) {
+    Com<IContextMenu> cm;
+    uiObject(owner, path, IID_IContextMenu, reinterpret_cast<void**>(cm.put()));
     return cm;
 }
 
@@ -251,8 +319,8 @@ bool invokeVerb(HWND owner, IContextMenu* cm, const char* verb) {
     return SUCCEEDED(cm->InvokeCommand(reinterpret_cast<CMINVOKECOMMANDINFO*>(&ici)));
 }
 
-void copyToClipboard(HWND owner, const std::vector<std::wstring>& paths, bool cut) {
-    Com<IDataObject> obj = dataObject(owner, paths);
+void copyToClipboard(HWND owner, const std::wstring& dir, const std::vector<Item>& items, bool cut) {
+    Com<IDataObject> obj = dataObject(owner, dir, items);
     if (!obj) return;
     // Tells the paste target whether to move (cut) or copy.
     FORMATETC fmt{CLIPFORMAT(RegisterClipboardFormatW(CFSTR_PREFERREDDROPEFFECT)), nullptr, DVASPECT_CONTENT, -1,
@@ -276,10 +344,12 @@ void pasteInto(HWND owner, const std::wstring& dir, bool shortcuts) {
     invokeVerb(owner, backgroundMenu(owner, dir).get(), shortcuts ? "pastelink" : "paste");
 }
 
-void deleteItems(HWND owner, const std::vector<std::wstring>& paths, bool permanently) {
-    Com<IDataObject> obj = dataObject(owner, paths);
+void deleteItems(HWND owner, const std::wstring& dir, const std::vector<Item>& items, bool permanently) {
+    Com<IDataObject> obj = dataObject(owner, dir, items);
     if (!obj) return;
-    DWORD flags = permanently ? FOF_WANTNUKEWARNING : (FOF_ALLOWUNDO | FOFX_RECYCLEONDELETE | FOF_NOCONFIRMATION);
+    // FOF_WANTNUKEWARNING in both cases: Windows still asks before destroying an item it cannot recycle
+    // (network share, USB stick, oversized file); without it FOF_NOCONFIRMATION answers Yes for the user.
+    DWORD flags = FOF_WANTNUKEWARNING | (permanently ? 0 : FOF_ALLOWUNDO | FOFX_RECYCLEONDELETE | FOF_NOCONFIRMATION);
     fileOperation(owner, flags, [&](IFileOperation* op) { return op->DeleteItems(obj.get()); });
 }
 
@@ -320,8 +390,8 @@ bool runCommand(HWND owner, const std::wstring& command, const std::wstring& wor
     return ShellExecuteExW(&sei) != FALSE;
 }
 
-void dragOut(HWND owner, const std::vector<std::wstring>& paths) {
-    Com<IDataObject> obj = dataObject(owner, paths);
+void dragOut(HWND owner, const std::wstring& dir, const std::vector<Item>& items) {
+    Com<IDataObject> obj = dataObject(owner, dir, items);
     if (!obj) return;
     DWORD effect = 0;
     SHDoDragDrop(owner, obj.get(), nullptr, DROPEFFECT_COPY | DROPEFFECT_MOVE | DROPEFFECT_LINK, &effect);
@@ -454,7 +524,7 @@ private:
         if (folder_) folder_->DragLeave();
         folder_.reset();
         dir_ = dir;
-        if (dir) uiObject(owner_, {*dir}, IID_IDropTarget, reinterpret_cast<void**>(folder_.put()));
+        if (dir) uiObject(owner_, *dir, IID_IDropTarget, reinterpret_cast<void**>(folder_.put()));
         if (folder_ && FAILED(folder_->DragEnter(data_.get(), keys, pt, effect))) folder_.reset();
         if (!folder_) *effect = DROPEFFECT_NONE;
         return true;

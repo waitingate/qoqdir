@@ -267,11 +267,7 @@ LRESULT App::onMessage(UINT msg, WPARAM wp, LPARAM lp) {
     }
     case WM_APP_CHANGED:
         acknowledgeChange(wp, lp);
-        // At most one refresh per interval, even while a folder changes nonstop.
-        if (!refreshQueued_) {
-            refreshQueued_ = true;
-            SetTimer(wnd_, kRefreshTimer, 400, nullptr);
-        }
+        queueRefresh();
         return 0;
     case WM_APP_ICONS: {
         std::unique_ptr<IconBatch> batch(reinterpret_cast<IconBatch*>(lp));
@@ -312,7 +308,10 @@ LRESULT App::onMessage(UINT msg, WPARAM wp, LPARAM lp) {
         if ((wp == DBT_DEVICEARRIVAL || wp == DBT_DEVICEREMOVECOMPLETE) && lp &&
             reinterpret_cast<DEV_BROADCAST_HDR*>(lp)->dbch_devicetype == DBT_DEVTYP_VOLUME) {
             tree_.fill();
-            if (tab().path.empty() && !pending_.generation) refresh();
+            // This PC lists the drives, and a tab's folder may sit on the drive that went: its
+            // own watch cannot tell, since the event names the drive root, not a folder below it.
+            // A tab already shown as not available waits for F5 (4.3), like a deleted folder does.
+            if (!tab().unavailable) queueRefresh();
         }
         return TRUE;
     case WM_SETCURSOR:
@@ -360,13 +359,24 @@ LRESULT App::onMessage(UINT msg, WPARAM wp, LPARAM lp) {
     return DefWindowProcW(wnd_, msg, wp, lp);
 }
 
+// At most one refresh per interval, even while a folder changes nonstop. The timer waits
+// while a rename or a load is in progress (onTimer), so it disturbs neither.
+void App::queueRefresh() {
+    if (refreshQueued_) return;
+    refreshQueued_ = true;
+    SetTimer(wnd_, kRefreshTimer, 400, nullptr);
+}
+
 void App::onTimer(UINT_PTR id) {
     if (id == kRefreshTimer) {
         // Try again later: never disturb a rename, and never cancel a folder that is loading.
         if (list_.renaming() || pending_.generation) return;
         KillTimer(wnd_, kRefreshTimer);
         refreshQueued_ = false;
-        refresh();
+        // The item a delete, rename or new folder wanted selected, unless another folder is shown by now.
+        QueuedView q = std::move(queuedView_);
+        queuedView_ = {};
+        refresh(samePath(list_.dir(), q.dir) ? std::move(q.view) : ViewState{});
     } else if (id == kStatusTimer) {
         KillTimer(wnd_, kStatusTimer);
         showStatus();
@@ -418,10 +428,10 @@ LRESULT App::onNotify(NMHDR* nm) {
         }
         case LVN_BEGINDRAG:
         case LVN_BEGINRDRAG: {
-            std::vector<std::wstring> paths = list_.selectedPaths();
-            if (!paths.empty()) {
+            std::vector<Item> items = list_.selectedItems();
+            if (!items.empty()) {
                 draggingFiles_ = true;
-                dragOut(wnd_, paths);
+                dragOut(wnd_, list_.dir(), items);
                 draggingFiles_ = false;
             }
             break;
@@ -460,10 +470,11 @@ void App::onContextMenu(HWND from, POINT pt) {
                          [&](bool shortcuts) { pasteInto(wnd_, list_.dir(), shortcuts); });
             return;
         }
-        // Folders (and a shortcut's folder) open here, not in a separate Explorer window.
-        bool opensHere = std::all_of(rows.begin(), rows.end(), [&](int r) { return list_.at(r).isDir(); }) ||
-                         (rows.size() == 1 && isShortcut(list_.at(rows[0]).name));
-        showMenu(wnd_, itemMenu(wnd_, list_.selectedPaths()).get(), pt, [&](const std::wstring& verb) {
+        // Folders and shortcuts open here (activate decides), never in a separate Explorer window.
+        bool opensHere = std::all_of(rows.begin(), rows.end(), [&](int r) {
+            return list_.at(r).isDir() || isShortcut(list_.at(r).name);
+        });
+        showMenu(wnd_, itemMenu(wnd_, list_.dir(), list_.selectedItems()).get(), pt, [&](const std::wstring& verb) {
             if (is(verb, L"rename")) {
                 list_.rename(list_.focused() >= 0 ? list_.focused() : rows[0]);
                 return true;
@@ -488,7 +499,7 @@ void App::onContextMenu(HWND from, POINT pt) {
             GetWindowRect(tree_.hwnd(), &r);
             pt = {r.left + scale(24, dpi_), r.top + scale(24, dpi_)};
         }
-        showMenu(wnd_, itemMenu(wnd_, {path}).get(), pt, [&](const std::wstring& verb) {
+        showMenu(wnd_, itemMenu(wnd_, path).get(), pt, [&](const std::wstring& verb) {
             if (is(verb, L"open") || is(verb, L"explore")) openNode(path, false);
             else if (is(verb, L"opennewtab") || is(verb, L"opennewwindow")) openNode(path, true);
             else return is(verb, L"rename");   // renaming is done in the file list
@@ -528,6 +539,7 @@ bool App::onKey(const Key& key) {
     if (list_.renaming()) return false;   // the rename box handles its own keys
     HWND focus = key.focus, list = list_.hwnd();
     bool ctrl = key.ctrl, shift = key.shift, alt = key.alt;
+    if (ctrl && alt) ctrl = alt = false;   // AltGr reads as Ctrl+Alt and types a character; no shortcut uses both
 
     if (key.message == WM_CHAR) {
         // Typing in the file list filters it.
@@ -566,7 +578,7 @@ bool App::onKey(const Key& key) {
     if (alt && k == VK_RIGHT) { goForward(); return true; }
     if (alt && k == VK_UP) { goUp(); return true; }
     if (alt && k == VK_RETURN && focus == list) {
-        invokeVerb(wnd_, itemMenu(wnd_, list_.selectedPaths()).get(), "properties");
+        invokeVerb(wnd_, itemMenu(wnd_, list_.dir(), list_.selectedItems()).get(), "properties");
         return true;
     }
     if (k == VK_TAB && !ctrl && !alt) {
@@ -608,10 +620,10 @@ bool App::onKey(const Key& key) {
         if (ctrl && shift && k == 'N') { newFolder(); return true; }
         if (ctrl && k == 'A') { list_.selectAll(); return true; }
         if (ctrl && (k == 'C' || k == 'X')) {
-            std::vector<std::wstring> paths = list_.selectedPaths();
-            if (!paths.empty()) {
-                copyToClipboard(wnd_, paths, k == 'X');
-                setMessage(std::to_wstring(paths.size()) + (k == 'X' ? L" item(s) cut" : L" item(s) copied"));
+            std::vector<Item> items = list_.selectedItems();
+            if (!items.empty()) {
+                copyToClipboard(wnd_, list_.dir(), items, k == 'X');
+                setMessage(std::to_wstring(items.size()) + (k == 'X' ? L" item(s) cut" : L" item(s) copied"));
             }
             return true;
         }
@@ -635,6 +647,14 @@ void App::open(const std::wstring& path, Nav nav, ViewState view, Origin origin)
     UINT generation = ++generation_;
     pending_ = {generation, path, nav, std::move(view), tab().id, std::move(origin)};
     SetTimer(wnd_, kLoadingTimer, 250, nullptr);   // say "Loading..." only if it is slow
+    if (nav == Nav::Switch) {
+        // The tab strip already shows the new tab: show its location at once instead of the old tab's list
+        // and address until its folder loads. Meanwhile the list has no folder, so paste, new folder, menus
+        // and drops have nothing to act on (the same mechanism as an unavailable folder).
+        list_.setListing(Listing{});
+        showLocation(nav);
+        showStatus();
+    }
     HWND wnd = wnd_;
     bool hidden = showHidden_;
     std::thread([wnd, generation, path, hidden] {
@@ -663,6 +683,15 @@ void App::onLoaded(Listing&& listing, UINT generation) {
     Pending p = std::move(pending_);
     pending_ = {};
     if (tab().id != p.tabId) return;
+    if (p.nav == Nav::Refresh && list_.renaming()) {
+        // 4.2: a refresh never interrupts a rename. The box opened after this load started
+        // (open() closes any box it finds), so drop the result and retry once the box has closed,
+        // as the timer does; applying it would move the rows under the box, and Enter would
+        // rename whatever row sits there now.
+        refreshQueued_ = true;
+        SetTimer(wnd_, kRefreshTimer, 400, nullptr);
+        return;
+    }
     Tab& t = tab();
 
     if (listing.error) return onLoadFailed(listing, p);
@@ -790,8 +819,16 @@ void App::goUp() {
 void App::refresh(ViewState view) {
     // A folder is already loading, and what it shows will be fresh: start nothing new.
     // (Refreshing the old folder would cancel it; restarting it on every held-down F5
-    // would pile up stuck threads on a slow network share.)
-    if (pending_.generation) return;
+    // would pile up stuck threads on a slow network share.) But that load started before
+    // the change the caller made, so what it wants selected (the new, renamed or next item)
+    // may be missing from it: keep it for a queued refresh, as after a change notification.
+    if (pending_.generation) {
+        if (!view.select.empty() || !view.focus.empty()) {
+            queuedView_ = {list_.dir(), std::move(view)};
+            queueRefresh();
+        }
+        return;
+    }
     open(tab().path, Nav::Refresh, std::move(view));
 }
 
@@ -804,9 +841,12 @@ void App::reload() {
 void App::goToTyped() {
     std::wstring text = windowText(address_);
     std::wstring path = normalizePath(text);
-    // ".." and the name of a subfolder here open in Qoqdir (Windows would open them in Explorer).
+    // "..", a subfolder's name and anything written relative to this folder (".", ".\x", "a\b")
+    // are resolved here and checked by the loader, so they never reach Windows, which would open
+    // the folder in an Explorer window (4.4). The rest runs as a command (5.3).
     if (path == L"..") path = parentPath(tab().path);
-    else if (!tab().path.empty() && list_.hasFolder(path)) path = joinPath(tab().path, path);
+    else if (!tab().path.empty() && (list_.hasFolder(path) || isRelativePath(path)))
+        path = normalizePath(joinPath(tab().path, path));   // GetFullPathName folds "." and ".." away
     if (path.empty() || isAbsolutePath(path)) {
         // Checked by the folder loader on its worker thread, so a dead network
         // share cannot freeze the window. A file is opened when the result comes back.
@@ -814,7 +854,9 @@ void App::goToTyped() {
         focusList();
         return;
     }
-    if (!runCommand(wnd_, text, tab().path)) {   // "cmd", "notepad", a web address...
+    // The folder shown, not tab().path: a tab keeps an unavailable folder (4.3), but handing it to
+    // Windows as the working folder would wait on the dead server before the program starts.
+    if (!runCommand(wnd_, text, list_.dir())) {   // "cmd", "notepad", a web address...
         setMessage(L"Can't find \"" + text + L"\"");
         warn();
         return;
@@ -831,7 +873,18 @@ void App::activate(bool inNewTab) {
         return;
     }
     std::vector<std::wstring> dirs, files;
-    for (int row : rows) (list_.at(row).isDir() ? dirs : files).push_back(list_.pathAt(row));
+    for (int row : rows) {
+        std::wstring path = list_.pathAt(row);
+        bool folder = list_.at(row).isDir();
+        // A shortcut that says its target is a folder counts as that folder, so it opens in a tab
+        // like the other folders (Windows would open it in Explorer); any other shortcut is a file.
+        if (!folder && extensionOf(path) == L".lnk") {
+            std::wstring target = shortcutTarget(path, &folder);
+            if (folder && isAbsolutePath(target)) path = target;
+            else folder = false;
+        }
+        (folder ? dirs : files).push_back(path);
+    }
     if (files.size() > 15 &&
         MessageBoxW(wnd_, (L"Open " + std::to_wstring(files.size()) + L" files?").c_str(), kAppName,
                     MB_OKCANCEL | MB_ICONQUESTION) != IDOK)
@@ -939,7 +992,7 @@ std::optional<std::wstring> App::tabDropTarget(const POINT* screenPt) {
     }
     if (hover < 0 || hover >= int(tabs_.size())) return std::nullopt;
     const Tab& t = tabs_[size_t(hover)];
-    // Not into This PC, not into a folder that failed to load, and not back where the files come from.
+    // Not into This PC, not into a folder that has not loaded here, and not back where the files come from.
     if (t.path.empty() || t.unavailable || (draggingFiles_ && samePath(t.path, list_.dir()))) return std::nullopt;
     return t.path;
 }
@@ -967,7 +1020,7 @@ void App::deleteSelection(bool permanently) {
     int next = rows.back() + 1 < list_.count() ? rows.back() + 1 : rows.front() - 1;
     ViewState v = next >= 0 && next < list_.count() ? ViewState::selecting(list_.at(next).name) : ViewState{};
     v.top = list_.topRow();
-    deleteItems(wnd_, list_.selectedPaths(), permanently);
+    deleteItems(wnd_, list_.dir(), list_.selectedItems(), permanently);
     refresh(v);
 }
 

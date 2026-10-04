@@ -4,12 +4,14 @@
 
 #include "folder.h"
 
-#include <set>
+#include <functional>
+#include <map>
 
 // Subfolders of one node, read on a worker thread and posted to the tree's parent window.
 struct TreeBatch {
-    unsigned fill = 0;   // which fill() the node belongs to; batches for an older tree are dropped
-    HTREEITEM node = nullptr;
+    unsigned read = 0;   // the startReading() this answers; a node deleted and re-read since then has a newer one
+    HTREEITEM node = nullptr;   // nullptr: the user folders, which are roots between Bookmarks and This PC
+    bool failed = false;        // the folder could not be read, so nothing is known about its children
     struct Child {
         std::wstring path, text;
         int icon = -1;   // -1: plain folder icon
@@ -33,14 +35,17 @@ public:
     bool onNotify(NMHDR* nm, std::wstring* open);
 
 private:
-    HTREEITEM add(HTREEITEM parent, const std::wstring& path, const std::wstring& text, int icon, bool leaf = false);
+    HTREEITEM add(HTREEITEM parent, const std::wstring& path, const std::wstring& text, int icon, bool leaf = false,
+                  HTREEITEM after = TVI_LAST);
     void startReading(HTREEITEM node);
+    // Runs `reader` on a worker thread to fill a batch, then posts it as the children of `node`.
+    void startWorker(HTREEITEM node, std::function<void(TreeBatch&)> reader);
     const std::wstring& pathOf(HTREEITEM node) const;
 
     HWND tv_ = nullptr, parent_ = nullptr;
     std::wstring bookmarks_;
     UINT batchMsg_ = 0;
-    unsigned fill_ = 0;
-    std::vector<std::wstring> paths_;   // node lParam indexes this
-    std::set<HTREEITEM> reading_;       // nodes whose subfolders are being read
+    unsigned reads_ = 0;                      // numbers every read started
+    std::vector<std::wstring> paths_;         // node lParam indexes this
+    std::map<HTREEITEM, unsigned> reading_;   // nodes whose subfolders are being read, by read number
 };

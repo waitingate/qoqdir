@@ -30,7 +30,7 @@ public:
     bool hasFolder(const std::wstring& name) const;   // a subfolder of that name, shown or filtered out
 
     std::vector<int> selection() const;
-    std::vector<std::wstring> selectedPaths() const;
+    std::vector<Item> selectedItems() const;   // with their attributes, size and date: see shell.h
     std::vector<std::wstring> selectedNames() const;
     int focused() const;
     std::wstring focusedName() const;

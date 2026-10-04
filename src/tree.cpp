@@ -8,10 +8,10 @@
 
 namespace {
 
-// Reads the subfolders of `dir` ("" = the drives), and its shortcuts if asked.
+// Reads the subfolders of `dir` ("" = the drives), and its shortcuts if asked, into `batch`.
 // Runs on a worker thread, so it may block.
-std::vector<TreeBatch::Child> readChildren(const std::wstring& dir, bool shortcuts) {
-    std::vector<TreeBatch::Child> children;
+void readChildren(TreeBatch& batch, const std::wstring& dir, bool shortcuts) {
+    std::vector<TreeBatch::Child>& children = batch.children;
     if (dir.empty()) {   // the drives (not via listFolder: its free-space check can wait on a network drive)
         DWORD mask = GetLogicalDrives();
         for (int i = 0; i < 26; ++i) {
@@ -21,9 +21,10 @@ std::vector<TreeBatch::Child> readChildren(const std::wstring& dir, bool shortcu
             SHGetFileInfoW(root.c_str(), 0, &sfi, sizeof sfi, SHGFI_DISPLAYNAME | SHGFI_SYSICONINDEX | SHGFI_SMALLICON);
             children.push_back({root, sfi.szDisplayName[0] ? sfi.szDisplayName : root.substr(0, 2), sfi.iIcon});
         }
-        return children;
+        return;
     }
     Listing listing = listFolder(dir, false);
+    batch.failed = listing.error != 0;
     sortItems(listing.items, SortKey::Name, true);   // folders first, in natural order
     for (const Item& it : listing.items) {
         std::wstring path = joinPath(dir, it.name);
@@ -35,7 +36,22 @@ std::vector<TreeBatch::Child> readChildren(const std::wstring& dir, bool shortcu
             children.push_back({path, sfi.szDisplayName[0] ? sfi.szDisplayName : it.name, sfi.iIcon, true});
         }
     }
-    return children;
+}
+
+// The user's folders shown as roots (only those that exist, with Windows' names and icons), into `batch`.
+// Runs on a worker thread: verifying a folder redirected to an unreachable server, and reading
+// its desktop.ini for the icon, can each take 20-60 s.
+void readUserFolders(TreeBatch& batch) {
+    const KNOWNFOLDERID* folders[] = {&FOLDERID_Desktop, &FOLDERID_Downloads, &FOLDERID_Documents,
+                                      &FOLDERID_Pictures, &FOLDERID_Music,    &FOLDERID_Videos};
+    for (const KNOWNFOLDERID* id : folders) {
+        std::wstring path = knownFolder(*id);
+        SHFILEINFOW sfi{};
+        if (path.empty() || !SHGetFileInfoW(path.c_str(), 0, &sfi, sizeof sfi,
+                                            SHGFI_DISPLAYNAME | SHGFI_SYSICONINDEX | SHGFI_SMALLICON))
+            continue;
+        batch.children.push_back({path, sfi.szDisplayName, sfi.iIcon});
+    }
 }
 
 }  // namespace
@@ -44,8 +60,10 @@ void FolderTree::create(HWND parent, int id, UINT batchMsg, const std::wstring& 
     parent_ = parent;
     bookmarks_ = bookmarks;
     batchMsg_ = batchMsg;
+    // TVS_LINESATROOT: without it the root items (Bookmarks, This PC) get no expand arrow at all.
+    // No lines are drawn because TVS_HASLINES is absent, which is how Explorer does it.
     tv_ = CreateWindowExW(0, WC_TREEVIEWW, L"",
-                          WS_CHILD | WS_VISIBLE | WS_TABSTOP | TVS_HASBUTTONS | TVS_SHOWSELALWAYS |
+                          WS_CHILD | WS_VISIBLE | WS_TABSTOP | TVS_HASBUTTONS | TVS_LINESATROOT | TVS_SHOWSELALWAYS |
                               TVS_TRACKSELECT | TVS_FULLROWSELECT | TVS_NOHSCROLL,
                           0, 0, 0, 0, parent, reinterpret_cast<HMENU>(INT_PTR(id)), GetModuleHandleW(nullptr), nullptr);
     TreeView_SetExtendedStyle(tv_, TVS_EX_DOUBLEBUFFER | TVS_EX_FADEINOUTEXPANDOS,
@@ -55,21 +73,11 @@ void FolderTree::create(HWND parent, int id, UINT batchMsg, const std::wstring& 
 }
 
 void FolderTree::fill() {
-    ++fill_;   // results still being read for the old nodes will be dropped
-    reading_.clear();
+    reading_.clear();   // results still being read for the old nodes will be dropped
     TreeView_DeleteAllItems(tv_);
     paths_.clear();
     HTREEITEM bookmarks = add(TVI_ROOT, bookmarks_, L"Bookmarks", folderIcon());
-    const KNOWNFOLDERID* folders[] = {&FOLDERID_Desktop, &FOLDERID_Downloads, &FOLDERID_Documents,
-                                      &FOLDERID_Pictures, &FOLDERID_Music,    &FOLDERID_Videos};
-    for (const KNOWNFOLDERID* id : folders) {
-        std::wstring path = knownFolder(*id);
-        SHFILEINFOW sfi{};
-        if (path.empty() || !SHGetFileInfoW(path.c_str(), 0, &sfi, sizeof sfi,
-                                            SHGFI_DISPLAYNAME | SHGFI_SYSICONINDEX | SHGFI_SMALLICON))
-            continue;
-        add(TVI_ROOT, path, sfi.szDisplayName, sfi.iIcon);
-    }
+    startWorker(nullptr, readUserFolders);   // the user folders arrive later, like the drives
     SHFILEINFOW pc{};
     PIDLIST_ABSOLUTE pidl = nullptr;
     if (SUCCEEDED(SHGetKnownFolderIDList(FOLDERID_ComputerFolder, 0, nullptr, &pidl))) {
@@ -81,11 +89,12 @@ void FolderTree::fill() {
     TreeView_Expand(tv_, thisPc, TVE_EXPAND);
 }
 
-HTREEITEM FolderTree::add(HTREEITEM parent, const std::wstring& path, const std::wstring& text, int icon, bool leaf) {
+HTREEITEM FolderTree::add(HTREEITEM parent, const std::wstring& path, const std::wstring& text, int icon, bool leaf,
+                          HTREEITEM after) {
     paths_.push_back(path);
     TVINSERTSTRUCTW ins{};
     ins.hParent = parent;
-    ins.hInsertAfter = TVI_LAST;
+    ins.hInsertAfter = after;
     ins.item.mask = TVIF_TEXT | TVIF_IMAGE | TVIF_SELECTEDIMAGE | TVIF_PARAM | TVIF_CHILDREN;
     ins.item.pszText = const_cast<wchar_t*>(text.c_str());
     ins.item.iImage = ins.item.iSelectedImage = icon;
@@ -103,27 +112,43 @@ const std::wstring& FolderTree::pathOf(HTREEITEM node) const {
 }
 
 void FolderTree::startReading(HTREEITEM node) {
-    if (TreeView_GetChild(tv_, node) || !reading_.insert(node).second) return;   // already read, or being read
+    if (TreeView_GetChild(tv_, node) || reading_.count(node)) return;   // already read, or being read
     std::wstring dir = pathOf(node);
+    bool shortcuts = node == TreeView_GetRoot(tv_);   // the Bookmarks node
+    startWorker(node, [dir, shortcuts](TreeBatch& batch) { readChildren(batch, dir, shortcuts); });
+}
+
+void FolderTree::startWorker(HTREEITEM node, std::function<void(TreeBatch&)> reader) {
+    unsigned read = reading_[node] = ++reads_;
     HWND parent = parent_;
     UINT msg = batchMsg_;
-    unsigned fill = fill_;
-    bool shortcuts = node == TreeView_GetRoot(tv_);   // the Bookmarks node
-    std::thread([parent, msg, fill, node, dir, shortcuts] {
+    std::thread([parent, msg, read, node, reader = std::move(reader)] {
         HRESULT co = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE);
         auto batch = std::make_unique<TreeBatch>();
-        batch->fill = fill;
+        batch->read = read;
         batch->node = node;
-        batch->children = readChildren(dir, shortcuts);
+        reader(*batch);
         if (PostMessageW(parent, msg, 0, reinterpret_cast<LPARAM>(batch.get()))) batch.release();
         if (SUCCEEDED(co)) CoUninitialize();
     }).detach();
 }
 
 void FolderTree::addChildren(const TreeBatch& batch) {
-    // Nodes are only ever deleted by fill(), so a batch from the current fill has a valid node.
-    if (batch.fill != fill_ || !reading_.erase(batch.node)) return;
+    // A deleted node left reading_ in TVN_DELETEITEM, so a node still in there is alive; if it reuses the handle
+    // of a deleted node whose read is still in flight, the read number tells that stale batch from its own.
+    auto it = reading_.find(batch.node);
+    if (it == reading_.end() || it->second != batch.read) return;
+    reading_.erase(it);
+    if (!batch.node) {   // the user folders go after Bookmarks (always the first root) and before This PC
+        HTREEITEM after = TreeView_GetRoot(tv_);
+        for (const auto& c : batch.children) after = add(TVI_ROOT, c.path, c.text, c.icon, false, after);
+        return;
+    }
     if (batch.children.empty()) {
+        // The arrow stays when nothing is known (the read failed) and on Bookmarks, which is empty on a first
+        // run and filled by the user while the app runs (5.6); the next expand reads again. Other nodes are
+        // now known to have no subfolders (5.5).
+        if (batch.failed || batch.node == TreeView_GetRoot(tv_)) return;
         TVITEMW item{};
         item.mask = TVIF_CHILDREN;
         item.hItem = batch.node;
@@ -163,6 +188,10 @@ bool FolderTree::onNotify(NMHDR* nm, std::wstring* open) {
         if (tv->action & TVE_COLLAPSE) TreeView_Expand(tv_, tv->itemNew.hItem, TVE_COLLAPSE | TVE_COLLAPSERESET);
         return false;
     }
+    case TVN_DELETEITEMW:
+        // The handle dies with the node (collapse, fill(), shutdown); a read still in flight must not insert under it.
+        reading_.erase(reinterpret_cast<NMTREEVIEWW*>(nm)->itemOld.hItem);
+        return false;
     case TVN_SELCHANGEDW: {
         auto* tv = reinterpret_cast<NMTREEVIEWW*>(nm);
         if (tv->action == TVC_BYMOUSE || tv->action == TVC_BYKEYBOARD) {
