@@ -256,7 +256,8 @@ Back/Forward/Up are disabled when they cannot do anything.
 - **Filter:** typing any printable character while the list has focus moves it into
   the filter box and filters at once. The filter matches anywhere in the name,
   case-insensitively; with `*` or `?` it is a wildcard pattern (`*.pdf`). The list
-  shows matches from the top. Esc clears it. Down arrow moves to the list; Enter in
+  shows matches from the top, except that a highlighted item that matches stays
+  highlighted and in view. Esc clears it. Down arrow moves to the list; Enter in
   the filter box opens the focused item. Changing folder clears the filter; a refresh
   of the same folder keeps it.
 - Rename in place (F2 or the context menu): the name is pre-selected without its
@@ -320,8 +321,9 @@ Back/Forward/Up are disabled when they cannot do anything.
   or the last), Ctrl+9 (last tab).
 - **Drop onto a tab:** dragging files over a tab highlights it; dropping copies/moves
   them into that tab's folder exactly like dropping on that folder in Explorer (Shift
-  /Ctrl/Alt change the effect as usual). Not onto This PC, and not back into the
-  folder the files are being dragged from.
+  /Ctrl/Alt change the effect as usual). Not onto This PC, not onto a tab whose folder
+  has not loaded here yet or failed, and not back into the folder the files are being
+  dragged from.
 - Tabs are **not remembered between runs** (see 5.10).
 
 ### 5.8 File operations (all done by Windows)
