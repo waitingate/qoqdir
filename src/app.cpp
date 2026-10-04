@@ -345,6 +345,10 @@ LRESULT App::onMessage(UINT msg, WPARAM wp, LPARAM lp) {
     case WM_CAPTURECHANGED:
         dragging_ = false;
         return 0;
+    case WM_ENDSESSION:
+        // Shutdown or sign-out ends the process without a WM_CLOSE: save here too (5.11).
+        if (wp) saveSettings();
+        return 0;
     case WM_CLOSE:
         saveSettings();
         DestroyWindow(wnd_);
@@ -477,6 +481,10 @@ void App::onContextMenu(HWND from, POINT pt) {
         showMenu(wnd_, itemMenu(wnd_, list_.dir(), list_.selectedItems()).get(), pt, [&](const std::wstring& verb) {
             if (is(verb, L"rename")) {
                 list_.rename(list_.focused() >= 0 ? list_.focused() : rows[0]);
+                return true;
+            }
+            if (is(verb, L"delete")) {   // like the Delete key, so the item after the deleted ones is selected (4.6)
+                deleteSelection(GetKeyState(VK_SHIFT) < 0);
                 return true;
             }
             if (opensHere && (is(verb, L"open") || is(verb, L"explore"))) {
@@ -721,6 +729,7 @@ void App::onLoaded(Listing&& listing, UINT generation) {
     if (t.forward.size() > kMaxHistory) t.forward.erase(t.forward.begin());
 
     ViewState view = std::move(p.view);
+    bool requested = !view.select.empty() || !view.focus.empty();   // an item a rename, delete or new folder asked for
     bool moved = p.nav == Nav::New || p.nav == Nav::Back || p.nav == Nav::Forward;
     if (p.nav == Nav::Refresh && sameFolder) {
         if (view.select.empty() && view.focus.empty()) view = currentView();
@@ -737,8 +746,8 @@ void App::onLoaded(Listing&& listing, UINT generation) {
     t.unavailable = false;
     list_.setListing(std::move(listing));
     int row = list_.select(view.select, view.focus);
-    if (view.top >= 0) list_.scrollToRow(view.top);
-    else list_.ensureVisible(row);
+    if (view.top >= 0) list_.scrollToRow(view.top);   // a refresh keeps the scroll position (4.5)...
+    if (view.top < 0 || requested) list_.ensureVisible(row);   // ...but what the user just made or renamed shows
     if (view.rename && row >= 0) list_.rename(row);
 
     watch_ = FolderWatch(wnd_, WM_APP_CHANGED, t.path);
@@ -773,7 +782,10 @@ void App::onLoadFailed(const Listing& listing, const Pending& p) {
         SetWindowTextW(address_, locationText(t.path).c_str());
         return;
     }
-    if (p.origin.typed) {   // let the user correct what they typed
+    // Let the user correct what they typed (5.3), unless they have moved on since Enter left the focus on
+    // the list: a dead share fails a minute later, and taking the focus then would commit a half-typed
+    // rename or interrupt the filter box.
+    if (p.origin.typed && GetFocus() == list_.hwnd()) {
         SetFocus(address_);
         SendMessageW(address_, EM_SETSEL, 0, -1);
     }
@@ -903,8 +915,14 @@ void App::activate(bool inNewTab) {
 void App::openShortcut(const std::wstring& path, bool inNewTab) {
     bool folder = false;
     std::wstring target = extensionOf(path) == L".lnk" ? shortcutTarget(path, &folder) : L"";
-    if (!isAbsolutePath(target)) openFile(wnd_, path);   // a web link, a program...
-    else if (inNewTab && folder) newTab(target, false);
+    if (!isAbsolutePath(target)) {
+        openFile(wnd_, path);   // a web link, a program...
+        return;
+    }
+    // Like every other way into a tab, the path is normalised first: a stored "D:\photos\" would
+    // otherwise give a blank caption and an Up that stays put. (String work only, no disk access.)
+    target = normalizePath(target);
+    if (inNewTab && folder) newTab(target, false);
     else open(target, Nav::New, {}, Origin::fromShortcut(path));
 }
 
@@ -1020,8 +1038,9 @@ void App::deleteSelection(bool permanently) {
     int next = rows.back() + 1 < list_.count() ? rows.back() + 1 : rows.front() - 1;
     ViewState v = next >= 0 && next < list_.count() ? ViewState::selecting(list_.at(next).name) : ViewState{};
     v.top = list_.topRow();
-    deleteItems(wnd_, list_.dir(), list_.selectedItems(), permanently);
-    refresh(v);
+    // Answering No to Windows' question (or an error) deletes nothing: then the selection stays where it
+    // was. Anything deleted before a cancel still shows up through the folder watch.
+    if (deleteItems(wnd_, list_.dir(), list_.selectedItems(), permanently)) refresh(v);
 }
 
 void App::newFolder() {
@@ -1032,6 +1051,7 @@ void App::newFolder() {
         DWORD error = GetLastError();
         if (error != ERROR_ALREADY_EXISTS || i > 999) {
             setMessage(errorText(error));
+            warn();   // 4.9: an impossible action beeps
             return;
         }
         name = L"New folder (" + std::to_wstring(i) + L")";
@@ -1100,7 +1120,9 @@ void App::loadSettings(const CommandLine& cmd) {
         int x = number(L"X", 0), y = number(L"Y", 0);
         wp.rcNormalPosition = {x, y, x + w, y + h};
         wp.showCmd = number(L"Maximized", 0) ? SW_SHOWMAXIMIZED : SW_SHOWNORMAL;
-        SetWindowPlacement(wnd_, &wp);
+        // A position on a monitor that is gone (a laptop undocked) would put the window out of sight.
+        if (MonitorFromRect(&wp.rcNormalPosition, MONITOR_DEFAULTTONULL)) SetWindowPlacement(wnd_, &wp);
+        else ShowWindow(wnd_, wp.showCmd);
     } else {
         ShowWindow(wnd_, useSettings_ ? SW_SHOWNORMAL : SW_SHOWNOACTIVATE);   // a self-test never steals focus
     }

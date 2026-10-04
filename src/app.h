@@ -66,6 +66,7 @@ private:
     struct SelfTest;
     std::unique_ptr<SelfTest> selfTest_;
     void selfTestTick();
+    void selfTestLog(const std::wstring& line);   // appends to the log file at once
     void selfTestKey(WPARAM vk, bool ctrl = false, bool shift = false, bool alt = false);
     void selfTestType(const std::wstring& text);
     static constexpr UINT_PTR kRefreshTimer = 1, kStatusTimer = 2, kLoadingTimer = 3, kSelfTestTimer = 50;

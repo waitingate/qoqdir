@@ -123,6 +123,8 @@ HRESULT fileOperation(HWND owner, DWORD flags, AddWork addWork) {
     op->SetOperationFlags(flags);
     hr = addWork(op.get());
     if (SUCCEEDED(hr)) hr = op->PerformOperations();
+    BOOL aborted = FALSE;   // the user answered No or Cancel: nothing (or not everything) was done
+    if (SUCCEEDED(hr) && SUCCEEDED(op->GetAnyOperationsAborted(&aborted)) && aborted) hr = HRESULT_FROM_WIN32(ERROR_CANCELLED);
     return hr;
 }
 
@@ -344,13 +346,13 @@ void pasteInto(HWND owner, const std::wstring& dir, bool shortcuts) {
     invokeVerb(owner, backgroundMenu(owner, dir).get(), shortcuts ? "pastelink" : "paste");
 }
 
-void deleteItems(HWND owner, const std::wstring& dir, const std::vector<Item>& items, bool permanently) {
+bool deleteItems(HWND owner, const std::wstring& dir, const std::vector<Item>& items, bool permanently) {
     Com<IDataObject> obj = dataObject(owner, dir, items);
-    if (!obj) return;
+    if (!obj) return false;
     // FOF_WANTNUKEWARNING in both cases: Windows still asks before destroying an item it cannot recycle
     // (network share, USB stick, oversized file); without it FOF_NOCONFIRMATION answers Yes for the user.
     DWORD flags = FOF_WANTNUKEWARNING | (permanently ? 0 : FOF_ALLOWUNDO | FOFX_RECYCLEONDELETE | FOF_NOCONFIRMATION);
-    fileOperation(owner, flags, [&](IFileOperation* op) { return op->DeleteItems(obj.get()); });
+    return SUCCEEDED(fileOperation(owner, flags, [&](IFileOperation* op) { return op->DeleteItems(obj.get()); }));
 }
 
 HRESULT renameItem(HWND owner, const std::wstring& path, const std::wstring& newName) {

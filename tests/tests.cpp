@@ -32,6 +32,12 @@ static Item file(const wchar_t* name, uint64_t size = 0, bool dir = false) {
     return it;
 }
 
+static Item dated(const wchar_t* name, uint64_t time) {   // a file with a last-write time
+    Item it = file(name);
+    it.modified = {DWORD(time), DWORD(time >> 32)};
+    return it;
+}
+
 static std::wstring names(const std::vector<Item>& items) {
     std::wstring s;
     for (const auto& it : items) s += (s.empty() ? L"" : L",") + it.name;
@@ -148,8 +154,35 @@ int main() {
         CHECK_EQ(names(v), L"b,a,notes.md,file10.txt,file2.txt");
         sortItems(v, SortKey::Size, false);
         CHECK_EQ(names(v), L"b,a,file2.txt,file10.txt,notes.md");
+        sortItems(v, SortKey::Size, true);   // 7.1: each column in both directions, folders first either way
+        CHECK_EQ(names(v), L"a,b,notes.md,file10.txt,file2.txt");
         sortItems(v, SortKey::Type, true);
         CHECK_EQ(names(v), L"a,b,notes.md,file2.txt,file10.txt");
+        sortItems(v, SortKey::Type, false);
+        CHECK_EQ(names(v), L"b,a,file10.txt,file2.txt,notes.md");
+    }
+
+    // sortItems by date, both directions; equal dates fall back to the name
+    {
+        std::vector<Item> v = {dated(L"x.txt", 3), dated(L"y.txt", 1), dated(L"p.txt", 2), dated(L"q.txt", 2),
+                               file(L"a", 0, true)};
+        sortItems(v, SortKey::Modified, true);
+        CHECK_EQ(names(v), L"a,y.txt,p.txt,q.txt,x.txt");
+        sortItems(v, SortKey::Modified, false);
+        CHECK_EQ(names(v), L"a,x.txt,q.txt,p.txt,y.txt");
+    }
+
+    // Names outside ASCII (Chinese, an emoji as a surrogate pair) and a path far beyond MAX_PATH
+    CHECK_EQ(leafName(L"C:\\\u5831\u544A\\\U0001F600.JPG"), L"\U0001F600.JPG");
+    CHECK_EQ(parentPath(L"C:\\\u5831\u544A\\\U0001F600.JPG"), L"C:\\\u5831\u544A");
+    CHECK_EQ(joinPath(L"C:\\\u5831\u544A", L"\U0001F600.JPG"), L"C:\\\u5831\u544A\\\U0001F600.JPG");
+    CHECK_EQ(extensionOf(L"\U0001F600.JPG"), L".jpg");
+    CHECK_EQ(normalizePath(L"c:/\u5831\u544A/"), L"C:\\\u5831\u544A");
+    {
+        std::wstring deep = L"C:\\" + std::wstring(300, L'a') + L"\\b";   // 306 characters
+        CHECK_EQ(normalizePath(deep + L"\\"), deep);
+        CHECK_EQ(parentPath(deep), deep.substr(0, 303));
+        CHECK_EQ(leafName(deep), L"b");
     }
 
     // sortItems by Type uses the type name shown in the list (when known), like Explorer

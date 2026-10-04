@@ -21,7 +21,7 @@ struct App::SelfTest {
     size_t index = 0;
     bool started = false, busy = false;
     ULONGLONG startTick = 0;
-    std::wstring dir, logPath, log, note;
+    std::wstring dir, logPath, note;
     int failures = 0;
 };
 
@@ -119,6 +119,9 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
     SelfTest& t = *selfTest_;
     t.dir = dir;
     t.logPath = logPath;
+    if (HANDLE f = CreateFileW(logPath.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+        f != INVALID_HANDLE_VALUE)
+        CloseHandle(f);   // the log starts empty; every step then appends its line (selfTestLog)
     auto path = [dir](const std::wstring& name) { return joinPath(dir, name); };
     auto idle = [this] { return pending_.generation == 0; };
     auto at = [this, idle](const std::wstring& p) { return idle() && samePath(tab().path, p); };
@@ -145,6 +148,8 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
     static double t0 = 0, keyMs = 0;   // keyMs: how long a key press kept the window busy
     static int rows = 0;               // list rows before a refresh that must wait
     static DWORD dragEffect = 0;       // what a simulated drag was allowed to do
+    static std::wstring next;          // the item after the one Delete removes
+    static int top = 0;                // a scroll position to come back to
 
     // 6 items: the 5 test files and folders, plus the self-test's own Bookmarks folder.
     add(L"opens the start folder with all 6 items", nullptr, [=, this] { return at(dir) && list_.count() == 6; });
@@ -243,12 +248,25 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
             return idle() && !list_.renaming() && exists(path(L"renamed2.pdf")) && !exists(path(L"\u5831\u544A.pdf")) &&
                    listed(L"added.txt");
         });
-    add(L"Delete moves the file to the Recycle Bin",
-        [=, this] { SetWindowTextW(filter_, L""); SetFocus(list_.hwnd()); selfTestType(L"file10"); selfTestKey(VK_DOWN); selfTestKey(VK_DELETE); },
-        [=, this] { return idle() && !exists(path(L"file10.txt")); }, 10000);
-    add(L"files created by other programs appear by themselves",
-        [=, this] { SetWindowTextW(filter_, L""); writeFile(path(L"external.txt")); },
-        [=, this] { return idle() && listed(L"external.txt"); });
+    add(L"Delete moves the file to the Recycle Bin and selects the item after it",
+        [=, this] {
+            SetWindowTextW(filter_, L"");   // unfiltered, so there is an item after it (4.6)
+            SetFocus(list_.hwnd());
+            int row = list_.select({L"file10.txt"}, L"file10.txt");
+            next = row >= 0 && row + 1 < list_.count() ? list_.at(row + 1).name : L"";
+            selfTestKey(VK_DELETE);
+        },
+        [=, this] {
+            return idle() && !exists(path(L"file10.txt")) && list_.selectedNames() == std::vector<std::wstring>{next};
+        },
+        10000);
+    add(L"files created by other programs appear by themselves, and the selection stays (4.5)",
+        [=, this] {
+            SetWindowTextW(filter_, L"");
+            list_.select({L"file1.txt"}, L"file1.txt");
+            writeFile(path(L"external.txt"));
+        },
+        [=, this] { return idle() && listed(L"external.txt") && list_.focusedName() == L"file1.txt"; });
     add(L"opening a folder", [=, this] { CreateDirectoryW(path(L"gone").c_str(), nullptr); open(path(L"gone"), Nav::New); },
         [=, this] { return at(path(L"gone")); });
     add(L"...that another program deletes stays in its tab, shown as not available",
@@ -270,6 +288,8 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
     add(L"(back up to the test folder)", [=, this] { SetFocus(list_.hwnd()); selfTestKey(VK_BACK); }, [=, this] { return at(dir); });
     add(L"Ctrl+T opens a tab", [=, this] { selfTestKey('T', true); }, [=, this] { return idle() && tabs_.size() == 2; });
     add(L"Ctrl+W closes it", [=, this] { selfTestKey('W', true); }, [=, this] { return idle() && tabs_.size() == 1 && at(dir); });
+    add(L"Ctrl+W on the last tab keeps it (the last tab cannot be closed)", [=, this] { selfTestKey('W', true); },
+        [=, this] { return idle() && tabs_.size() == 1 && at(dir); });
     add(L"switching tabs shows the new tab at once; nothing acts on the old one meanwhile",
         [=, this] {
             newTab(path(L"sub"), false);
@@ -290,6 +310,22 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
     add(L"Enter on a missing typed path shows an error and stays put",
         [=, this] { SetWindowTextW(address_, L"C:\\no\\such\\folder\\anywhere"); SetFocus(address_); selfTestKey(VK_RETURN); },
         [=, this] { return at(dir); });
+    add(L"a typed path that fails while a rename box is open leaves the box alone",
+        [=, this] {
+            // The failure lands after this action (on a dead share it would be a minute later); the user
+            // has started a rename meanwhile, which a focus change would commit half-typed.
+            SetWindowTextW(address_, L"C:\\no\\such\\folder\\anywhere");
+            SetFocus(address_);
+            selfTestKey(VK_RETURN);
+            list_.select({L"file1.txt"}, L"file1.txt");
+            selfTestKey(VK_F2);
+        },
+        [=, this] { return at(dir) && list_.renaming() && GetFocus() != address_; });
+    add(L"(cancel that rename)", [=, this] { ListView_CancelEditLabel(list_.hwnd()); },
+        [=, this] { return !list_.renaming(); });
+    add(L"a command that does not exist says Can't find",
+        [=, this] { SetWindowTextW(address_, L"no-such-program-qoqdir"); SetFocus(address_); selfTestKey(VK_RETURN); },
+        [=, this] { return at(dir) && statusMessage().find(L"Can't find") != std::wstring::npos; });
 
     add(L"typing a folder path opens it",
         [=, this] { SetWindowTextW(address_, path(L"sub").c_str()); SetFocus(address_); selfTestKey(VK_RETURN); },
@@ -336,6 +372,13 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
             return true;
         });
     add(L"(the shortcut's folder is shown)", nullptr, [=, this] { return at(path(L"sub")); });
+    add(L"(back up to the test folder)", [=, this] { open(dir, Nav::New); }, [=, this] { return at(dir); });
+    add(L"a shortcut whose target ends with a backslash opens the folder with a clean path",
+        [=, this] {
+            makeShortcut(path(L"slash.lnk"), path(L"sub") + L"\\");   // as hand-made shortcuts often have it
+            openShortcut(path(L"slash.lnk"), false);
+        },
+        [=, this] { return at(path(L"sub")) && tab().path.back() != L'\\'; });   // else the caption and Up break
     add(L"(back up to the test folder)", [=, this] { open(dir, Nav::New); }, [=, this] { return at(dir); });
     add(L"Ctrl+Enter on a shortcut to a folder opens it in a new background tab (not in Explorer)",
         [=, this] {
@@ -722,6 +765,32 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
             list_.setSort(SortKey::Name, true);
         },
         [=, this] { return list_.count() == 10000; });
+    add(L"a refresh that asks for an item brings it on screen (as after a rename or a new folder)",
+        [=, this] {
+            list_.ensureVisible(9999);                       // scrolled to the bottom
+            refresh(ViewState::selecting(L"item 0.dat"));    // the first row
+        },
+        [=, this] {
+            int row = list_.focused(), first = list_.topRow();   // on screen: within the page that starts at the top row
+            selfTest_->note = L"top row " + std::to_wstring(first);
+            return idle() && list_.focusedName() == L"item 0.dat" && row >= first &&
+                   row < first + ListView_GetCountPerPage(list_.hwnd());
+        });
+    add(L"Ctrl+T opens a second tab of the folder; the first keeps its selection and scroll position",
+        [=, this] {
+            SetFocus(list_.hwnd());
+            list_.select({L"item 5000.dat"}, L"item 5000.dat");
+            list_.ensureVisible(list_.focused());
+            top = list_.topRow();
+            selfTestKey('T', true);
+        },
+        [=, this] { return at(path(L"big")) && tabs_.size() == 2 && active_ == 1; });
+    add(L"Ctrl+Tab back restores the selection and the scroll position (4.6)", [=, this] { selfTestKey(VK_TAB, true); },
+        [=, this] {
+            return idle() && active_ == 0 && list_.focusedName() == L"item 5000.dat" &&
+                   list_.selectedNames() == std::vector<std::wstring>{L"item 5000.dat"} && list_.topRow() == top;
+        });
+    add(L"(close the other tab)", [=, this] { closeTab(1); }, [=, this] { return idle() && tabs_.size() == 1; });
 
     add(L"copies 10,000 selected files to the clipboard",
         [=, this] {
@@ -751,6 +820,19 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
     SetTimer(wnd_, kSelfTestTimer, 50, nullptr);
 }
 
+// One line of the log, written at once (7.2): a hang or a crash later still leaves the steps so far.
+void App::selfTestLog(const std::wstring& line) {
+    HANDLE f = CreateFileW(selfTest_->logPath.c_str(), FILE_APPEND_DATA, FILE_SHARE_READ, nullptr, OPEN_ALWAYS,
+                           FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (f == INVALID_HANDLE_VALUE) return;
+    int n = WideCharToMultiByte(CP_UTF8, 0, line.c_str(), int(line.size()), nullptr, 0, nullptr, nullptr);
+    std::string utf8(size_t(n), '\0');
+    WideCharToMultiByte(CP_UTF8, 0, line.c_str(), int(line.size()), utf8.data(), n, nullptr, nullptr);
+    DWORD written = 0;
+    WriteFile(f, utf8.data(), DWORD(utf8.size()), &written, nullptr);
+    CloseHandle(f);
+}
+
 void App::selfTestTick() {
     SelfTest& t = *selfTest_;
     if (t.busy) return;   // an action is running a modal loop (e.g. a progress dialog)
@@ -770,26 +852,17 @@ void App::selfTestTick() {
         ULONGLONG elapsed = GetTickCount64() - t.startTick;
         if (!ok && elapsed < s.timeoutMs) return;
         if (!ok) ++t.failures;
-        t.log += (ok ? L"ok    " : L"FAIL  ") + s.name + (t.note.empty() ? L"" : L"   [" + t.note + L"]");
-        if (elapsed > 500) t.log += L"   (slow step: " + std::to_wstring(elapsed) + L" ms)";
-        t.log += L"\n";
+        std::wstring line = (ok ? L"ok    " : L"FAIL  ") + s.name + (t.note.empty() ? L"" : L"   [" + t.note + L"]");
+        if (elapsed > 500) line += L"   (slow step: " + std::to_wstring(elapsed) + L" ms)";
+        selfTestLog(line + L"\n");
         ++t.index;
         t.started = false;
         return;
     }
 
     KillTimer(wnd_, kSelfTestTimer);
-    t.log += t.failures ? std::to_wstring(t.failures) + L" step(s) FAILED\n" : L"all steps passed\n";
+    selfTestLog(t.failures ? std::to_wstring(t.failures) + L" step(s) FAILED\n" : L"all steps passed\n");
     deleteTree(t.dir);
-    if (HANDLE f = CreateFileW(t.logPath.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, 0, nullptr);
-        f != INVALID_HANDLE_VALUE) {
-        int n = WideCharToMultiByte(CP_UTF8, 0, t.log.c_str(), int(t.log.size()), nullptr, 0, nullptr, nullptr);
-        std::string utf8(size_t(n), '\0');
-        WideCharToMultiByte(CP_UTF8, 0, t.log.c_str(), int(t.log.size()), utf8.data(), n, nullptr, nullptr);
-        DWORD written = 0;
-        WriteFile(f, utf8.data(), DWORD(utf8.size()), &written, nullptr);
-        CloseHandle(f);
-    }
     exitCode_ = t.failures ? 1 : 0;
     PostMessageW(wnd_, WM_CLOSE, 0, 0);
 }

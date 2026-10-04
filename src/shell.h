@@ -46,7 +46,8 @@ bool invokeVerb(HWND owner, IContextMenu* menu, const char* verb);
 
 void copyToClipboard(HWND owner, const std::wstring& dir, const std::vector<Item>& items, bool cut);
 void pasteInto(HWND owner, const std::wstring& dir, bool shortcuts = false);   // shortcuts: "Paste shortcut"
-void deleteItems(HWND owner, const std::wstring& dir, const std::vector<Item>& items, bool permanently);
+// False when nothing was deleted: the user said No to Windows' question, or it failed.
+bool deleteItems(HWND owner, const std::wstring& dir, const std::vector<Item>& items, bool permanently);
 HRESULT renameItem(HWND owner, const std::wstring& path, const std::wstring& newName);
 void openFile(HWND owner, const std::wstring& path);
 bool runCommand(HWND owner, const std::wstring& command, const std::wstring& workDir);
