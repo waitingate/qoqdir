@@ -13,7 +13,7 @@ use std::rc::Rc;
 use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
-use windows::Win32::Foundation::{HGLOBAL, HWND, LPARAM, POINT, POINTL, RECT, WPARAM};
+use windows::Win32::Foundation::{HGLOBAL, LPARAM, POINT, POINTL, RECT, WPARAM};
 use windows::Win32::Graphics::Gdi::ClientToScreen;
 use windows::Win32::Storage::FileSystem::{
     FILE_ATTRIBUTE_ARCHIVE, FILE_ATTRIBUTE_HIDDEN, FILE_FLAGS_AND_ATTRIBUTES, GetFileAttributesW, GetLongPathNameW,
@@ -33,7 +33,7 @@ use windows::Win32::UI::Controls::{
     TVM_GETITEMW, TVM_GETNEXTITEM, TVM_HITTEST, TVM_SELECTITEM,
 };
 use windows::Win32::UI::Input::KeyboardAndMouse::{
-    GetFocus, SetFocus, VIRTUAL_KEY, VK_BACK, VK_DELETE, VK_DOWN, VK_ESCAPE, VK_F2, VK_F5, VK_LEFT, VK_RETURN, VK_RIGHT,
+    GetFocus, VIRTUAL_KEY, VK_BACK, VK_DELETE, VK_DOWN, VK_ESCAPE, VK_F2, VK_F5, VK_LEFT, VK_RETURN, VK_RIGHT,
     VK_TAB,
 };
 use windows::Win32::UI::Shell::{
@@ -41,7 +41,7 @@ use windows::Win32::UI::Shell::{
     SHGFI_SYSICONINDEX, SHGetFileInfoW, SHGetKnownFolderIDList, StrCmpLogicalW,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    GetWindowTextLengthW, KillTimer, PostMessageW, SetTimer, SetWindowTextW, WM_CHAR, WM_CLOSE, WM_DEVICECHANGE,
+    GetWindowTextLengthW, KillTimer, PostMessageW, SetTimer, WM_CHAR, WM_CLOSE, WM_DEVICECHANGE,
     WM_KEYDOWN, WM_MBUTTONUP, WM_SYSKEYDOWN, WM_TIMER,
 };
 
@@ -50,7 +50,7 @@ use crate::folder::{Item, Listing, Location, SortKey, exists, is_directory, is_s
 use crate::shell::{
     copy_to_clipboard, data_object_at, item_menu_at, known_folder, paste_into, shortcut_target, type_name,
 };
-use crate::util::{Pidl, from_wide, pcwstr, send, wide, window_text};
+use crate::util::{Pidl, focus, from_wide, pcwstr, send, set_text, wide, window_text};
 
 type Act = Rc<dyn Fn(&App)>;
 type Check = Rc<dyn Fn(&App) -> bool>;
@@ -86,6 +86,11 @@ impl Steps {
 
     fn check(&mut self, name: &'static str, done: impl Fn(&App) -> bool + 'static) -> &mut Step {
         self.push(name, None, Rc::new(done))
+    }
+
+    /// A step that opens the test folder again.
+    fn home(&mut self, name: &'static str) {
+        self.add(name, |a| a.open(Location::dir(test_dir()), Nav::New, ViewState::default()), |a| a.at(&test_dir()));
     }
 
     fn push(&mut self, name: &'static str, act: Option<Act>, done: Check) -> &mut Step {
@@ -235,18 +240,6 @@ const CTRL: u8 = 1;
 const SHIFT: u8 = 2;
 const ALT: u8 = 4;
 
-fn focus(h: HWND) {
-    unsafe {
-        let _ = SetFocus(Some(h));
-    }
-}
-
-fn set_text(h: HWND, text: impl AsRef<OsStr>) {
-    unsafe {
-        let _ = SetWindowTextW(h, pcwstr(&wide(text)));
-    }
-}
-
 /// The message a drive change sends: a volume came or went.
 fn volume_change(a: &App, event: usize) {
     let volume: [u32; 5] = [20, 2, 0, 0, 0]; // DEV_BROADCAST_VOLUME: size, DBT_DEVTYP_VOLUME, then unused fields
@@ -260,7 +253,7 @@ fn show_ghosts(a: &App) {
     let items = (0..3)
         .map(|i| Item { name: format!("ghost {i}.dat").into(), attrs: FILE_ATTRIBUTE_ARCHIVE.0, icon: -1, ..Default::default() })
         .collect();
-    a.list.set_listing(Listing { location: Location::dir(p("big")), items, error: None, is_file: false });
+    a.list.set_listing(Listing { location: Location::dir(p("big")), items, ..Default::default() });
     a.list.select_all();
 }
 
@@ -806,11 +799,7 @@ impl App {
                 a.at_pc() && a.status_message().contains("Can't find")
             },
         );
-        s.add(
-            "(back to the test folder from This PC)",
-            move |a| a.open(Location::dir(dir()), Nav::New, ViewState::default()),
-            move |a| a.at(&dir()),
-        );
+        s.home("(back to the test folder from This PC)");
 
         s.add("typing a folder path opens it", |a| a.go_to(p("sub")), |a| a.at(&p("sub")));
         s.add(
@@ -858,11 +847,7 @@ impl App {
                 whole && caption.len() <= 28
             },
         );
-        s.add(
-            "(back up to the test folder)",
-            move |a| a.open(Location::dir(dir()), Nav::New, ViewState::default()),
-            move |a| a.at(&dir()),
-        );
+        s.home("(back up to the test folder)");
 
         // A folder whose name looks like an environment variable: only what the user types is expanded.
         s.add(
@@ -919,11 +904,7 @@ impl App {
             },
             |a| a.idle() && a.tabs() == 1,
         );
-        s.add(
-            "(back to the test folder)",
-            move |a| a.open(Location::dir(dir()), Nav::New, ViewState::default()),
-            move |a| a.at(&dir()),
-        );
+        s.home("(back to the test folder)");
         s.add(
             "(remove the %TEMP% folder)",
             |a| {
@@ -1014,11 +995,7 @@ impl App {
             },
             |a| a.at(&p("temp1")),
         );
-        s.add(
-            "(go back to the test folder)",
-            move |a| a.open(Location::dir(dir()), Nav::New, ViewState::default()),
-            move |a| a.at(&dir()),
-        );
+        s.home("(go back to the test folder)");
         s.add(
             "Back to a deleted folder drops it from history instead of getting stuck",
             |a| {
@@ -1054,11 +1031,7 @@ impl App {
             enter_when(&["sub-link.lnk"]),
         );
         s.check("(the shortcut's folder is shown)", |a| a.at(&p("sub")));
-        s.add(
-            "(back up to the test folder)",
-            move |a| a.open(Location::dir(dir()), Nav::New, ViewState::default()),
-            move |a| a.at(&dir()),
-        );
+        s.home("(back up to the test folder)");
         let clean = |l: Location| !l.text().to_string_lossy().ends_with('\\'); // else the caption and Up break
         s.add(
             "a shortcut whose target ends with a backslash opens the folder with a clean path",
@@ -1068,11 +1041,7 @@ impl App {
             },
             move |a| a.at(&p("sub")) && clean(a.tab_location()),
         );
-        s.add(
-            "(back up to the test folder)",
-            move |a| a.open(Location::dir(dir()), Nav::New, ViewState::default()),
-            move |a| a.at(&dir()),
-        );
+        s.home("(back up to the test folder)");
         s.add(
             "Ctrl+Enter on a shortcut to a folder opens it in a new background tab (not in Explorer)",
             |a| {
@@ -1161,7 +1130,7 @@ impl App {
             },
             |_| KEY_MS.get() < 100,
         );
-        let back_home = move |a: &App| {
+        let reopen_home = move |a: &App| {
             {
                 let mut st = a.st.borrow_mut();
                 let active = st.active;
@@ -1169,7 +1138,7 @@ impl App {
             }
             a.open(Location::dir(dir()), Nav::Refresh, ViewState::default());
         };
-        s.add("(back to the test folder)", back_home, move |a| a.at(&dir()));
+        s.add("(back to the test folder)", reopen_home, move |a| a.at(&dir()));
         s.add(
             "a shortcut to a folder that is gone says so here (no Windows dialog)",
             |a| {
@@ -1190,11 +1159,7 @@ impl App {
             enter_when(&["pc.lnk"]),
         );
         s.check("(This PC is shown, with its drives)", |a| a.at_pc() && a.list.count() > 0);
-        s.add(
-            "(back to the test folder)",
-            move |a| a.open(Location::dir(dir()), Nav::New, ViewState::default()),
-            move |a| a.at(&dir()),
-        );
+        s.home("(back to the test folder)");
 
         // Regression tests for bugs fixed earlier.
         s.add(
@@ -1210,11 +1175,7 @@ impl App {
             },
             |a| a.at(&p("sub")) && noted() == "1 load(s) started",
         );
-        s.add(
-            "(back up to the test folder again)",
-            move |a| a.open(Location::dir(dir()), Nav::New, ViewState::default()),
-            move |a| a.at(&dir()),
-        );
+        s.home("(back up to the test folder again)");
         s.add(
             "a background refresh never cancels a folder being opened",
             |a| {
@@ -1258,7 +1219,7 @@ impl App {
             },
             |a| a.at(&p("sub\\deep")) && a.list.count() == 0 && a.status_message().contains("not available"),
         );
-        s.add("(back to the test folder)", back_home, move |a| a.at(&dir()));
+        s.add("(back to the test folder)", reopen_home, move |a| a.at(&dir()));
 
         // Slow lookups happen on worker threads (so network drives cannot freeze the window).
         s.add(
@@ -1528,11 +1489,7 @@ impl App {
                 a.bookmark_nodes() == "one,two,sub" && one != 0 && a.tree_child(one) != 0 && expanded && a.tree_child(a.tree_last_root()) != 0
             },
         );
-        s.add(
-            "(back to the test folder)",
-            move |a| a.open(Location::dir(dir()), Nav::New, ViewState::default()),
-            move |a| a.at(&dir()),
-        );
+        s.home("(back to the test folder)");
 
         // Speed: a folder with 10,000 files.
         s.add(

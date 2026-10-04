@@ -10,16 +10,12 @@ if(NOT CMAKE_BUILD_TYPE)
 endif()
 
 add_compile_definitions(UNICODE _UNICODE NOMINMAX _WIN32_WINNT=0x0A00 WINVER=0x0A00)
-if(MSVC)
-  add_compile_options(/W4 /permissive- /utf-8)
-else()
-  add_compile_options(-Wall -Wextra -Wshadow)
-  # A bad index (or other misuse of the standard library) stops the program with a message
-  # instead of quietly reading the wrong memory.
-  add_compile_definitions(_GLIBCXX_ASSERTIONS)
-  # One self-contained exe: no MinGW DLLs to ship alongside it.
-  add_link_options(-static $<$<CONFIG:Release>:-s>)
-endif()
+add_compile_options(-Wall -Wextra -Wshadow)
+# A bad index (or other misuse of the standard library) stops the program with a message
+# instead of quietly reading the wrong memory.
+add_compile_definitions(_GLIBCXX_ASSERTIONS)
+# One self-contained exe: no MinGW DLLs to ship alongside it.
+add_link_options(-static $<$<CONFIG:Release>:-s>)
 
 set(WIN_LIBS ole32 oleaut32 shell32 shlwapi comctl32 uxtheme uuid)
 
@@ -30,9 +26,7 @@ target_link_libraries(core PUBLIC ${WIN_LIBS})
 add_executable(${PROJECT_NAME} WIN32
   src/main.cpp src/crashlog.cpp src/app.cpp src/filelist.cpp src/tree.cpp src/shell.cpp src/selftest.cpp src/app.rc)
 target_link_libraries(${PROJECT_NAME} PRIVATE core)
-if(NOT MSVC)
-  target_link_options(${PROJECT_NAME} PRIVATE -municode)
-endif()
+target_link_options(${PROJECT_NAME} PRIVATE -municode)
 
 enable_testing()
 add_executable(unit_tests tests/tests.cpp)

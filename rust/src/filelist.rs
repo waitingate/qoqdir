@@ -31,12 +31,12 @@ use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, HMENU, PostMessageW, WINDOW_EX_STYLE, WINDOW_STYLE, WS_CHILD,
     WS_TABSTOP, WS_VISIBLE,
 };
-use windows::Win32::UI::Input::KeyboardAndMouse::SetFocus;
+
 use windows::core::w;
 
 use crate::folder::{Item, Listing, Location, SortKey, equal_no_case, matches_filter, sort_items, to_lower, format_size, format_time};
 use crate::shell::{icon_for, system_image_list, type_name};
-use crate::util::{send, copy_to, wide};
+use crate::util::{copy_to, focus, send, wide};
 
 const COLUMNS: [&str; 4] = ["Name", "Date modified", "Type", "Size"];
 const LVSICF_NOSCROLL: isize = 2;
@@ -331,9 +331,7 @@ impl FileList {
         if matches!(self.location(), Location::ThisPc) {
             return;
         }
-        unsafe {
-            let _ = SetFocus(Some(self.hwnd));
-        }
+        focus(self.hwnd);
         send(self.hwnd, LVM_EDITLABELW, row, 0);
     }
 

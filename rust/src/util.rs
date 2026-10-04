@@ -7,8 +7,11 @@ use std::os::windows::ffi::{OsStrExt, OsStringExt};
 use windows::Win32::Foundation::{HWND, LPARAM, WPARAM};
 use windows::Win32::Graphics::Gdi::{DeleteObject, HFONT};
 use windows::Win32::System::Com::CoTaskMemFree;
+use windows::Win32::UI::Input::KeyboardAndMouse::{GetKeyState, SetFocus, VIRTUAL_KEY};
 use windows::Win32::UI::Shell::Common::ITEMIDLIST;
-use windows::Win32::UI::WindowsAndMessaging::{DestroyMenu, GetWindowTextLengthW, GetWindowTextW, HMENU, SendMessageW};
+use windows::Win32::UI::WindowsAndMessaging::{
+    DestroyMenu, GetWindowTextLengthW, GetWindowTextW, HMENU, SendMessageW, SetWindowTextW,
+};
 use windows::core::PCWSTR;
 
 /// NUL-terminated UTF-16 copy of a string, ready to pass to Windows.
@@ -54,6 +57,22 @@ pub fn window_text(hwnd: HWND) -> OsString {
         let n = GetWindowTextW(hwnd, &mut buf);
         OsString::from_wide(&buf[..n as usize])
     }
+}
+
+pub fn set_text(hwnd: HWND, text: impl AsRef<OsStr>) {
+    unsafe {
+        let _ = SetWindowTextW(hwnd, pcwstr(&wide(text)));
+    }
+}
+
+pub fn focus(hwnd: HWND) {
+    unsafe {
+        let _ = SetFocus(Some(hwnd));
+    }
+}
+
+pub fn key_down(vk: VIRTUAL_KEY) -> bool {
+    unsafe { GetKeyState(vk.0 as i32) < 0 }
 }
 
 pub fn scale(px: i32, dpi: u32) -> i32 {

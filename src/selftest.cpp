@@ -166,9 +166,17 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
         ClientToScreen(tabBar_, &pt);
         return POINTL{pt.x, pt.y};
     };
+    auto goTo = [this](const std::wstring& text) {   // types into the address bar and presses Enter
+        SetWindowTextW(address_, text.c_str());
+        SetFocus(address_);
+        selfTestKey(VK_RETURN);
+    };
     auto add = [&t](std::wstring name, std::function<void()> act, std::function<bool()> done, ULONGLONG timeout = 5000,
                     bool whileLoading = false) {
         t.steps.push_back({std::move(name), std::move(act), std::move(done), timeout, whileLoading});
+    };
+    auto backHome = [&](const wchar_t* name) {   // a step that opens the test folder again
+        add(name, [=, this] { open(dir, Nav::New); }, [=, this] { return at(dir); });
     };
     static double t0 = 0, keyMs = 0;   // keyMs: how long a key press kept the window busy
     static int rows = 0;               // list rows before a refresh that must wait
@@ -338,7 +346,7 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
             return at(path(L"gone")) && list_.count() == 0 && statusMessage().find(L"not available") != std::wstring::npos;
         });
     add(L"a command typed there still runs (the dead folder is not its working folder)",
-        [=, this] { SetWindowTextW(address_, L"rundll32"); SetFocus(address_); selfTestKey(VK_RETURN); },
+        [=, this] { goTo(L"rundll32"); },
         [=, this] { return at(path(L"gone")) && statusMessage().find(L"not available") != std::wstring::npos; });
     add(L"F5 tries again once it is back", [=, this] { CreateDirectoryW(path(L"gone").c_str(), nullptr); selfTestKey(VK_F5); },
         [=, this] { return at(path(L"gone")) && statusMessage().empty(); });
@@ -365,16 +373,13 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
                    !exists(path(L"sub\\New folder"));
         });
     add(L"(close that tab)", [=, this] { closeTab(active_); }, [=, this] { return idle() && tabs_.size() == 1 && at(dir); });
-    add(L"Enter on a missing typed path shows an error and stays put",
-        [=, this] { SetWindowTextW(address_, L"C:\\no\\such\\folder\\anywhere"); SetFocus(address_); selfTestKey(VK_RETURN); },
+    add(L"Enter on a missing typed path shows an error and stays put", [=, this] { goTo(L"C:\\no\\such\\folder\\anywhere"); },
         [=, this] { return at(dir); });
     add(L"a typed path that fails while a rename box is open leaves the box alone",
         [=, this] {
             // The failure lands after this action (on a dead share it would be a minute later); the user
             // has started a rename meanwhile, which a focus change would commit half-typed.
-            SetWindowTextW(address_, L"C:\\no\\such\\folder\\anywhere");
-            SetFocus(address_);
-            selfTestKey(VK_RETURN);
+            goTo(L"C:\\no\\such\\folder\\anywhere");
             list_.select({L"file1.txt"}, L"file1.txt");
             selfTestKey(VK_F2);
         },
@@ -408,7 +413,7 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
             return idle() && list_.focusedName() == L"added.txt";
         });
     add(L"a command that does not exist says Can't find",
-        [=, this] { SetWindowTextW(address_, L"no-such-program-qoqdir"); SetFocus(address_); selfTestKey(VK_RETURN); },
+        [=, this] { goTo(L"no-such-program-qoqdir"); },
         [=, this] {
             DWORD from = 0, to = 0;   // the text stays selected, so it can be corrected (5.3)
             SendMessageW(address_, EM_GETSEL, WPARAM(&from), LPARAM(&to));
@@ -418,16 +423,14 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
 
     add(L"(open This PC)", [=, this] { open(L"", Nav::New); }, [=, this] { return at(L""); });
     add(L"typing . on This PC says Can't find (not handed to Windows, which opens Explorer)",
-        [=, this] { setMessage(L""); SetWindowTextW(address_, L"."); SetFocus(address_); selfTestKey(VK_RETURN); },
+        [=, this] { setMessage(L""); goTo(L"."); },
         [=, this] {
             selfTest_->note = L"status: " + statusMessage();
             return at(L"") && statusMessage().find(L"Can't find") != std::wstring::npos;
         });
-    add(L"(back to the test folder from This PC)", [=, this] { open(dir, Nav::New); }, [=, this] { return at(dir); });
+    backHome(L"(back to the test folder from This PC)");
 
-    add(L"typing a folder path opens it",
-        [=, this] { SetWindowTextW(address_, path(L"sub").c_str()); SetFocus(address_); selfTestKey(VK_RETURN); },
-        [=, this] { return at(path(L"sub")); });
+    add(L"typing a folder path opens it", [=, this] { goTo(path(L"sub")); }, [=, this] { return at(path(L"sub")); });
     add(L"typing an unreachable network path does not freeze the window",
         [=, this] {
             SetWindowTextW(address_, L"\\\\192.0.2.1\\share");   // reserved test address: nothing answers
@@ -439,16 +442,12 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
         },
         [=, this] { return keyMs < 500; });
     add(L"...and opening another folder cancels it", [=, this] { open(dir, Nav::New); }, [=, this] { return at(dir); }, 5000, true);
-    add(L"typing a subfolder's name opens it here (not in Explorer)",
-        [=, this] { SetWindowTextW(address_, L"sub"); SetFocus(address_); selfTestKey(VK_RETURN); },
+    add(L"typing a subfolder's name opens it here (not in Explorer)", [=, this] { goTo(L"sub"); },
         [=, this] { return at(path(L"sub")); });
-    add(L"typing .. goes up", [=, this] { SetWindowTextW(address_, L".."); SetFocus(address_); selfTestKey(VK_RETURN); },
-        [=, this] { return at(dir); });
-    add(L"typing .\\sub opens it here (not in Explorer)",
-        [=, this] { SetWindowTextW(address_, L".\\sub"); SetFocus(address_); selfTestKey(VK_RETURN); },
+    add(L"typing .. goes up", [=, this] { goTo(L".."); }, [=, this] { return at(dir); });
+    add(L"typing .\\sub opens it here (not in Explorer)", [=, this] { goTo(L".\\sub"); },
         [=, this] { return at(path(L"sub")); });
-    add(L"typing ..\\ goes up", [=, this] { SetWindowTextW(address_, L"..\\"); SetFocus(address_); selfTestKey(VK_RETURN); },
-        [=, this] { return at(dir); });
+    add(L"typing ..\\ goes up", [=, this] { goTo(L"..\\"); }, [=, this] { return at(dir); });
     add(L"a long folder name with an emoji where the caption is cut gives no broken character",
         [=, this] {
             std::wstring name(26, L'a');
@@ -470,7 +469,7 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
                     return false;
             return caption.size() <= 28;
         });
-    add(L"(back up to the test folder)", [=, this] { open(dir, Nav::New); }, [=, this] { return at(dir); });
+    backHome(L"(back up to the test folder)");
 
     // A folder whose name looks like an environment variable: only what the user types is expanded.
     add(L"(open a folder literally named %TEMP%, with sub and other in it)",
@@ -481,7 +480,7 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
         },
         [=, this] { return at(path(L"%TEMP%")) && list_.count() == 2; });
     add(L"typing a subfolder's name in a folder named %TEMP% opens it (the folder's own path is not expanded)",
-        [=, this] { SetWindowTextW(address_, L"sub"); SetFocus(address_); selfTestKey(VK_RETURN); },
+        [=, this] { goTo(L"sub"); },
         [=, this] {
             selfTest_->note = L"tab at " + tab().path + L", status: " + statusMessage();
             return at(path(L"%TEMP%\\sub"));
@@ -489,7 +488,7 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
     add(L"(back to the %TEMP% folder)", [=, this] { open(path(L"%TEMP%"), Nav::New); },
         [=, this] { return at(path(L"%TEMP%")); });
     add(L"typing .\\other there opens it too",
-        [=, this] { SetWindowTextW(address_, L".\\other"); SetFocus(address_); selfTestKey(VK_RETURN); },
+        [=, this] { goTo(L".\\other"); },
         [=, this] {
             selfTest_->note = L"tab at " + tab().path;
             return at(path(L"%TEMP%\\other"));
@@ -510,7 +509,7 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
     add(L"(close any tabs that opened)",
         [=, this] { while (tabs_.size() > 1) closeTab(int(tabs_.size()) - 1); },
         [=, this] { return idle() && tabs_.size() == 1; });
-    add(L"(back to the test folder)", [=, this] { open(dir, Nav::New); }, [=, this] { return at(dir); });
+    backHome(L"(back to the test folder)");
     add(L"(remove the %TEMP% folder)",
         [=, this] {
             for (const wchar_t* name : {L"%TEMP%\\sub", L"%TEMP%\\other", L"%TEMP%"})
@@ -543,7 +542,7 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
     add(L"(Ctrl+H hides them again)", [=, this] { selfTestKey('H', true); },
         [=, this] { return idle() && !listed(L"secret.txt"); });
     add(L"typing a hidden folder's name opens it here (not in Explorer)",
-        [=, this] { SetWindowTextW(address_, L"hid"); SetFocus(address_); selfTestKey(VK_RETURN); },
+        [=, this] { goTo(L"hid"); },
         [=, this] { return at(path(L"hid")); });
     add(L"letters typed while a folder loads stay in the filter box when it lands (5.4)",
         [=, this] {
@@ -581,7 +580,7 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
     add(L"(open a folder that will be deleted)",
         [=, this] { CreateDirectoryW(path(L"temp1").c_str(), nullptr); open(path(L"temp1"), Nav::New); },
         [=, this] { return at(path(L"temp1")); });
-    add(L"(go back to the test folder)", [=, this] { open(dir, Nav::New); }, [=, this] { return at(dir); });
+    backHome(L"(go back to the test folder)");
     add(L"Back to a deleted folder drops it from history instead of getting stuck",
         [=, this] { RemoveDirectoryW(path(L"temp1").c_str()); selfTestKey(VK_LEFT, false, false, true); },
         [=, this] { return at(dir) && (tab().back.empty() || !samePath(tab().back.back(), path(L"temp1"))); });
@@ -597,14 +596,14 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
             return true;
         });
     add(L"(the shortcut's folder is shown)", nullptr, [=, this] { return at(path(L"sub")); });
-    add(L"(back up to the test folder)", [=, this] { open(dir, Nav::New); }, [=, this] { return at(dir); });
+    backHome(L"(back up to the test folder)");
     add(L"a shortcut whose target ends with a backslash opens the folder with a clean path",
         [=, this] {
             makeShortcut(path(L"slash.lnk"), path(L"sub") + L"\\");   // as hand-made shortcuts often have it
             openShortcut(path(L"slash.lnk"), false);
         },
         [=, this] { return at(path(L"sub")) && tab().path.back() != L'\\'; });   // else the caption and Up break
-    add(L"(back up to the test folder)", [=, this] { open(dir, Nav::New); }, [=, this] { return at(dir); });
+    backHome(L"(back up to the test folder)");
     add(L"Ctrl+Enter on a shortcut to a folder opens it in a new background tab (not in Explorer)",
         [=, this] {
             list_.select({L"sub-link.lnk"}, L"sub-link.lnk");
@@ -695,7 +694,7 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
             return true;
         });
     add(L"(This PC is shown, with its drives)", nullptr, [=, this] { return at(L"") && list_.count() > 0; });
-    add(L"(back to the test folder)", [=, this] { open(dir, Nav::New); }, [=, this] { return at(dir); });
+    backHome(L"(back to the test folder)");
 
     // Regression tests for bugs fixed earlier.
     add(L"holding F5 while a folder loads does not start more loads",
@@ -707,7 +706,7 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
             selfTest_->note = std::to_wstring(generation_ - before) + L" load(s) started";
         },
         [=, this] { return at(path(L"sub")) && selfTest_->note == L"1 load(s) started"; });
-    add(L"(back up to the test folder again)", [=, this] { open(dir, Nav::New); }, [=, this] { return at(dir); });
+    backHome(L"(back up to the test folder again)");
     add(L"a background refresh never cancels a folder being opened",
         [=, this] {
             open(path(L"sub"), Nav::New);
@@ -797,7 +796,7 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
         [=, this] {
             newTab(path(L"made"), false);   // a second tab, right of the current one, as from -t or a middle-click
             POINTL cursor = tabPoint(active_ + 1);
-            Com<IDataObject> data = dataObject(wnd_, {path(L"file1.txt")});
+            Com<IDataObject> data = dataObject(wnd_, path(L"file1.txt"));
             dragEffect = DROPEFFECT_COPY;
             t0 = nowMs();
             tabDrop_->DragEnter(data.get(), MK_LBUTTON, cursor, &dragEffect);
@@ -995,7 +994,7 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
             return bookmarkNodes() == L"one,two,sub" && one && TreeView_GetChild(tv, one) &&
                    (TreeView_GetItemState(tv, one, TVIS_EXPANDED) & TVIS_EXPANDED) && TreeView_GetChild(tv, last);
         });
-    add(L"(back to the test folder)", [=, this] { open(dir, Nav::New); }, [=, this] { return at(dir); });
+    backHome(L"(back to the test folder)");
 
     // Speed: a folder with 10,000 files.
     add(L"loads a 10,000-file folder",

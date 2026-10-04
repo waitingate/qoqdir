@@ -24,11 +24,10 @@ int folderIcon();
 const std::wstring& typeName(const Item& it);          // UI thread only (cached)
 std::wstring knownFolder(REFKNOWNFOLDERID id);
 
-// Items of one folder, as the file list read them, as a shell data object (what copy, drag
-// and drop hand around). Taking the listed items, not paths, lets the shell build them from
-// the listing's find data instead of asking the disk about each one.
-Com<IDataObject> dataObject(HWND owner, const std::wstring& dir, const std::vector<Item>& items);
-Com<IDataObject> dataObject(HWND owner, const std::wstring& path);   // one item by its full path
+// One item, given by its full path, as a shell data object (what copy, drag and drop hand around).
+Com<IDataObject> dataObject(HWND owner, const std::wstring& path);
+// The functions below that take a folder and the file list's items, not paths, let the shell build
+// the items from the listing's find data instead of asking the disk about each one.
 // Context menu for items of one folder, for one item given by its full path (the tree's
 // folders, This PC, a drive), or for a folder's background.
 Com<IContextMenu> itemMenu(HWND owner, const std::wstring& dir, const std::vector<Item>& items);

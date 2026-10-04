@@ -73,6 +73,7 @@ int rowAfterDeleting(const std::vector<int>& rows, int count);
 std::wstring toLower(std::wstring s);
 std::wstring extensionOf(const std::wstring& name);  // lower case with the dot, "" if none
 bool isShortcut(const std::wstring& name);           // .lnk or .url
-std::wstring formatSize(uint64_t bytes);
+std::wstring formatSize(uint64_t bytes);   // "1,234 KB", as in Explorer's Size column
+std::wstring byteSize(uint64_t bytes);     // "1.20 MB"
 std::wstring formatTime(const FILETIME& ft);
 std::wstring errorText(DWORD error);

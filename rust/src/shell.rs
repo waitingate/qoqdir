@@ -29,7 +29,7 @@ use windows::Win32::System::Ole::{
 use windows::Win32::System::SystemServices::MODIFIERKEYS_FLAGS;
 use windows::Win32::System::Threading::{CreateEventW, INFINITE, SetEvent};
 use windows::Win32::UI::Controls::HIMAGELIST;
-use windows::Win32::UI::Input::KeyboardAndMouse::{GetKeyState, VK_CONTROL, VK_SHIFT};
+use windows::Win32::UI::Input::KeyboardAndMouse::{VK_CONTROL, VK_SHIFT};
 use windows::Win32::UI::Shell::Common::ITEMIDLIST;
 use windows::Win32::UI::Shell::{
     CMF_CANRENAME, CMF_EXTENDEDVERBS, CMF_NORMAL, CMIC_MASK_CONTROL_DOWN, CMIC_MASK_PTINVOKE, CMIC_MASK_SHIFT_DOWN,
@@ -43,7 +43,7 @@ use windows::Win32::UI::Shell::{
     SHCNE_RENAMEITEM, SHCNE_RMDIR, SHCNE_UPDATEDIR, SHCNE_UPDATEITEM, SHCNRF_InterruptLevel, SHCNRF_NewDelivery,
     SHCNRF_ShellLevel, SHChangeNotification_Lock, SHChangeNotification_Unlock, SHChangeNotifyDeregister,
     SHChangeNotifyEntry, SHChangeNotifyRegister, SHCreateItemFromParsingName, SHDoDragDrop, SHELLEXECUTEINFOW,
-    SHFILEINFOW, SHGFI_SMALLICON, SHGFI_SYSICONINDEX, SHGFI_TYPENAME, SHGFI_USEFILEATTRIBUTES,
+    SHFILEINFOW, SHGFI_DISPLAYNAME, SHGFI_PIDL, SHGFI_SMALLICON, SHGFI_SYSICONINDEX, SHGFI_TYPENAME, SHGFI_USEFILEATTRIBUTES,
     SHGetDesktopFolder, SHGetFileInfoW, SHGetKnownFolderIDList, SHGetKnownFolderPath, SHParseDisplayName,
     SHSetInstanceExplorer, ShellExecuteExW, ShellLink,
 };
@@ -55,7 +55,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
 use windows::core::{GUID, IUnknown, Interface, PCSTR, PCWSTR, PSTR, Ref, Result, implement, w};
 
 use crate::folder::{Item, Location, extension_of};
-use crate::util::{OwnedMenu, Pidl, from_wide, pcwstr, wide};
+use crate::util::{OwnedMenu, Pidl, from_wide, key_down, pcwstr, wide};
 
 const CMIC_MASK_UNICODE: u32 = 0x4000; // not in the windows crate
 const FIRST_CMD: u32 = 1;
@@ -171,7 +171,6 @@ pub fn known_folder(id: &GUID) -> Option<PathBuf> {
 /// icon of a folder or of the target's file type. From the shortcut file alone: asking Windows for the
 /// target's own icon waits on a server that is off.
 pub fn describe_shortcut(lnk: &Path) -> (OsString, i32) {
-    use windows::Win32::UI::Shell::SHGFI_DISPLAYNAME;
     let (target, folder) = shortcut_target(lnk).map_or((None, false), |(t, folder)| (Some(t), folder));
     let name = file_info(&wide(lnk), FILE_FLAGS_AND_ATTRIBUTES(0), SHGFI_DISPLAYNAME)
         .map(|s| from_wide(&s.szDisplayName))
@@ -188,7 +187,6 @@ pub fn describe_shortcut(lnk: &Path) -> (OsString, i32) {
 
 /// Display name and icon of a location, as Explorer shows it.
 pub fn describe(location: &Location) -> (OsString, i32) {
-    use windows::Win32::UI::Shell::{SHGFI_DISPLAYNAME, SHGFI_PIDL};
     let Some(pidl) = pidl_from(location) else { return (location.display_name(), folder_icon()) };
     let flags = SHGFI_PIDL | SHGFI_DISPLAYNAME | SHGFI_SYSICONINDEX | SHGFI_SMALLICON;
     let mut sfi = SHFILEINFOW::default();
@@ -305,10 +303,6 @@ pub fn background_menu(owner: HWND, dir: &Location) -> Option<IContextMenu> {
         let folder: IShellFolder = desktop.BindToObject(pidl.0, None::<&IBindCtx>).ok()?;
         folder.CreateViewObject(owner).ok()
     }
-}
-
-fn key_down(vk: windows::Win32::UI::Input::KeyboardAndMouse::VIRTUAL_KEY) -> bool {
-    unsafe { GetKeyState(vk.0 as i32) < 0 }
 }
 
 /// Shows a context menu. `intercept` sees the chosen verb first and returns
@@ -709,18 +703,16 @@ impl IDropTarget_Impl for DropTarget_Impl {
     }
 
     fn Drop(&self, data: Ref<IDataObject>, keys: MODIFIERKEYS_FLAGS, pt: &POINTL, effect: *mut DROPEFFECT) -> Result<()> {
-        let folder = self.folder.borrow_mut().take();
-        (self.target)(None); // the drag is over (e.g. remove highlights)
         unsafe {
             if let Some(h) = &self.helper {
                 let _ = h.Drop(data.as_ref(), &POINT { x: pt.x, y: pt.y }, *effect);
             }
-            if folder.is_none_or(|f| f.Drop(data.as_ref(), keys, *pt, effect).is_err()) {
-                *effect = DROPEFFECT_NONE;
-            }
         }
-        *self.dir.borrow_mut() = None;
-        *self.data.borrow_mut() = None;
+        let folder = self.folder.borrow_mut().take(); // it gets the drop, not a DragLeave
+        self.finish(); // the drag is over (e.g. remove highlights)
+        if folder.is_none_or(|f| unsafe { f.Drop(data.as_ref(), keys, *pt, effect) }.is_err()) {
+            unsafe { *effect = DROPEFFECT_NONE };
+        }
         Ok(())
     }
 }

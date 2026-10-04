@@ -111,7 +111,6 @@ HRESULT uiObject(HWND owner, const std::wstring& dir, const std::vector<Item>& i
     return parent->GetUIObjectOf(owner, UINT(children.size()), children.data(), iid, nullptr, out);
 }
 
-
 // Interface I on what uiObject finds (empty when it finds nothing).
 template <class I, class... Where>
 Com<I> shellObject(HWND owner, const Where&... where) {
@@ -220,10 +219,6 @@ std::wstring knownFolder(REFKNOWNFOLDERID id) {
     return r;
 }
 
-Com<IDataObject> dataObject(HWND owner, const std::wstring& dir, const std::vector<Item>& items) {
-    return shellObject<IDataObject>(owner, dir, items);
-}
-
 Com<IDataObject> dataObject(HWND owner, const std::wstring& path) { return shellObject<IDataObject>(owner, path); }
 
 Com<IContextMenu> itemMenu(HWND owner, const std::wstring& dir, const std::vector<Item>& items) {
@@ -316,7 +311,7 @@ bool invokeVerb(HWND owner, IContextMenu* cm, const char* verb) {
 }
 
 bool copyToClipboard(HWND owner, const std::wstring& dir, const std::vector<Item>& items, bool cut) {
-    Com<IDataObject> obj = dataObject(owner, dir, items);
+    Com<IDataObject> obj = shellObject<IDataObject>(owner, dir, items);
     if (!obj) return false;
     // Tells the paste target whether to move (cut) or copy.
     FORMATETC fmt{CLIPFORMAT(RegisterClipboardFormatW(CFSTR_PREFERREDDROPEFFECT)), nullptr, DVASPECT_CONTENT, -1,
@@ -341,7 +336,7 @@ void pasteInto(HWND owner, const std::wstring& dir, bool shortcuts) {
 }
 
 bool deleteItems(HWND owner, const std::wstring& dir, const std::vector<Item>& items, bool permanently) {
-    Com<IDataObject> obj = dataObject(owner, dir, items);
+    Com<IDataObject> obj = shellObject<IDataObject>(owner, dir, items);
     if (!obj) return false;
     // FOF_WANTNUKEWARNING in both cases: Windows still asks before destroying an item it cannot recycle
     // (network share, USB stick, oversized file); without it FOF_NOCONFIRMATION answers Yes for the user.
@@ -387,7 +382,7 @@ bool runCommand(HWND owner, const std::wstring& command, const std::wstring& wor
 }
 
 void dragOut(HWND owner, const std::wstring& dir, const std::vector<Item>& items) {
-    Com<IDataObject> obj = dataObject(owner, dir, items);
+    Com<IDataObject> obj = shellObject<IDataObject>(owner, dir, items);
     if (!obj) return;
     DWORD effect = 0;
     SHDoDragDrop(owner, obj.get(), nullptr, DROPEFFECT_COPY | DROPEFFECT_MOVE | DROPEFFECT_LINK, &effect);
@@ -509,12 +504,9 @@ public:
     HRESULT STDMETHODCALLTYPE Drop(IDataObject* data, DWORD keys, POINTL pt, DWORD* effect) override {
         POINT p{pt.x, pt.y};
         if (helper_) helper_->Drop(data, &p, *effect);
-        Com<IDropTarget> folder = folder_;
-        target_(nullptr);   // the drag is over (e.g. remove highlights)
+        Com<IDropTarget> folder = std::exchange(folder_, {});   // it gets the drop, not a DragLeave
+        finish();   // the drag is over (e.g. remove highlights)
         if (!folder || FAILED(folder->Drop(data, keys, pt, effect))) *effect = DROPEFFECT_NONE;
-        folder_.reset();
-        dir_.reset();
-        data_.reset();
         return S_OK;
     }
 

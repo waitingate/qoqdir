@@ -58,11 +58,6 @@ bool opensInTab(const std::optional<std::wstring>& target) {
     return target && (target->empty() || isAbsolutePath(*target));
 }
 
-std::wstring byteSize(uint64_t bytes) {
-    wchar_t buf[64];
-    return StrFormatByteSizeW(static_cast<LONGLONG>(bytes), buf, 64) ? buf : L"";
-}
-
 // Middle-click closes a tab.
 LRESULT CALLBACK tabBarProc(HWND h, UINT msg, WPARAM wp, LPARAM lp, UINT_PTR, DWORD_PTR) {
     if (msg == WM_MBUTTONUP) {
@@ -97,7 +92,6 @@ bool App::create(HINSTANCE instance, const CommandLine& cmd, bool useSettings) {
     wc.lpfnWndProc = wndProc;
     wc.hInstance = instance;
     wc.hCursor = LoadCursorW(nullptr, IDC_ARROW);
-    wc.hIcon = LoadIconW(instance, MAKEINTRESOURCEW(1));
     wc.hbrBackground = CreateSolidBrush(kBackground);   // lives as long as the process
     wc.lpszClassName = kAppName;
     RegisterClassExW(&wc);
@@ -1189,10 +1183,9 @@ void App::loadSettings(const CommandLine& cmd) {
 
 void App::saveSettings() {
     if (!useSettings_) return;   // only numbers are saved: a plain ini file is fine
-    auto write = [&](const wchar_t* section, const std::wstring& key, const std::wstring& value) {
-        WritePrivateProfileStringW(section, key.c_str(), value.c_str(), ini_.c_str());
+    auto number = [&](const std::wstring& key, int value) {
+        WritePrivateProfileStringW(L"Window", key.c_str(), std::to_wstring(value).c_str(), ini_.c_str());
     };
-    auto number = [&](const wchar_t* key, int value) { write(L"Window", key, std::to_wstring(value)); };
 
     WINDOWPLACEMENT wp{};
     wp.length = sizeof wp;
@@ -1210,5 +1203,5 @@ void App::saveSettings() {
     number(L"SortAscending", list_.sortAscending() ? 1 : 0);
     std::vector<int> widths = list_.columnWidths();
     for (size_t i = 0; i < widths.size(); ++i)
-        number((L"Column" + std::to_wstring(i)).c_str(), MulDiv(widths[i], 96, int(dpi_)));
+        number(L"Column" + std::to_wstring(i), MulDiv(widths[i], 96, int(dpi_)));
 }

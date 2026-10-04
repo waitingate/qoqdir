@@ -10,7 +10,7 @@
 //! across a call into Windows (which can call straight back into `on_message`).
 
 use std::cell::{Cell, RefCell};
-use std::ffi::{OsStr, OsString};
+use std::ffi::OsString;
 use std::os::windows::ffi::OsStrExt;
 use std::path::PathBuf;
 use std::rc::{Rc, Weak};
@@ -36,7 +36,7 @@ use windows::Win32::UI::Controls::{
 };
 use windows::Win32::UI::HiDpi::{GetDpiForSystem, GetDpiForWindow, SystemParametersInfoForDpi};
 use windows::Win32::UI::Input::KeyboardAndMouse::{
-    EnableWindow, GetFocus, GetKeyState, ReleaseCapture, SetCapture, SetFocus, VIRTUAL_KEY, VK_BACK, VK_CONTROL, VK_DELETE,
+    EnableWindow, GetFocus, ReleaseCapture, SetCapture, VIRTUAL_KEY, VK_BACK, VK_CONTROL, VK_DELETE,
     VK_DOWN, VK_ESCAPE, VK_F2, VK_F3, VK_F4, VK_F5, VK_LEFT, VK_MENU, VK_RETURN, VK_RIGHT, VK_SHIFT, VK_TAB, VK_UP,
 };
 use windows::Win32::UI::Shell::{DefSubclassProc, FOLDERID_Profile, SHACF_FILESYS_DIRS, SHAutoComplete, SetWindowSubclass};
@@ -47,7 +47,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
     MB_ICONWARNING, MB_OKCANCEL, MF_GRAYED, MF_STRING, MINMAXINFO, MSG, MessageBoxW, MoveWindow,
     NONCLIENTMETRICSW, PostMessageW, PostQuitMessage, RegisterClassExW, SPI_GETNONCLIENTMETRICS, SW_SHOWMAXIMIZED,
     SW_SHOWNOACTIVATE, SW_SHOWNORMAL, SWP_NOACTIVATE, SWP_NOZORDER, SetCursor, SetTimer,
-    SetWindowLongPtrW, SetWindowPlacement, SetWindowPos, SetWindowTextW, ShowWindow, TPM_RETURNCMD,
+    SetWindowLongPtrW, SetWindowPlacement, SetWindowPos, ShowWindow, TPM_RETURNCMD,
     TPM_RIGHTBUTTON, TrackPopupMenuEx, WINDOW_EX_STYLE, WINDOW_STYLE, WINDOWPLACEMENT, WM_ACTIVATE, WM_APP,
     WM_APPCOMMAND, WM_CAPTURECHANGED, WM_CHAR, WM_CLOSE, WM_COMMAND, WM_CONTEXTMENU, WM_DESTROY, WM_DEVICECHANGE,
     WM_DPICHANGED, WM_DRAWITEM, WM_ENDSESSION, WM_GETMINMAXINFO, WM_INITMENUPOPUP, WM_KEYDOWN, WM_LBUTTONDOWN, WM_LBUTTONUP,
@@ -70,7 +70,7 @@ use crate::shell::{
     paste_into, rename_item, run_command, show_menu,
 };
 use crate::tree::{FolderTree, TreeBatch};
-use crate::util::{send, Font, OwnedMenu, from_wide, pcwstr, scale, wide, window_text};
+use crate::util::{Font, OwnedMenu, focus, from_wide, key_down, pcwstr, scale, send, set_text, wide, window_text};
 
 const ID_BACK: i32 = 100;
 const ID_FORWARD: i32 = 101;
@@ -148,9 +148,7 @@ pub struct Tab {
 }
 
 /// Where a load was started from, when that changes what happens if it is not a folder.
-#[derive(Clone, Default)]
-pub enum Origin {
-    #[default]
+enum Origin {
     Other,
     AddressBar,        // typed in the address bar: a file is opened instead
     Shortcut(PathBuf), // opened from this shortcut: if it leads to a file, Windows opens the shortcut
@@ -233,21 +231,10 @@ fn hiword(v: usize) -> u32 {
 fn point_from(lp: LPARAM) -> POINT {
     POINT { x: (lp.0 & 0xFFFF) as i16 as i32, y: ((lp.0 >> 16) & 0xFFFF) as i16 as i32 }
 }
-fn key_down(vk: VIRTUAL_KEY) -> bool {
-    unsafe { GetKeyState(vk.0 as i32) < 0 }
-}
-fn set_text(h: HWND, text: impl AsRef<OsStr>) {
-    let w = wide(text);
-    unsafe {
-        let _ = SetWindowTextW(h, pcwstr(&w));
-    }
-}
 
 /// With its text selected, ready to be typed over or corrected.
 fn focus_edit(edit: HWND) {
-    unsafe {
-        let _ = SetFocus(Some(edit));
-    }
+    focus(edit);
     send(edit, EM_SETSEL, 0, -1);
 }
 
@@ -598,7 +585,7 @@ impl App {
                         self.st.borrow_mut().last_focus = Some(focus);
                     } else {
                         let last = self.st.borrow().last_focus.filter(|&h| IsChild(self.wnd, h).as_bool());
-                        let _ = SetFocus(Some(last.unwrap_or(self.list.hwnd())));
+                        focus(last.unwrap_or(self.list.hwnd()));
                     }
                     return LRESULT(0);
                 }
@@ -1035,7 +1022,7 @@ impl App {
         if self.list.renaming() {
             return false; // the rename box handles its own keys
         }
-        let (focus, list) = (key.focus, self.list.hwnd());
+        let (focused, list) = (key.focus, self.list.hwnd());
         let (mut ctrl, shift, mut alt) = (key.ctrl, key.shift, key.alt);
         if ctrl && alt {
             (ctrl, alt) = (false, false); // AltGr reads as Ctrl+Alt and types a character; no shortcut uses both
@@ -1043,10 +1030,8 @@ impl App {
 
         if key.message == WM_CHAR {
             // Typing in the file list filters it.
-            if focus == list && key.code >= 32 && key.code != 127 && !ctrl && !alt {
-                unsafe {
-                    let _ = SetFocus(Some(self.filter));
-                }
+            if focused == list && key.code >= 32 && key.code != 127 && !ctrl && !alt {
+                focus(self.filter);
                 let len = window_text(self.filter).len();
                 send(self.filter, EM_SETSEL, len, len as isize);
                 send(self.filter, WM_CHAR, key.code, 0);
@@ -1109,20 +1094,18 @@ impl App {
             self.go_up();
             return true;
         }
-        if alt && is(VK_RETURN) && focus == list {
+        if alt && is(VK_RETURN) && focused == list {
             invoke_verb(self.wnd, item_menu(self.wnd, &self.list.location(), &self.list.selected_items()), "properties");
             return true;
         }
         if is(VK_TAB) && !ctrl && !alt {
             let order = [self.address, self.filter, self.tree.hwnd(), list];
-            let i = order.iter().position(|&h| h == focus).unwrap_or(3);
+            let i = order.iter().position(|&h| h == focused).unwrap_or(3);
             let next = order[(i + if shift { 3 } else { 1 }) % 4];
             if next == list {
                 self.focus_list();
             } else if next == self.tree.hwnd() {
-                unsafe {
-                    let _ = SetFocus(Some(next));
-                }
+                focus(next);
             } else {
                 focus_edit(next);
             }
@@ -1132,7 +1115,7 @@ impl App {
             return false;
         }
 
-        if focus == self.address {
+        if focused == self.address {
             if is(VK_RETURN) {
                 self.go_to_typed();
                 return true;
@@ -1144,7 +1127,7 @@ impl App {
             }
             return false;
         }
-        if focus == self.filter {
+        if focused == self.filter {
             if is(VK_ESCAPE) {
                 set_text(self.filter, "");
                 self.focus_list();
@@ -1167,7 +1150,7 @@ impl App {
             }
             return false;
         }
-        if focus == list {
+        if focused == list {
             if is(VK_RETURN) {
                 self.activate(ctrl);
                 return true;
@@ -1219,7 +1202,7 @@ impl App {
             }
             return false;
         }
-        if focus == self.tree.hwnd() && is(VK_BACK) {
+        if focused == self.tree.hwnd() && is(VK_BACK) {
             self.go_up();
             return true;
         }
@@ -1227,9 +1210,7 @@ impl App {
     }
 
     pub fn focus_list(&self) {
-        unsafe {
-            let _ = SetFocus(Some(self.list.hwnd()));
-        }
+        focus(self.list.hwnd());
         if self.list.selection().is_empty() {
             if let Some(row) = self.list.focused() {
                 let item = LVITEMW { state: LVIS_SELECTED, stateMask: LVIS_SELECTED, ..Default::default() };
@@ -1268,7 +1249,7 @@ impl App {
             // The tab strip already shows the new tab: show its location at once instead of the old tab's list
             // and address until its folder loads. Meanwhile the list has no folder, so paste, new folder, menus
             // and drops have nothing to act on (the same mechanism as an unavailable folder).
-            self.list.set_listing(Listing { location: Location::ThisPc, items: Vec::new(), error: None, is_file: false });
+            self.list.set_listing(Listing::default());
             self.show_location(nav);
             self.show_status();
         }
@@ -1480,7 +1461,7 @@ impl App {
     /// The list gets no folder (as for This PC), so paste, new folder, menus and drops have nothing
     /// to act on: asking Windows about an unreachable folder can freeze the window for 20-40 s.
     pub fn show_unavailable(&self, location: &Location, error: &str, nav: Nav) {
-        self.list.set_listing(Listing { location: Location::ThisPc, items: Vec::new(), error: None, is_file: false });
+        self.list.set_listing(Listing::default());
         self.with_tab(|t| t.unavailable = true);
         let old_watch = self.st.borrow_mut().watch.take();
         drop(old_watch);

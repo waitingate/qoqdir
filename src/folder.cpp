@@ -12,6 +12,13 @@ bool equalNoCase(const wchar_t* a, int an, const wchar_t* b, int bn) {
     return CompareStringOrdinal(a, an, b, bn, TRUE) == CSTR_EQUAL;
 }
 
+// Relative to the current folder, with "." and ".." resolved; the path itself if Windows cannot.
+std::wstring fullPath(const std::wstring& p) {
+    std::wstring buf(32768, L'\0');
+    DWORD n = GetFullPathNameW(p.c_str(), DWORD(buf.size()), buf.data(), nullptr);
+    return n > 0 && n < buf.size() ? buf.substr(0, n) : p;
+}
+
 // Pointer to the extension inside name (".txt"), or to the terminating zero.
 const wchar_t* extPtr(const std::wstring& name) {
     size_t dot = name.find_last_of(L'.');
@@ -33,12 +40,8 @@ void listDrives(Listing& r) {
             it.icon = sfi.iIcon;
         }
         ULARGE_INTEGER freeBytes{}, total{};
-        if (GetDiskFreeSpaceExW(it.name.c_str(), nullptr, &total, &freeBytes)) {
-            wchar_t f[32], t[32];
-            StrFormatByteSizeW(static_cast<LONGLONG>(freeBytes.QuadPart), f, 32);
-            StrFormatByteSizeW(static_cast<LONGLONG>(total.QuadPart), t, 32);
-            it.type += std::wstring(L"  \u00b7  ") + f + L" free of " + t;
-        }
+        if (GetDiskFreeSpaceExW(it.name.c_str(), nullptr, &total, &freeBytes))
+            it.type += L"  \u00b7  " + byteSize(freeBytes.QuadPart) + L" free of " + byteSize(total.QuadPart);
         r.items.push_back(std::move(it));
     }
 }
@@ -119,11 +122,7 @@ std::wstring normalizePath(std::wstring p) {
     if (p.empty() || equalNoCase(p.c_str(), -1, L"This PC", -1)) return L"";
     std::replace(p.begin(), p.end(), L'/', L'\\');
     if (p.size() == 2 && p[1] == L':') p += L'\\';
-    if (isUnc(p) || (p.size() >= 3 && p[1] == L':' && p[2] == L'\\')) {
-        std::wstring buf(32768, L'\0');
-        DWORD n = GetFullPathNameW(p.c_str(), DWORD(buf.size()), buf.data(), nullptr);
-        if (n > 0 && n < buf.size()) p.assign(buf.c_str());   // resolves "." and ".."
-    }
+    if (isAbsolutePath(p)) p = fullPath(p);   // resolves "." and ".."
     while (p.size() > 3 && p.back() == L'\\') p.pop_back();
     if (p.size() >= 2 && p[1] == L':') p[0] = towupper(p[0]);
     return p;
@@ -137,10 +136,7 @@ std::wstring expandVars(const std::wstring& text) {
 
 std::wstring resolveArgument(const std::wstring& arg) {
     // "D:" alone means the drive's root (as in Explorer), not Windows' "current folder on D:".
-    std::wstring path = arg.size() == 2 && arg[1] == L':' ? arg + L'\\' : arg;
-    std::wstring full(32768, L'\0');
-    DWORD n = GetFullPathNameW(path.c_str(), DWORD(full.size()), full.data(), nullptr);
-    return normalizePath(n > 0 && n < full.size() ? full.substr(0, n) : path);
+    return normalizePath(fullPath(arg.size() == 2 && arg[1] == L':' ? arg + L'\\' : arg));
 }
 
 CommandLine parseCommandLine(const std::vector<std::wstring>& args) {
@@ -263,6 +259,11 @@ bool isShortcut(const std::wstring& name) {
 std::wstring formatSize(uint64_t bytes) {
     wchar_t buf[64];
     return StrFormatKBSizeW(static_cast<LONGLONG>(bytes), buf, 64) ? buf : L"";
+}
+
+std::wstring byteSize(uint64_t bytes) {
+    wchar_t buf[64];
+    return StrFormatByteSizeW(static_cast<LONGLONG>(bytes), buf, 64) ? buf : L"";
 }
 
 std::wstring formatTime(const FILETIME& ft) {

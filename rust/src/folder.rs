@@ -28,8 +28,9 @@ use windows::core::PCWSTR;
 use crate::util::{from_wide, pcwstr, wide};
 
 /// Where a tab is. "This PC" (the drive list) is its own case, not a magic path.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub enum Location {
+    #[default]
     ThisPc,
     Dir(PathBuf),
 }
@@ -294,6 +295,7 @@ impl Item {
     }
 }
 
+#[derive(Default)]
 pub struct Listing {
     pub location: Location,
     pub items: Vec<Item>,
@@ -304,14 +306,14 @@ pub struct Listing {
 impl Listing {
     /// No items, and why.
     pub fn failed(location: &Location, error: windows::core::Error) -> Listing {
-        Listing { location: location.clone(), items: Vec::new(), error: Some(error), is_file: false }
+        Listing { location: location.clone(), error: Some(error), ..Default::default() }
     }
 }
 
 /// Reads a folder. Blocking: call it off the UI thread. `stop` is asked every few hundred entries; once it
 /// says true the read ends at once with ERROR_OPERATION_ABORTED and no items.
 pub fn list_folder(location: &Location, show_hidden: bool, stop: Option<&dyn Fn() -> bool>) -> Listing {
-    let mut r = Listing { location: location.clone(), items: Vec::new(), error: None, is_file: false };
+    let mut r = Listing { location: location.clone(), ..Default::default() };
     let Location::Dir(dir) = location else {
         list_drives(&mut r);
         return r;
