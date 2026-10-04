@@ -28,6 +28,16 @@ std::wstring windowText(HWND h) {
     return s;
 }
 
+void focusEdit(HWND edit) {   // with its text selected, ready to be typed over or corrected
+    SetFocus(edit);
+    SendMessageW(edit, EM_SETSEL, 0, -1);
+}
+
+// A shortcut's target that opens in a tab: a folder path, or This PC (""). Anything else is for Windows.
+bool opensInTab(const std::optional<std::wstring>& target) {
+    return target && (target->empty() || isAbsolutePath(*target));
+}
+
 std::wstring byteSize(uint64_t bytes) {
     wchar_t buf[64];
     return StrFormatByteSizeW(static_cast<LONGLONG>(bytes), buf, 64) ? buf : L"";
@@ -191,7 +201,7 @@ void App::layout() {
     place(plus_, w - btn - pad, y + (tabHeight_ - rowHeight_) / 2, btn, rowHeight_);
     y += tabHeight_;
 
-    int splitW = scale(5, dpi_);
+    int splitW = scale(kSplitterWidth, dpi_);
     int treeW = std::clamp(scale(treeWidth_, dpi_), scale(80, dpi_), std::max(scale(80, dpi_), w - scale(200, dpi_)));
     int bodyH = h - statusH - y;
     place(tree_.hwnd(), 0, y, treeW, bodyH);
@@ -288,8 +298,7 @@ LRESULT App::onMessage(UINT msg, WPARAM wp, LPARAM lp) {
         closeTab(int(wp));
         return 0;
     case WM_APP_RENAME: {
-        Rename r = std::move(rename_);
-        rename_ = {};
+        Rename r = std::exchange(rename_, {});
         if (!r.path.empty() && SUCCEEDED(renameItem(wnd_, r.path, r.name))) {
             refresh(ViewState::selecting(r.name));
         }
@@ -320,7 +329,7 @@ LRESULT App::onMessage(UINT msg, WPARAM wp, LPARAM lp) {
             POINT p;
             GetCursorPos(&p);
             ScreenToClient(wnd_, &p);
-            if (p.x >= splitterX_ && p.x < splitterX_ + scale(5, dpi_)) {
+            if (overSplitter(p.x)) {
                 SetCursor(LoadCursorW(nullptr, IDC_SIZEWE));
                 return TRUE;
             }
@@ -328,7 +337,7 @@ LRESULT App::onMessage(UINT msg, WPARAM wp, LPARAM lp) {
         break;
     case WM_LBUTTONDOWN: {
         int x = GET_X_LPARAM(lp);
-        if (x >= splitterX_ && x < splitterX_ + scale(5, dpi_)) {
+        if (overSplitter(x)) {
             dragging_ = true;
             SetCapture(wnd_);
         }
@@ -379,8 +388,7 @@ void App::onTimer(UINT_PTR id) {
         KillTimer(wnd_, kRefreshTimer);
         refreshQueued_ = false;
         // The item a delete, rename or new folder wanted selected, unless another folder is shown by now.
-        QueuedView q = std::move(queuedView_);
-        queuedView_ = {};
+        QueuedView q = std::exchange(queuedView_, {});
         refresh(samePath(list_.dir(), q.dir) ? std::move(q.view) : ViewState{});
     } else if (id == kStatusTimer) {
         KillTimer(wnd_, kStatusTimer);
@@ -565,10 +573,6 @@ bool App::onKey(const Key& key) {
 
     WPARAM k = key.code;
     int tabCount = int(tabs_.size());
-    auto focusEdit = [](HWND edit) {
-        SetFocus(edit);
-        SendMessageW(edit, EM_SETSEL, 0, -1);
-    };
 
     // Anywhere in the window.
     if (ctrl && k == 'T') { newTab(tab().path, true); return true; }
@@ -690,16 +694,14 @@ void App::onLoaded(Listing&& listing, UINT generation) {
         setMessage(L"");
         loadMessageShown_ = false;
     }
-    Pending p = std::move(pending_);
-    pending_ = {};
+    Pending p = std::exchange(pending_, {});
     if (tab().id != p.tabId) return;
     if (p.nav == Nav::Refresh && list_.renaming()) {
         // 4.2: a refresh never interrupts a rename. The box opened after this load started
         // (open() closes any box it finds), so drop the result and retry once the box has closed,
         // as the timer does; applying it would move the rows under the box, and Enter would
         // rename whatever row sits there now.
-        refreshQueued_ = true;
-        SetTimer(wnd_, kRefreshTimer, 400, nullptr);
+        queueRefresh();
         return;
     }
     Tab& t = tab();
@@ -790,10 +792,7 @@ void App::onLoadFailed(const Listing& listing, const Pending& p) {
     // Let the user correct what they typed (5.3), unless they have moved on since Enter left the focus on
     // the list: a dead share fails a minute later, and taking the focus then would commit a half-typed
     // rename or interrupt the filter box.
-    if (p.origin.typed && GetFocus() == list_.hwnd()) {
-        SetFocus(address_);
-        SendMessageW(address_, EM_SETSEL, 0, -1);
-    }
+    if (p.origin.typed && GetFocus() == list_.hwnd()) focusEdit(address_);
     if (p.nav == Nav::Refresh || p.nav == Nav::Switch) {
         // The tab's own folder. A tab never changes its folder by itself (a network drive may
         // not be connected yet, a USB drive may come back): show it empty and say why.
@@ -875,7 +874,7 @@ void App::goToTyped() {
     // Windows as the working folder would wait on the dead server before the program starts.
     if (!runCommand(wnd_, text, list_.dir())) {   // "cmd", "notepad", a web address...
         setMessage(L"Can't find \"" + text + L"\"");
-        SendMessageW(address_, EM_SETSEL, 0, -1);   // left selected, like a bad path, so it can be corrected (5.3)
+        focusEdit(address_);   // left selected, like a bad path, so it can be corrected (5.3)
         warn();
         return;
     }
@@ -898,7 +897,7 @@ void App::activate(bool inNewTab) {
         // like the other folders (Windows would open it in Explorer); any other shortcut is a file.
         if (!folder && extensionOf(path) == L".lnk") {
             std::optional<std::wstring> target = shortcutTarget(path, &folder);
-            if (folder && target && (target->empty() || isAbsolutePath(*target))) path = *target;
+            if (folder && opensInTab(target)) path = *target;
             else folder = false;
         }
         (folder ? dirs : files).push_back(path);
@@ -921,7 +920,7 @@ void App::activate(bool inNewTab) {
 void App::openShortcut(const std::wstring& path, bool inNewTab) {
     bool folder = false;
     std::optional<std::wstring> target = extensionOf(path) == L".lnk" ? shortcutTarget(path, &folder) : std::nullopt;
-    if (!target || !(target->empty() || isAbsolutePath(*target))) {
+    if (!opensInTab(target)) {
         openFile(wnd_, path);   // a web link, a program, a library...
         return;
     }

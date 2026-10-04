@@ -79,22 +79,14 @@ std::vector<std::wstring> clipboardFiles() {
     return files;
 }
 
-void makeShortcut(const std::wstring& lnk, const std::wstring& target) {
-    Com<IShellLinkW> link;
-    if (FAILED(CoCreateInstance(CLSID_ShellLink, nullptr, CLSCTX_INPROC_SERVER, IID_IShellLinkW,
-                                reinterpret_cast<void**>(link.put()))))
-        return;
-    link->SetPath(target.c_str());
-    if (Com<IPersistFile> file = link.as<IPersistFile>()) file->Save(lnk.c_str(), TRUE);
-}
-
-void makePcShortcut(const std::wstring& lnk) {   // a shortcut whose target is This PC: it has no path
+void makeShortcut(const std::wstring& lnk, const std::wstring& target) {   // target "": This PC, which has no path
     Com<IShellLinkW> link;
     if (FAILED(CoCreateInstance(CLSID_ShellLink, nullptr, CLSCTX_INPROC_SERVER, IID_IShellLinkW,
                                 reinterpret_cast<void**>(link.put()))))
         return;
     PIDLIST_ABSOLUTE pc = nullptr;
-    if (SUCCEEDED(SHGetKnownFolderIDList(FOLDERID_ComputerFolder, 0, nullptr, &pc))) link->SetIDList(pc);
+    if (!target.empty()) link->SetPath(target.c_str());
+    else if (SUCCEEDED(SHGetKnownFolderIDList(FOLDERID_ComputerFolder, 0, nullptr, &pc))) link->SetIDList(pc);
     CoTaskMemFree(pc);
     if (Com<IPersistFile> file = link.as<IPersistFile>()) file->Save(lnk.c_str(), TRUE);
 }
@@ -157,6 +149,13 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
         wchar_t buf[MAX_PATH] = {};
         if (edit) GetWindowTextW(edit, buf, MAX_PATH);
         return std::wstring(buf);
+    };
+    auto tabPoint = [this](int index) {   // the middle of a tab, in screen coordinates, where a drag is aimed
+        RECT r{};
+        TabCtrl_GetItemRect(tabBar_, index, &r);
+        POINT pt{(r.left + r.right) / 2, (r.top + r.bottom) / 2};
+        ClientToScreen(tabBar_, &pt);
+        return POINTL{pt.x, pt.y};
     };
     auto add = [&t](std::wstring name, std::function<void()> act, std::function<bool()> done, ULONGLONG timeout = 5000,
                     bool whileLoading = false) {
@@ -458,12 +457,8 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
             p.nav = Nav::Refresh;
             p.tabId = tab().id;
             onLoadFailed(Listing{tab().path, {}, ERROR_BAD_NETPATH, false}, p);
-            RECT r{};
-            TabCtrl_GetItemRect(tabBar_, active_, &r);
-            POINT pt{(r.left + r.right) / 2, (r.top + r.bottom) / 2};
-            ClientToScreen(tabBar_, &pt);
+            POINTL cursor = tabPoint(active_);
             Com<IDataObject> data = dataObject(wnd_, path(L"file1.txt"));
-            POINTL cursor{pt.x, pt.y};
             DWORD effect = DROPEFFECT_COPY;
             SetFocus(list_.hwnd());
             t0 = nowMs();
@@ -491,7 +486,7 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
         [=, this] { return at(dir) && statusMessage().find(L"no-such-folder") != std::wstring::npos; });
     add(L"a shortcut to This PC opens This PC here (not in Explorer)",
         [=, this] {
-            makePcShortcut(path(L"pc.lnk"));
+            makeShortcut(path(L"pc.lnk"), L"");
             refresh(ViewState::selecting(L"pc.lnk"));
         },
         [=, this] {
@@ -602,12 +597,8 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
     add(L"a drag over a tab whose folder was never shown is refused at once (nobody has checked that folder)",
         [=, this] {
             newTab(path(L"made"), false);   // a second tab, right of the current one, as from -t or a middle-click
-            RECT r{};
-            TabCtrl_GetItemRect(tabBar_, active_ + 1, &r);
-            POINT pt{(r.left + r.right) / 2, (r.top + r.bottom) / 2};
-            ClientToScreen(tabBar_, &pt);
+            POINTL cursor = tabPoint(active_ + 1);
             Com<IDataObject> data = dataObject(wnd_, {path(L"file1.txt")});
-            POINTL cursor{pt.x, pt.y};
             dragEffect = DROPEFFECT_COPY;
             t0 = nowMs();
             tabDrop_->DragEnter(data.get(), MK_LBUTTON, cursor, &dragEffect);
@@ -621,12 +612,8 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
     add(L"(and come back)", [=, this] { switchTab(active_ - 1); }, [=, this] { return at(dir); });
     add(L"dropping a file on a tab puts it in that tab's folder",
         [=, this] {
-            RECT r{};
-            TabCtrl_GetItemRect(tabBar_, active_ + 1, &r);
-            POINT pt{(r.left + r.right) / 2, (r.top + r.bottom) / 2};
-            ClientToScreen(tabBar_, &pt);
+            POINTL cursor = tabPoint(active_ + 1);
             Com<IDataObject> data = dataObject(wnd_, path(L"file1.txt"));   // what a drag carries
-            POINTL cursor{pt.x, pt.y};
             DWORD effect = DROPEFFECT_COPY;
             tabDrop_->DragEnter(data.get(), MK_LBUTTON, cursor, &effect);
             effect = DROPEFFECT_COPY;
@@ -686,9 +673,9 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
             // Done when the subfolders are shown, or the node knows it has none.
             return expected > 0 ? shown == expected : item.cChildren == 0;
         });
-    auto bookmarkNodes = [this] {   // the texts under Bookmarks, the tree's first root
+    auto nodeTexts = [this](HTREEITEM first) {   // the texts of a node and its next siblings, comma-separated
         std::wstring texts;
-        for (HTREEITEM c = TreeView_GetChild(tree_.hwnd(), TreeView_GetRoot(tree_.hwnd())); c; c = TreeView_GetNextSibling(tree_.hwnd(), c)) {
+        for (HTREEITEM c = first; c; c = TreeView_GetNextSibling(tree_.hwnd(), c)) {
             wchar_t text[64] = {};
             TVITEMW item{};
             item.mask = TVIF_TEXT;
@@ -700,20 +687,10 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
         }
         return texts;
     };
-    auto rootTexts = [this] {   // the texts of the tree's roots
-        std::wstring texts;
-        for (HTREEITEM c = TreeView_GetRoot(tree_.hwnd()); c; c = TreeView_GetNextSibling(tree_.hwnd(), c)) {
-            wchar_t text[64] = {};
-            TVITEMW item{};
-            item.mask = TVIF_TEXT;
-            item.hItem = c;
-            item.pszText = text;
-            item.cchTextMax = 64;
-            TreeView_GetItem(tree_.hwnd(), &item);
-            texts += (texts.empty() ? L"" : L",") + std::wstring(text);
-        }
-        return texts;
+    auto bookmarkNodes = [=, this] {   // the texts under Bookmarks, the tree's first root
+        return nodeTexts(TreeView_GetChild(tree_.hwnd(), TreeView_GetRoot(tree_.hwnd())));
     };
+    auto rootTexts = [=, this] { return nodeTexts(TreeView_GetRoot(tree_.hwnd())); };
     auto twoRoots = std::make_shared<bool>(false);
     add(L"the user folders arrive from a worker, between Bookmarks and This PC",
         [=, this] {

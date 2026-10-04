@@ -112,6 +112,14 @@ HRESULT uiObject(HWND owner, const std::wstring& dir, const std::vector<Item>& i
 }
 
 
+// Interface I on what uiObject finds (empty when it finds nothing).
+template <class I, class... Where>
+Com<I> shellObject(HWND owner, const Where&... where) {
+    Com<I> obj;
+    uiObject(owner, where..., __uuidof(I), reinterpret_cast<void**>(obj.put()));
+    return obj;
+}
+
 // Runs one IFileOperation: Windows shows progress, conflict and error dialogs, and records undo.
 template <class AddWork>
 HRESULT fileOperation(HWND owner, DWORD flags, AddWork addWork) {
@@ -160,11 +168,9 @@ const TypeInfo& typeInfo(const Item& it) {
                    SHGFI_USEFILEATTRIBUTES | SHGFI_SYSICONINDEX | SHGFI_SMALLICON | SHGFI_TYPENAME);
     return cache.emplace(key, TypeInfo{sfi.iIcon, sfi.szTypeName}).first->second;
 }
-}  // namespace
 
-namespace {
 std::unordered_map<std::wstring, int> g_ownIcons;   // full path -> icon; UI thread only
-}
+}  // namespace
 
 bool hasOwnIcon(const Item& it) {
     static const wchar_t* const own[] = {L".exe", L".lnk", L".ico", L".url", L".cur",
@@ -215,28 +221,16 @@ std::wstring knownFolder(REFKNOWNFOLDERID id) {
 }
 
 Com<IDataObject> dataObject(HWND owner, const std::wstring& dir, const std::vector<Item>& items) {
-    Com<IDataObject> obj;
-    uiObject(owner, dir, items, IID_IDataObject, reinterpret_cast<void**>(obj.put()));
-    return obj;
+    return shellObject<IDataObject>(owner, dir, items);
 }
 
-Com<IDataObject> dataObject(HWND owner, const std::wstring& path) {
-    Com<IDataObject> obj;
-    uiObject(owner, path, IID_IDataObject, reinterpret_cast<void**>(obj.put()));
-    return obj;
-}
+Com<IDataObject> dataObject(HWND owner, const std::wstring& path) { return shellObject<IDataObject>(owner, path); }
 
 Com<IContextMenu> itemMenu(HWND owner, const std::wstring& dir, const std::vector<Item>& items) {
-    Com<IContextMenu> cm;
-    uiObject(owner, dir, items, IID_IContextMenu, reinterpret_cast<void**>(cm.put()));
-    return cm;
+    return shellObject<IContextMenu>(owner, dir, items);
 }
 
-Com<IContextMenu> itemMenu(HWND owner, const std::wstring& path) {
-    Com<IContextMenu> cm;
-    uiObject(owner, path, IID_IContextMenu, reinterpret_cast<void**>(cm.put()));
-    return cm;
-}
+Com<IContextMenu> itemMenu(HWND owner, const std::wstring& path) { return shellObject<IContextMenu>(owner, path); }
 
 Com<IContextMenu> backgroundMenu(HWND owner, const std::wstring& dir) {
     Com<IContextMenu> cm;

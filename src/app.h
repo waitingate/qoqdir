@@ -137,6 +137,8 @@ private:
     int rowHeight_ = 0, tabHeight_ = 0;
     int treeWidth_ = 220;           // in 96-DPI units
     int splitterX_ = 0;
+    static constexpr int kSplitterWidth = 5;   // in 96-DPI units
+    bool overSplitter(int x) const { return x >= splitterX_ && x < splitterX_ + scale(kSplitterWidth, dpi_); }
     bool dragging_ = false;         // moving the tree/list splitter
     bool draggingFiles_ = false;    // a drag started from our own list is in progress
     bool refreshQueued_ = false;
