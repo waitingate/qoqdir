@@ -1,0 +1,80 @@
+# Builds qoqdir.exe on a hosted Windows runner and runs every check the spec names:
+# unit tests, the in-process self-test (under the popup watch) and the command-line checks.
+# The exe, the self-test log and the popup-watch output are kept as artifacts.
+#
+# GitHub's Windows runners run the job in an interactive desktop session, so the self-test
+# can open its window, use the clipboard, the Recycle Bin and Windows' copy engine. A step
+# that fails here but passes on a PC usually means one of those was missing on the runner
+# (see the popup-watch output and the log), not a bug in the code.
+name: build
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # MinGW-w64 GCC (MSYS2's current release), CMake and Ninja; no Visual Studio, as in the spec.
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          update: true
+          install: mingw-w64-x86_64-gcc mingw-w64-x86_64-cmake mingw-w64-x86_64-ninja
+
+      - name: Build
+        shell: msys2 {0}
+        run: |
+          g++ --version | head -1
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+          cmake --build build
+
+      # One exe, statically linked, well under 1 MB: no MinGW DLLs may be imported.
+      - name: Check the exe is portable
+        shell: msys2 {0}
+        run: |
+          objdump -p build/qoqdir.exe | grep 'DLL Name'
+          if objdump -p build/qoqdir.exe | grep -iE 'DLL Name: lib(stdc\+\+|gcc|winpthread)'; then
+            echo '::error::qoqdir.exe depends on MinGW runtime DLLs'; exit 1
+          fi
+          size=$(stat -c %s build/qoqdir.exe); echo "qoqdir.exe: $size bytes"
+          test "$size" -lt 1048576 || { echo '::error::qoqdir.exe is 1 MB or more'; exit 1; }
+
+      - name: Unit tests
+        shell: msys2 {0}
+        run: ctest --test-dir build -R unit_tests --output-on-failure
+
+      # The self-test, with every new window from any process listed (spec 7.4).
+      - name: Self-test with popup watch
+        shell: pwsh
+        run: powershell -NoProfile -File tests\watch-windows.ps1 -Exe build\qoqdir.exe
+
+      - name: Command-line checks
+        shell: pwsh
+        run: powershell -NoProfile -File tests\cli-checks.ps1 -Exe build\qoqdir.exe
+
+      - name: Collect logs
+        if: always()
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force logs | Out-Null
+          foreach ($f in 'qoqdir-selftest.log', 'qoqdir-crash.log') {
+            $p = Join-Path $env:TEMP $f
+            if (Test-Path $p) { Copy-Item $p logs\ }
+          }
+          Get-ChildItem logs
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: qoqdir
+          path: |
+            build/qoqdir.exe
+            logs/
+          if-no-files-found: warn
