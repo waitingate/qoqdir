@@ -420,14 +420,13 @@ fn ext(name: &[u16]) -> &[u16] {
 }
 
 /// Lower-case extension with the dot (".txt"), empty if none.
-pub fn extension_of(name: &OsStr) -> Vec<u16> {
-    to_lower(&OsString::from_wide(ext(&wide(name))))
+pub fn extension_of(name: &OsStr) -> String {
+    String::from_utf16_lossy(&to_lower(&OsString::from_wide(ext(&wide(name)))))
 }
 
 /// A .lnk or .url file.
 pub fn is_shortcut(name: &OsStr) -> bool {
-    let ext = String::from_utf16_lossy(&extension_of(name));
-    ext == ".lnk" || ext == ".url"
+    matches!(extension_of(name).as_str(), ".lnk" | ".url")
 }
 
 /// Case-insensitive substring match, or a wildcard match when the filter has * or ?.
@@ -549,7 +548,7 @@ mod tests {
         assert!(dir("C:\\Users").same(&dir("c:\\USERS")));
         assert!(!dir("C:\\Users").same(&dir("C:\\User")));
         assert!(!dir("C:\\").same(&Location::ThisPc));
-        assert_eq!(extension_of(OsStr::new("Photo.JPG")), ".jpg".encode_utf16().collect::<Vec<_>>());
+        assert_eq!(extension_of(OsStr::new("Photo.JPG")), ".jpg");
         assert!(extension_of(OsStr::new("README")).is_empty());
         assert!(is_shortcut(OsStr::new("C:\\Bookmarks\\Work.LNK")) && is_shortcut(OsStr::new("site.url")));
         assert!(!is_shortcut(OsStr::new("notes.txt")));

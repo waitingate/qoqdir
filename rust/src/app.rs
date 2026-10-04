@@ -1466,7 +1466,7 @@ impl App {
     /// shortcut says its target is a folder; Windows opens anything else. Whether the target really
     /// is a folder is found out by the folder loader on its worker thread (it may be on a network).
     fn open_shortcut(&self, path: PathBuf, in_new_tab: bool) {
-        let lnk = extension_of(path.as_os_str()) == ".lnk".encode_utf16().collect::<Vec<_>>();
+        let lnk = extension_of(path.as_os_str()) == ".lnk";
         let target = if lnk { shortcut_target(&path).filter(|(t, _)| t.is_absolute()) } else { None };
         match target {
             None => open_file(self.wnd, &path), // a web link, a program...
@@ -1700,16 +1700,12 @@ impl App {
         }
     }
 
-    fn read_setting(&self, section: &str, key: &str) -> Option<OsString> {
-        let mut buf = vec![0u16; 32768];
-        let (s, k) = (wide(section), wide(key));
-        unsafe { GetPrivateProfileStringW(pcwstr(&s), pcwstr(&k), w!("?"), Some(&mut buf), pcwstr(&self.ini)) };
-        let value = from_wide(&buf);
-        (value != "?").then_some(value) // '?' cannot appear in a path
-    }
-
+    /// A number from qoqdir.ini; missing or not a number: the default.
     fn number(&self, key: &str, fallback: i32) -> i32 {
-        self.read_setting("Window", key).and_then(|v| v.to_string_lossy().trim().parse().ok()).unwrap_or(fallback)
+        let mut buf = [0u16; 32];
+        let k = wide(key);
+        unsafe { GetPrivateProfileStringW(w!("Window"), pcwstr(&k), w!(""), Some(&mut buf), pcwstr(&self.ini)) };
+        from_wide(&buf).to_string_lossy().trim().parse().unwrap_or(fallback)
     }
 
     fn load_settings(&self, cmd: &CommandLine) {

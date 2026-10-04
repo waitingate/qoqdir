@@ -4,7 +4,6 @@
 
 #include <uxtheme.h>
 
-#include <algorithm>
 #include <thread>
 
 namespace {
@@ -13,7 +12,7 @@ namespace {
 // Runs on a worker thread, so it may block.
 std::vector<TreeBatch::Child> readChildren(const std::wstring& dir, bool shortcuts) {
     std::vector<TreeBatch::Child> children;
-    if (dir.empty()) {
+    if (dir.empty()) {   // the drives (not via listFolder: its free-space check can wait on a network drive)
         DWORD mask = GetLogicalDrives();
         for (int i = 0; i < 26; ++i) {
             if (!(mask & (1u << i))) continue;
@@ -24,28 +23,18 @@ std::vector<TreeBatch::Child> readChildren(const std::wstring& dir, bool shortcu
         }
         return children;
     }
-    WIN32_FIND_DATAW fd;
-    HANDLE h = FindFirstFileExW(joinPath(dir, L"*").c_str(), FindExInfoBasic, &fd,
-                                shortcuts ? FindExSearchNameMatch : FindExSearchLimitToDirectories, nullptr,
-                                FIND_FIRST_EX_LARGE_FETCH);
-    if (h == INVALID_HANDLE_VALUE) return children;
-    do {
-        const wchar_t* n = fd.cFileName;
-        bool dots = n[0] == L'.' && (n[1] == 0 || (n[1] == L'.' && n[2] == 0));
-        if (dots || (fd.dwFileAttributes & FILE_ATTRIBUTE_HIDDEN)) continue;
-        std::wstring path = joinPath(dir, n);
-        if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) {
-            children.push_back({path, n, -1});
-        } else if (shortcuts && isShortcut(n)) {   // shown as Windows names it ("Work", not "Work.lnk")
+    Listing listing = listFolder(dir, false);
+    sortItems(listing.items, SortKey::Name, true);   // folders first, in natural order
+    for (const Item& it : listing.items) {
+        std::wstring path = joinPath(dir, it.name);
+        if (it.isDir()) {
+            children.push_back({path, it.name, -1});
+        } else if (shortcuts && isShortcut(it.name)) {   // shown as Windows names it ("Work", not "Work.lnk")
             SHFILEINFOW sfi{};
             SHGetFileInfoW(path.c_str(), 0, &sfi, sizeof sfi, SHGFI_DISPLAYNAME | SHGFI_SYSICONINDEX | SHGFI_SMALLICON);
-            children.push_back({path, sfi.szDisplayName[0] ? sfi.szDisplayName : n, sfi.iIcon, true});
+            children.push_back({path, sfi.szDisplayName[0] ? sfi.szDisplayName : it.name, sfi.iIcon, true});
         }
-    } while (FindNextFileW(h, &fd));
-    FindClose(h);
-    std::sort(children.begin(), children.end(), [](const auto& a, const auto& b) {   // folders first
-        return a.shortcut != b.shortcut ? b.shortcut : StrCmpLogicalW(a.text.c_str(), b.text.c_str()) < 0;
-    });
+    }
     return children;
 }
 

@@ -58,7 +58,7 @@ const PASTE_CMD: u32 = 0x8000; // our own items, after the shell's ids
 const PASTE_SHORTCUT_CMD: u32 = 0x8001;
 
 thread_local! {
-    static TYPES: RefCell<HashMap<Vec<u16>, (i32, OsString)>> = RefCell::new(HashMap::new());
+    static TYPES: RefCell<HashMap<String, (i32, OsString)>> = RefCell::new(HashMap::new());
     static OWN_ICONS: RefCell<HashMap<PathBuf, i32>> = RefCell::new(HashMap::new()); // full path -> icon
     // Set only while a context menu is on screen, for owner-drawn submenus.
     static OPEN_MENU: RefCell<(Option<IContextMenu2>, Option<IContextMenu3>)> = const { RefCell::new((None, None)) };
@@ -87,18 +87,12 @@ pub fn system_image_list() -> HIMAGELIST {
 /// Icon and type name depend only on the extension, so ask the shell once per
 /// extension. SHGFI_USEFILEATTRIBUTES means no disk access: it never blocks.
 fn type_info(it: &Item) -> (i32, OsString) {
-    let key = if it.is_dir() { wide("\\") } else { extension_of(&it.name) };
+    let key = if it.is_dir() { "\\".to_string() } else { extension_of(&it.name) };
     if let Some(found) = TYPES.with(|t| t.borrow().get(&key).cloned()) {
         return found;
     }
-    let (probe, attrs) = if it.is_dir() {
-        (wide("folder"), FILE_ATTRIBUTE_DIRECTORY)
-    } else {
-        let mut p: Vec<u16> = "file".encode_utf16().collect();
-        p.extend_from_slice(&key);
-        p.push(0);
-        (p, FILE_ATTRIBUTE_NORMAL)
-    };
+    let (probe, attrs) =
+        if it.is_dir() { (wide("folder"), FILE_ATTRIBUTE_DIRECTORY) } else { (wide(format!("file{key}")), FILE_ATTRIBUTE_NORMAL) };
     let flags = SHGFI_USEFILEATTRIBUTES | SHGFI_SYSICONINDEX | SHGFI_SMALLICON | SHGFI_TYPENAME;
     let info = file_info(&probe, attrs, flags).map(|s| (s.iIcon, from_wide(&s.szTypeName))).unwrap_or_default();
     TYPES.with(|t| t.borrow_mut().insert(key, info.clone()));
@@ -110,8 +104,7 @@ fn type_info(it: &Item) -> (i32, OsString) {
 /// arrives, the file shows its type's icon.
 pub fn has_own_icon(it: &Item) -> bool {
     const OWN: [&str; 10] = [".exe", ".lnk", ".ico", ".url", ".cur", ".ani", ".msc", ".cpl", ".scr", ".appref-ms"];
-    let ext = extension_of(&it.name);
-    !it.is_dir() && OWN.iter().any(|e| e.encode_utf16().eq(ext.iter().copied()))
+    !it.is_dir() && OWN.contains(&extension_of(&it.name).as_str())
 }
 
 pub struct IconBatch {
