@@ -340,8 +340,7 @@ LRESULT App::onMessage(UINT msg, WPARAM wp, LPARAM lp) {
             tree_.refreshDrives();   // only This PC changes; the rest of the tree stays as the user left it
             // This PC lists the drives, and a tab's folder may sit on the drive that went: its
             // own watch cannot tell, since the event names the drive root, not a folder below it.
-            // A tab already shown as not available waits for F5 (4.3), like a deleted folder does.
-            if (!tab().unavailable) queueRefresh();
+            queueRefresh();
         }
         return TRUE;
     case WM_SETCURSOR:
@@ -408,8 +407,9 @@ void App::onTimer(UINT_PTR id) {
         KillTimer(wnd_, kRefreshTimer);
         refreshQueued_ = false;
         // The item a delete, rename or new folder wanted selected, unless another folder is shown by now.
+        // A tab shown as not available waits for F5 (4.3), even if this refresh was queued before it failed.
         QueuedView q = std::exchange(queuedView_, {});
-        refresh(samePath(list_.dir(), q.dir) ? std::move(q.view) : ViewState{});
+        if (!tab().unavailable) refresh(samePath(list_.dir(), q.dir) ? std::move(q.view) : ViewState{});
     } else if (id == kStatusTimer) {
         KillTimer(wnd_, kStatusTimer);
         showStatus();
@@ -497,34 +497,29 @@ void App::onContextMenu(HWND from, POINT pt) {
             ClientToScreen(list_.hwnd(), &pt);
         }
         std::vector<int> rows = list_.selection();
+        // The menu is modal and a folder load can land while it is open: the app's own commands (paste, rename,
+        // delete, open here) then do nothing. Windows' own (Copy, Properties...) act on the menu's own items.
+        const std::wstring dir = list_.dir();
+        const std::vector<std::wstring> names = list_.selectedNames();
         if (rows.empty()) {
-            if (!list_.dir().empty())
-                showMenu(wnd_, backgroundMenu(wnd_, list_.dir()).get(), pt, nullptr,
-                         [&](bool shortcuts) { pasteInto(wnd_, list_.dir(), shortcuts); });
+            if (!dir.empty())
+                showMenu(wnd_, backgroundMenu(wnd_, dir).get(), pt, nullptr,
+                         [&](bool shortcuts) { if (samePath(list_.dir(), dir)) pasteInto(wnd_, dir, shortcuts); });
             return;
         }
-        // Folders and shortcuts open here (activate decides), never in a separate Explorer window.
-        bool opensHere = std::all_of(rows.begin(), rows.end(), [&](int r) {
+        // With a folder or shortcut among them, activate opens them all (folders here, files with Windows).
+        bool opensHere = std::any_of(rows.begin(), rows.end(), [&](int r) {
             return list_.at(r).isDir() || isShortcut(list_.at(r).name);
         });
-        showMenu(wnd_, itemMenu(wnd_, list_.dir(), list_.selectedItems()).get(), pt, [&](const std::wstring& verb) {
-            if (is(verb, L"rename")) {
-                list_.rename(list_.focused() >= 0 ? list_.focused() : rows[0]);
-                return true;
-            }
-            if (is(verb, L"delete")) {   // like the Delete key, so the item after the deleted ones is selected (4.6)
-                deleteSelection(GetKeyState(VK_SHIFT) < 0);
-                return true;
-            }
-            if (opensHere && (is(verb, L"open") || is(verb, L"explore"))) {
-                activate(false);
-                return true;
-            }
-            if (opensHere && (is(verb, L"opennewtab") || is(verb, L"opennewwindow"))) {
-                activate(true);
-                return true;
-            }
-            return false;
+        showMenu(wnd_, itemMenu(wnd_, dir, list_.selectedItems()).get(), pt, [&](const std::wstring& verb) {
+            bool open = is(verb, L"open") || is(verb, L"explore");
+            bool inNewTab = is(verb, L"opennewtab") || is(verb, L"opennewwindow");
+            if (!is(verb, L"rename") && !is(verb, L"delete") && !(opensHere && (open || inNewTab))) return false;
+            if (!samePath(list_.dir(), dir) || list_.selectedNames() != names) return true;   // changed: do nothing
+            if (is(verb, L"rename")) list_.rename(list_.focused() >= 0 ? list_.focused() : rows[0]);
+            else if (is(verb, L"delete")) deleteSelection(GetKeyState(VK_SHIFT) < 0);   // like the Delete key (4.6)
+            else activate(inNewTab);
+            return true;
         });
         return;
     }
@@ -602,10 +597,9 @@ bool App::onKey(const Key& key) {
     if ((ctrl && k == 'L') || (alt && k == 'D') || (k == VK_F4 && !alt)) { focusEdit(address_); return true; }
     if ((ctrl && k == 'F') || k == VK_F3) { focusEdit(filter_); return true; }
     if (k == VK_F5 || (ctrl && k == 'R')) { refresh(); return true; }
-    if (ctrl && k == 'H') {
-        showHidden_ = !showHidden_;
-        setMessage(showHidden_ ? L"Showing hidden files" : L"Hiding hidden files");
-        reload();
+    if (ctrl && k == 'H') {   // hidden items are always read: the list just shows or hides them
+        list_.setShowHidden(!list_.showHidden());
+        setMessage(list_.showHidden() ? L"Showing hidden files" : L"Hiding hidden files");
         return true;
     }
     if (alt && k == VK_LEFT) { goBack(); return true; }
@@ -687,9 +681,12 @@ void App::focusList() {
 
 void App::open(const std::wstring& path, Nav nav, ViewState view, Origin origin) {
     if (list_.renaming()) ListView_CancelEditLabel(list_.hwnd());
+    // A new folder starts unfiltered (5.4): cleared now, so letters typed while it loads filter it.
+    std::wstring filter = windowText(filter_);
+    if (nav != Nav::Refresh && !filter.empty()) SetWindowTextW(filter_, L"");
     UINT generation = ++generation_;
     g_newestLoad = generation;
-    pending_ = {generation, path, nav, std::move(view), tab().id, std::move(origin)};
+    pending_ = {generation, path, nav, std::move(view), tab().id, std::move(origin), std::move(filter)};
     SetTimer(wnd_, kLoadingTimer, 250, nullptr);   // say "Loading..." only if it is slow
     if (nav == Nav::Switch) {
         // The tab strip already shows the new tab: show its location at once instead of the old tab's list
@@ -700,11 +697,10 @@ void App::open(const std::wstring& path, Nav nav, ViewState view, Origin origin)
         showStatus();
     }
     HWND wnd = wnd_;
-    bool hidden = showHidden_;
-    std::thread([wnd, generation, path, hidden] {
+    std::thread([wnd, generation, path] {
         HRESULT co = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE);
         auto replaced = [generation] { return g_newestLoad != generation; };
-        auto result = std::make_unique<Listing>(listFolder(path, hidden, replaced));
+        auto result = std::make_unique<Listing>(listFolder(path, true, replaced));
         std::vector<std::wstring> own;
         for (const Item& it : result->items)
             if (hasOwnIcon(it)) own.push_back(it.name);
@@ -784,7 +780,6 @@ void App::onLoaded(Listing&& listing, UINT generation) {
         std::wstring child = childToward(listing.path, old);
         if (!child.empty()) view = ViewState::selecting(child);
     }
-    if (!(p.nav == Nav::Refresh && sameFolder) && GetWindowTextLengthW(filter_) > 0) SetWindowTextW(filter_, L"");
 
     t.path = listing.path;
     t.unavailable = false;
@@ -817,6 +812,9 @@ void App::showLocation(Nav nav) {
 // The folder could not be read: decide what to show or do instead.
 void App::onLoadFailed(const Listing& listing, const Pending& p) {
     Tab& t = tab();
+    // A navigation that fails or opens a file leaves the folder shown: its filter comes back, unless retyped.
+    if (p.nav != Nav::Refresh && p.nav != Nav::Switch && GetWindowTextLengthW(filter_) == 0)
+        SetWindowTextW(filter_, p.filter.c_str());
     // The shortcut leads to a file: let Windows open it. (Not when its folder is unreachable:
     // Windows would only show its own error, after the same long wait.)
     if (!p.origin.shortcut.empty() && listing.isFile) {
@@ -837,7 +835,6 @@ void App::onLoadFailed(const Listing& listing, const Pending& p) {
         // not be connected yet, a USB drive may come back): show it empty and say why.
         // The list gets no folder, so paste, new folder, menus and drops have nothing to act on:
         // asking Windows about an unreachable folder can freeze the window for 20-40 s.
-        if (GetWindowTextLengthW(filter_) > 0) SetWindowTextW(filter_, L"");
         list_.setListing(Listing{});
         t.unavailable = true;
         watch_ = {};
@@ -884,26 +881,20 @@ void App::refresh(ViewState view) {
         }
         return;
     }
+    if (!view.select.empty() || !view.focus.empty()) queuedView_ = {};   // newer than any request still waiting
     open(tab().path, Nav::Refresh, std::move(view));
-}
-
-void App::reload() {
-    if (!pending_.generation) return refresh();
-    Pending p = pending_;   // restart the load in progress, e.g. with new settings
-    open(p.path, p.nav, std::move(p.view), std::move(p.origin));
 }
 
 void App::goToTyped() {
     std::wstring text = windowText(address_);
-    std::wstring path = normalizePath(text);
+    std::wstring path = normalizePath(expandVars(text));   // only what the user typed has its %VARS% expanded
     // "..", a subfolder's name and anything written relative to this folder (".", ".\x", "a\b")
     // are resolved here and checked by the loader, so they never reach Windows, which would open
     // the folder in an Explorer window (4.4). The rest runs as a command (5.3).
-    // Only the typed text has its %VARS% expanded: the folder's own path may really contain "%TEMP%".
     bool relative = isRelativePath(path);
     if (path == L"..") path = parentPath(tab().path);
     else if (!tab().path.empty() && (list_.hasFolder(path) || relative))
-        path = normalizePath(joinPath(tab().path, path), false);   // GetFullPathName folds "." and ".." away
+        path = normalizePath(joinPath(tab().path, path));   // GetFullPathName folds "." and ".." away
     if (path.empty() || isAbsolutePath(path)) {
         // Checked by the folder loader on its worker thread, so a dead network
         // share cannot freeze the window. A file is opened when the result comes back.
@@ -1004,6 +995,7 @@ ViewState App::currentView() const {
 // then, and storing that would forget what the tab showed before (a quick Ctrl+Tab past a slow folder).
 void App::rememberView() {
     if (pending_.generation && pending_.nav == Nav::Switch) return;
+    SetWindowTextW(filter_, L"");   // the tab comes back unfiltered (5.4): remember the unfiltered rows
     if (samePath(list_.dir(), tab().path)) tab().view = currentView();
 }
 
@@ -1016,7 +1008,7 @@ Tab App::makeTab(const std::wstring& path) {
     return t;
 }
 
-void App::newTab(const std::wstring& path, bool switchTo) {
+void App::newTab(std::wstring path, bool switchTo) {
     int at = active_ + 1;
     tabs_.insert(tabs_.begin() + at, makeTab(path));
     if (switchTo) {
@@ -1106,9 +1098,10 @@ void App::deleteSelection(bool permanently) {
     int next = rowAfterDeleting(rows, list_.count());
     ViewState v = next >= 0 ? ViewState::selecting(list_.at(next).name) : ViewState{};
     v.top = list_.topRow();
-    // Answering No to Windows' question (or an error) deletes nothing: then the selection stays where it
-    // was. Anything deleted before a cancel still shows up through the folder watch.
-    if (deleteItems(wnd_, list_.dir(), list_.selectedItems(), permanently)) refresh(v);
+    // Answering No to Windows' question (or an error) deletes nothing: then the selection stays where it was.
+    // Anything deleted before a cancel still shows up through the folder watch. After a delete nothing is
+    // selected until the reload lands, so a second Delete cannot hit the deleted files.
+    if (deleteItems(wnd_, list_.dir(), list_.selectedItems(), permanently)) { list_.select({}, v.focus); refresh(v); }
 }
 
 void App::newFolder() {
@@ -1168,7 +1161,7 @@ void App::loadSettings(const CommandLine& cmd) {
     };
 
     treeWidth_ = number(L"TreeWidth", 220);
-    showHidden_ = number(L"ShowHidden", 0) != 0;
+    list_.setShowHidden(number(L"ShowHidden", 0) != 0);
     list_.setSort(SortKey(std::clamp(number(L"SortColumn", 0), 0, 3)), number(L"SortAscending", 1) != 0);
     const int defaults[] = {320, 150, 170, 90};
     std::vector<int> widths;
@@ -1214,7 +1207,7 @@ void App::saveSettings() {
     bool maximized = wp.showCmd == SW_SHOWMAXIMIZED || (wp.flags & WPF_RESTORETOMAXIMIZED);   // also when minimized
     number(L"Maximized", maximized ? 1 : 0);
     number(L"TreeWidth", treeWidth_);
-    number(L"ShowHidden", showHidden_ ? 1 : 0);
+    number(L"ShowHidden", list_.showHidden() ? 1 : 0);
     number(L"SortColumn", int(list_.sortKey()));
     number(L"SortAscending", list_.sortAscending() ? 1 : 0);
     std::vector<int> widths = list_.columnWidths();

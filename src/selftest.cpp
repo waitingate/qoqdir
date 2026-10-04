@@ -34,6 +34,7 @@ namespace {
 std::wstring testRoot() {
     wchar_t temp[MAX_PATH] = {};
     GetTempPathW(MAX_PATH, temp);
+    GetLongPathNameW(temp, temp, MAX_PATH);   // paths Windows hands back (shortcut targets) are long: never RUNNER~1
     return joinPath(temp, toLower(kAppName) + L"-selftest");
 }
 
@@ -147,6 +148,11 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
             if (list_.at(i).name == name) return true;
         return false;
     };
+    auto filterText = [this] {
+        wchar_t text[64] = {};
+        GetWindowTextW(filter_, text, 64);
+        return std::wstring(text);
+    };
     auto editText = [this] {
         HWND edit = ListView_GetEditControl(list_.hwnd());
         wchar_t buf[MAX_PATH] = {};
@@ -173,6 +179,16 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
     // 6 items: the 5 test files and folders, plus the self-test's own Bookmarks folder.
     add(L"opens the start folder with all 6 items", nullptr, [=, this] { return at(dir) && list_.count() == 6; });
     add(L"shows a Chinese file name", nullptr, [=, this] { return listed(L"\u5831\u544A.pdf"); });
+    add(L"the folder Qoqdir was started from is not kept open (its working folder is the system folder)", nullptr,
+        [=, this] {
+            wchar_t cwd[MAX_PATH] = {}, sys[MAX_PATH] = {};
+            GetCurrentDirectoryW(MAX_PATH, cwd);
+            GetSystemDirectoryW(sys, MAX_PATH);
+            selfTest_->note = L"working folder " + std::wstring(cwd);
+            return samePath(cwd, sys);
+        });
+    add(L"a drive without a disk fails quietly, without Windows' \"No Disk\" box", nullptr,
+        [] { return (GetErrorMode() & SEM_FAILCRITICALERRORS) != 0; });
     add(L"typing in the list filters it", [=, this] { SetFocus(list_.hwnd()); selfTestType(L"file"); },
         [=, this] { return list_.count() == 3 && GetFocus() == filter_; });
     add(L"Esc clears the filter and returns to the list", [=, this] { selfTestKey(VK_ESCAPE); },
@@ -200,18 +216,21 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
         });
     add(L"(Esc clears it)", [=, this] { selfTestKey(VK_ESCAPE); },
         [=, this] { return list_.count() == 6 && GetFocus() == list_.hwnd(); });
+    // Paste only the test's own file: had its Ctrl+C failed, the clipboard could hold files the user cut, and
+    // pasting them would move them into the test folder, which is deleted at the end.
+    auto holdsTestFile = [=] {
+        auto files = clipboardFiles();
+        return files.size() == 1 && samePath(files[0], path(L"file1.txt"));
+    };
     add(L"Ctrl+C puts the file on the clipboard",
-        [=, this] { list_.select({L"file1.txt"}, L"file1.txt"); selfTestKey('C', true); },
-        [=, this] {
-            auto files = clipboardFiles();
-            return files.size() == 1 && leafName(files[0]) == L"file1.txt";
-        });
+        [=, this] { list_.select({L"file1.txt"}, L"file1.txt"); selfTestKey('C', true); }, holdsTestFile);
     add(L"filter + Enter opens a folder", [=, this] { selfTestType(L"sub"); selfTestKey(VK_RETURN); },
         [=, this] { return at(path(L"sub")); });
-    add(L"Ctrl+V pastes with the Windows copy engine", [=, this] { selfTestKey('V', true); },
+    add(L"Ctrl+V pastes with the Windows copy engine", [=, this] { if (holdsTestFile()) selfTestKey('V', true); },
         [=, this] { return exists(path(L"sub\\file1.txt")); }, 10000);
     add(L"pasted file appears in the list by itself", nullptr, [=, this] { return idle() && listed(L"file1.txt"); });
-    add(L"Paste shortcut makes a shortcut to the copied file", [=, this] { pasteInto(wnd_, list_.dir(), true); },
+    add(L"Paste shortcut makes a shortcut to the copied file",
+        [=, this] { if (holdsTestFile()) pasteInto(wnd_, list_.dir(), true); },
         [=, this] {
             bool folder = false;
             for (const Item& it : listFolder(path(L"sub"), false).items)
@@ -289,9 +308,13 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
             int row = list_.select({L"file10.txt"}, L"file10.txt");
             next = row >= 0 && row + 1 < list_.count() ? list_.at(row + 1).name : L"";
             selfTestKey(VK_DELETE);
+            // Until the reload lands the deleted file is still listed: it must not stay selected (a second
+            // Delete would show Windows' "Item Not Found").
+            if (!list_.selection().empty()) selfTest_->note = L"the deleted file stayed selected until the reload";
         },
         [=, this] {
-            return idle() && !exists(path(L"file10.txt")) && list_.selectedNames() == std::vector<std::wstring>{next};
+            return idle() && !exists(path(L"file10.txt")) && list_.selectedNames() == std::vector<std::wstring>{next} &&
+                   selfTest_->note.empty();
         },
         10000);
     add(L"files created by other programs appear by themselves, and the selection stays (4.5)",
@@ -320,7 +343,8 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
     add(L"F5 tries again once it is back", [=, this] { CreateDirectoryW(path(L"gone").c_str(), nullptr); selfTestKey(VK_F5); },
         [=, this] { return at(path(L"gone")) && statusMessage().empty(); });
     add(L"(back up to the test folder)", [=, this] { SetFocus(list_.hwnd()); selfTestKey(VK_BACK); }, [=, this] { return at(dir); });
-    add(L"Ctrl+T opens a tab", [=, this] { selfTestKey('T', true); }, [=, this] { return idle() && tabs_.size() == 2; });
+    add(L"Ctrl+T opens a tab of the same folder", [=, this] { selfTestKey('T', true); },
+        [=, this] { return idle() && tabs_.size() == 2 && at(dir); });
     add(L"Ctrl+W closes it", [=, this] { selfTestKey('W', true); }, [=, this] { return idle() && tabs_.size() == 1 && at(dir); });
     add(L"Ctrl+W on the last tab keeps it (the last tab cannot be closed)", [=, this] { selfTestKey('W', true); },
         [=, this] { return idle() && tabs_.size() == 1 && at(dir); });
@@ -370,6 +394,18 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
         [=, this] {
             selfTest_->note = L"focused " + list_.focusedName();
             return idle() && !refreshQueued_ && list_.focusedName() == L"added.txt";
+        });
+    add(L"a newer request to select an item replaces an older one still waiting",
+        [=, this] {
+            queuedView_ = {dir, ViewState::selecting(L"file1.txt")};   // an older request, waiting (a slow folder)
+            refresh(ViewState::selecting(L"added.txt"));               // then a newer one, as after a second rename
+        },
+        [=, this] { return idle() && list_.focusedName() == L"added.txt"; });
+    add(L"...so the waiting refresh, when it runs, leaves the newer item selected",
+        [=, this] { SendMessageW(wnd_, WM_TIMER, kRefreshTimer, 0); },
+        [=, this] {
+            selfTest_->note = L"focused " + list_.focusedName();
+            return idle() && list_.focusedName() == L"added.txt";
         });
     add(L"a command that does not exist says Can't find",
         [=, this] { SetWindowTextW(address_, L"no-such-program-qoqdir"); SetFocus(address_); selfTestKey(VK_RETURN); },
@@ -482,6 +518,64 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
             refresh();
         },
         [=, this] { return at(dir) && !list_.hasFolder(L"%TEMP%"); });
+
+    // Reliability plan: hidden items, the filter during a load, a refresh queued before a failure.
+    add(L"(add a hidden file and a hidden folder)",
+        [=, this] {
+            writeFile(path(L"secret.txt"));
+            CreateDirectoryW(path(L"hid").c_str(), nullptr);
+            for (const wchar_t* name : {L"secret.txt", L"hid"})
+                SetFileAttributesW(path(name).c_str(), GetFileAttributesW(path(name).c_str()) | FILE_ATTRIBUTE_HIDDEN);
+            refresh();
+        },
+        [=, this] { return idle() && !listed(L"secret.txt") && !listed(L"hid"); });
+    auto loads = std::make_shared<UINT>(0);
+    add(L"Ctrl+H shows hidden files at once, without reading the folder again",
+        [=, this] {
+            *loads = generation_;
+            SetFocus(list_.hwnd());
+            selfTestKey('H', true);
+        },
+        [=, this] {
+            selfTest_->note = std::to_wstring(generation_ - *loads) + L" read(s)";
+            return idle() && listed(L"secret.txt") && generation_ == *loads;
+        });
+    add(L"(Ctrl+H hides them again)", [=, this] { selfTestKey('H', true); },
+        [=, this] { return idle() && !listed(L"secret.txt"); });
+    add(L"typing a hidden folder's name opens it here (not in Explorer)",
+        [=, this] { SetWindowTextW(address_, L"hid"); SetFocus(address_); selfTestKey(VK_RETURN); },
+        [=, this] { return at(path(L"hid")); });
+    add(L"letters typed while a folder loads stay in the filter box when it lands (5.4)",
+        [=, this] {
+            open(dir, Nav::New);   // back up from "hid"
+            SetFocus(list_.hwnd());
+            selfTestType(L"file");
+        },
+        [=, this] {
+            selfTest_->note = L"filter \"" + filterText() + L"\"";
+            return at(dir) && filterText() == L"file";
+        });
+    add(L"a folder that fails to open leaves the filter of the folder still shown",
+        [=, this] { open(path(L"no-such-folder"), Nav::New); },
+        [=, this] {
+            selfTest_->note = L"filter \"" + filterText() + L"\"";
+            return at(dir) && filterText() == L"file";
+        });
+    add(L"(Esc clears it)", [=, this] { SetFocus(filter_); selfTestKey(VK_ESCAPE); },
+        [=, this] { return filterText().empty() && list_.count() == list_.total(); });
+    add(L"a refresh queued just before a tab became not available waits for F5 (4.3)",
+        [=, this] {
+            queueRefresh();   // a change in the folder, just before
+            Pending p;
+            p.nav = Nav::Refresh;
+            p.tabId = tab().id;
+            onLoadFailed(Listing{dir, {}, ERROR_BAD_NETPATH, false}, p);   // then it became unreachable
+            SendMessageW(wnd_, WM_TIMER, kRefreshTimer, 0);                 // and the queued refresh fires
+        },
+        [=, this] {
+            return idle() && tab().unavailable && statusMessage().find(L"not available") != std::wstring::npos;
+        });
+    add(L"(F5 shows it again)", [=, this] { selfTestKey(VK_F5); }, [=, this] { return at(dir) && !tab().unavailable; });
 
     // Second review: history entries for deleted folders, and shortcuts.
     add(L"(open a folder that will be deleted)",
@@ -935,6 +1029,14 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
             for (int i = 0; i < 10000; ++i) expected += std::to_wstring(i).find(L"99") != std::wstring::npos;
             return list_.count() == expected;
         });
+    add(L"a run of stars in the filter does not freeze the window (\"********x\" means \"*x\")",
+        [=, this] {
+            t0 = nowMs();
+            SetWindowTextW(filter_, L"********x");   // as when Shift+8 is held a little too long
+            keyMs = nowMs() - t0;
+            selfTest_->note = L"filter " + std::to_wstring(int(keyMs)) + L" ms";
+        },
+        [=, this] { return keyMs < 1000 && list_.count() == 0; });
     add(L"sorts 10,000 files by date",
         [=, this] {
             SetWindowTextW(filter_, L"");
@@ -1003,6 +1105,21 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
             return idle() && active_ == 0 && done == 30 && wasted <= 3;
         },
         30000);
+    add(L"(filter the first tab down to its selected file, then switch tabs)",
+        [=, this] {
+            SetFocus(list_.hwnd());
+            list_.select({L"item 5000.dat"}, L"item 5000.dat");
+            selfTestType(L"5000");
+            switchTab(1);
+        },
+        [=, this] { return idle() && active_ == 1; });
+    add(L"coming back to a tab that was filtered shows its selected file (4.6)", [=, this] { switchTab(0); },
+        [=, this] {
+            int row = list_.focused(), first = list_.topRow();
+            selfTest_->note = L"row " + std::to_wstring(row) + L", top row " + std::to_wstring(first);
+            return idle() && active_ == 0 && list_.focusedName() == L"item 5000.dat" && row >= first &&
+                   row < first + ListView_GetCountPerPage(list_.hwnd());
+        });
     add(L"(close the other tab)", [=, this] { closeTab(1); }, [=, this] { return idle() && tabs_.size() == 1; });
     add(L"when another program removes the focused item, the focus moves to the item that took its place (4.5)",
         [=, this] {
@@ -1096,11 +1213,11 @@ void App::selfTestTick() {
         if (!t.started) {
             if (pending_.generation && !s.whileLoading) return;   // let the previous load finish first
             t.started = true;
-            t.startTick = GetTickCount64();
             t.note.clear();
             t.busy = true;
             if (s.act) s.act();
             t.busy = false;
+            t.startTick = GetTickCount64();   // after the act: its own setup (10,000 files) is not part of the wait
             return;
         }
         bool ok = !s.done || s.done();

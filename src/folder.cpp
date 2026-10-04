@@ -79,7 +79,9 @@ Listing listFolder(const std::wstring& path, bool showHidden, const std::functio
         it.size = (uint64_t(fd.nFileSizeHigh) << 32) | fd.nFileSizeLow;
         r.items.push_back(std::move(it));
     } while (FindNextFileW(h, &fd));
+    DWORD end = GetLastError();   // ERROR_NO_MORE_FILES, or why the read broke off (e.g. the network went)
     FindClose(h);
+    if (end != ERROR_NO_MORE_FILES) return Listing{path, {}, end, false};   // never half a folder as all of it
     return r;
 }
 
@@ -108,19 +110,13 @@ bool matchesFilter(const Item& item, const std::wstring& filter) {
     return StrStrIW(item.shown().c_str(), filter.c_str()) != nullptr;
 }
 
-std::wstring normalizePath(std::wstring p, bool expandVars) {
+std::wstring normalizePath(std::wstring p) {
     auto junk = [](wchar_t c) { return c == L' ' || c == L'\t' || c == L'"'; };
     while (!p.empty() && junk(p.back())) p.pop_back();
     size_t start = 0;
     while (start < p.size() && junk(p[start])) ++start;
     p.erase(0, start);
     if (p.empty() || equalNoCase(p.c_str(), -1, L"This PC", -1)) return L"";
-
-    if (expandVars && p.find(L'%') != std::wstring::npos) {
-        std::wstring buf(32768, L'\0');
-        DWORD n = ExpandEnvironmentStringsW(p.c_str(), buf.data(), DWORD(buf.size()));
-        if (n > 0 && n <= buf.size()) p.assign(buf.c_str());
-    }
     std::replace(p.begin(), p.end(), L'/', L'\\');
     if (p.size() == 2 && p[1] == L':') p += L'\\';
     if (isUnc(p) || (p.size() >= 3 && p[1] == L':' && p[2] == L'\\')) {
@@ -131,6 +127,12 @@ std::wstring normalizePath(std::wstring p, bool expandVars) {
     while (p.size() > 3 && p.back() == L'\\') p.pop_back();
     if (p.size() >= 2 && p[1] == L':') p[0] = towupper(p[0]);
     return p;
+}
+
+std::wstring expandVars(const std::wstring& text) {
+    std::wstring buf(32768, L'\0');
+    DWORD n = ExpandEnvironmentStringsW(text.c_str(), buf.data(), DWORD(buf.size()));
+    return n > 0 && n <= buf.size() ? std::wstring(buf.c_str()) : text;
 }
 
 std::wstring resolveArgument(const std::wstring& arg) {

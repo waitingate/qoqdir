@@ -25,13 +25,17 @@ const wchar_t kUsage[] =
 
 int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int) {
     installCrashLog();
+    SetErrorMode(SEM_FAILCRITICALERRORS);   // a drive without a disk fails quietly, not with Windows' "No Disk" box
     std::vector<std::wstring> args;
     int argc = 0;
     if (LPWSTR* argv = CommandLineToArgvW(GetCommandLineW(), &argc)) {
         args.assign(argv + 1, argv + argc);
         LocalFree(argv);
     }
-    CommandLine cmd = parseCommandLine(args);
+    CommandLine cmd = parseCommandLine(args);   // "qoqdir ." is resolved here, against the terminal's folder
+    // Then leave it: a program's working folder cannot be renamed, deleted or ejected. Explorer's is System32.
+    wchar_t sys[MAX_PATH];
+    if (GetSystemDirectoryW(sys, MAX_PATH)) SetCurrentDirectoryW(sys);
     if (cmd.help || !cmd.error.empty()) {   // there is no console, so the help is a small window
         std::wstring text = cmd.error.empty() ? kUsage : cmd.error + L"\n\n" + kUsage;
         MessageBoxW(nullptr, text.c_str(), kAppName, cmd.error.empty() ? MB_ICONINFORMATION : MB_ICONWARNING);

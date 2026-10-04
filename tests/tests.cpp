@@ -79,9 +79,11 @@ int main() {
     {
         wchar_t windir[MAX_PATH];
         GetEnvironmentVariableW(L"SystemRoot", windir, MAX_PATH);
-        CHECK(samePath(normalizePath(L"%SystemRoot%"), windir));
+        CHECK(samePath(normalizePath(expandVars(L"%SystemRoot%")), windir));
     }
-    CHECK_EQ(normalizePath(L"C:\\a\\%TEMP%\\.\\sub", false), L"C:\\a\\%TEMP%\\sub");   // a folder really named %TEMP%
+    // A folder may really be named "%TEMP%": only typed text has its variables expanded (P14).
+    CHECK_EQ(normalizePath(L"C:\\a\\%TEMP%\\.\\sub"), L"C:\\a\\%TEMP%\\sub");
+    CHECK_EQ(resolveArgument(L"C:\\a\\%TEMP%"), L"C:\\a\\%TEMP%");   // "qoqdir ." in such a folder
 
     // childToward: selects the folder you came from after going up
     CHECK_EQ(childToward(L"C:\\Users", L"C:\\Users\\me\\Documents"), L"me");

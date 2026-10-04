@@ -17,14 +17,16 @@ public:
     HWND hwnd() const { return lv_; }
 
     void setListing(Listing&& listing);   // new folder contents; keeps sort and filter
-    void setFilter(const std::wstring& filter);
+    void setFilter(std::wstring filter);
+    void setShowHidden(bool show);   // hidden items are always read; they are listed only while this is on
+    bool showHidden() const { return showHidden_; }
     void setSort(SortKey key, bool ascending);
     SortKey sortKey() const { return key_; }
     bool sortAscending() const { return asc_; }
 
     const std::wstring& dir() const { return dir_; }
     int count() const { return int(view_.size()); }
-    int total() const { return int(items_.size()); }
+    int total() const { return total_; }   // the items a filter would narrow down (not the hidden ones)
     const Item& at(int row) const { return items_[view_[row]]; }
     std::wstring pathAt(int row) const { return joinPath(dir_, at(row).name); }
     bool hasFolder(const std::wstring& name) const;   // a subfolder of that name, shown or filtered out
@@ -59,6 +61,8 @@ private:
     std::vector<Item> items_;
     std::vector<int> view_;
     std::wstring filter_;
+    bool showHidden_ = false;
+    int total_ = 0;
     SortKey key_ = SortKey::Name;
     bool asc_ = true;
 };

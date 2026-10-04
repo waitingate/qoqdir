@@ -42,10 +42,18 @@ void FileList::setListing(Listing&& listing) {
     ensureVisible(0);
 }
 
-void FileList::setFilter(const std::wstring& filter) {
+void FileList::setFilter(std::wstring filter) {
+    // A run of stars means one star; the matcher would try every way of splitting the name between them.
+    filter.erase(std::unique(filter.begin(), filter.end(), [](wchar_t a, wchar_t b) { return a == L'*' && b == L'*'; }),
+                 filter.end());
     if (filter == filter_) return;
     update(true, [&] { filter_ = filter; });
     ensureVisible(focused() >= 0 ? focused() : 0);   // the old scroll position may be past the end
+}
+
+void FileList::setShowHidden(bool show) {
+    update(true, [&] { showHidden_ = show; });
+    ensureVisible(focused() >= 0 ? focused() : 0);
 }
 
 void FileList::setSort(SortKey key, bool ascending) {
@@ -72,8 +80,12 @@ void FileList::update(bool keepSelection, const std::function<void()>& change) {
     // for row text right away, and every row must already point at a valid item.
     change();
     view_.clear();
-    for (int i = 0; i < int(items_.size()); ++i)
+    total_ = 0;
+    for (int i = 0; i < int(items_.size()); ++i) {
+        if (!showHidden_ && (items_[i].attrs & FILE_ATTRIBUTE_HIDDEN)) continue;
+        ++total_;
         if (matchesFilter(items_[i], filter_)) view_.push_back(i);
+    }
     ListView_SetItemState(lv_, -1, 0, LVIS_SELECTED | LVIS_FOCUSED);
     ListView_SetItemCountEx(lv_, int(view_.size()), LVSICF_NOSCROLL);
     InvalidateRect(lv_, nullptr, FALSE);

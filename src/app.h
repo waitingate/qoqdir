@@ -71,7 +71,7 @@ private:
     void selfTestKey(WPARAM vk, bool ctrl = false, bool shift = false, bool alt = false);
     void selfTestType(const std::wstring& text);
     static constexpr UINT_PTR kRefreshTimer = 1, kStatusTimer = 2, kLoadingTimer = 3, kSelfTestTimer = 50;
-    int exitCode_ = 0;
+    int exitCode_ = 1;   // a run that never finishes (closed by hand, no window) has not passed
     bool useSettings_ = true;
 
     static LRESULT CALLBACK wndProc(HWND, UINT, WPARAM, LPARAM);
@@ -93,7 +93,6 @@ private:
     void goForward();
     void goUp();
     void refresh(ViewState view = {});
-    void reload();   // like refresh, but also restarts a load in progress (e.g. after Ctrl+H)
     void goToTyped();
     void activate(bool inNewTab);   // Enter / double-click on the selection
     void openShortcut(const std::wstring& path, bool inNewTab);
@@ -105,7 +104,7 @@ private:
     // Tabs
     Tab& tab() { return tabs_[size_t(active_)]; }
     Tab makeTab(const std::wstring& path);
-    void newTab(const std::wstring& path, bool switchTo);
+    void newTab(std::wstring path, bool switchTo);   // by value: inserting the tab can move the one 'path' is in
     void closeTab(int index);
     void closeOtherTabs(int index);
     void switchTab(int index);
@@ -147,7 +146,6 @@ private:
         ViewState view;
     } queuedView_;
     bool loadMessageShown_ = false; // "Loading..." or "not available": cleared when a folder loads
-    bool showHidden_ = false;
 
     std::vector<Tab> tabs_;
     int active_ = 0;
@@ -160,6 +158,7 @@ private:
         ViewState view;
         int tabId = 0;
         Origin origin;
+        std::wstring filter;        // the filter box before this load cleared it: a failed one puts it back
     } pending_;
     UINT generation_ = 0;
     int loadsDone_ = 0;     // folder reads that reported back (self-test)
