@@ -7,6 +7,7 @@
 #include "common.h"
 
 #include <cstdint>
+#include <functional>
 
 struct Item {
     std::wstring name;    // file name, or "C:\" for a drive
@@ -28,8 +29,9 @@ struct Listing {
     bool isFile = false;  // with an error: the path exists but is a file
 };
 
-// Reads a folder. Blocking: call it off the UI thread.
-Listing listFolder(const std::wstring& path, bool showHidden);
+// Reads a folder. Blocking: call it off the UI thread. `stop` is asked every few hundred entries; once it
+// says true the read ends at once with ERROR_OPERATION_ABORTED and no items.
+Listing listFolder(const std::wstring& path, bool showHidden, const std::function<bool()>& stop = nullptr);
 
 enum class SortKey { Name = 0, Modified = 1, Type = 2, Size = 3 };
 // Folders always come first; names compare the way Explorer does ("file2" < "file10").

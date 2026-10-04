@@ -315,9 +315,9 @@ bool invokeVerb(HWND owner, IContextMenu* cm, const char* verb) {
     return SUCCEEDED(cm->InvokeCommand(reinterpret_cast<CMINVOKECOMMANDINFO*>(&ici)));
 }
 
-void copyToClipboard(HWND owner, const std::wstring& dir, const std::vector<Item>& items, bool cut) {
+bool copyToClipboard(HWND owner, const std::wstring& dir, const std::vector<Item>& items, bool cut) {
     Com<IDataObject> obj = dataObject(owner, dir, items);
-    if (!obj) return;
+    if (!obj) return false;
     // Tells the paste target whether to move (cut) or copy.
     FORMATETC fmt{CLIPFORMAT(RegisterClipboardFormatW(CFSTR_PREFERREDDROPEFFECT)), nullptr, DVASPECT_CONTENT, -1,
                   TYMED_HGLOBAL};
@@ -331,7 +331,7 @@ void copyToClipboard(HWND owner, const std::wstring& dir, const std::vector<Item
     } else if (med.hGlobal) {
         GlobalFree(med.hGlobal);
     }
-    OleSetClipboard(obj.get());
+    return SUCCEEDED(OleSetClipboard(obj.get()));
 }
 
 void pasteInto(HWND owner, const std::wstring& dir, bool shortcuts) {

@@ -45,7 +45,7 @@ void listDrives(Listing& r) {
 
 }  // namespace
 
-Listing listFolder(const std::wstring& path, bool showHidden) {
+Listing listFolder(const std::wstring& path, bool showHidden, const std::function<bool()>& stop) {
     Listing r;
     r.path = path;
     if (path.empty()) {
@@ -63,7 +63,12 @@ Listing listFolder(const std::wstring& path, bool showHidden) {
         r.isFile = attrs != INVALID_FILE_ATTRIBUTES && !(attrs & FILE_ATTRIBUTE_DIRECTORY);
         return r;
     }
+    size_t seen = 0;
     do {
+        if (stop && ++seen % 256 == 0 && stop()) {
+            FindClose(h);
+            return Listing{path, {}, ERROR_OPERATION_ABORTED, false};
+        }
         const wchar_t* n = fd.cFileName;
         if (n[0] == L'.' && (n[1] == 0 || (n[1] == L'.' && n[2] == 0))) continue;
         if (!showHidden && (fd.dwFileAttributes & FILE_ATTRIBUTE_HIDDEN)) continue;

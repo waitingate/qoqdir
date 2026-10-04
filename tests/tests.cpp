@@ -227,6 +227,12 @@ int main() {
         Listing asFile = listFolder(exe, false);
         CHECK(asFile.error != 0 && asFile.isFile);
         CHECK(!listFolder(L"C:\\definitely\\not\\here", false).isFile);
+        // A read that a newer load replaced stops early, keeping nothing (System32 has hundreds of entries).
+        wchar_t sys[MAX_PATH];
+        GetSystemDirectoryW(sys, MAX_PATH);
+        Listing stopped = listFolder(sys, false, [] { return true; });
+        CHECK(stopped.error == ERROR_OPERATION_ABORTED && stopped.items.empty());
+        CHECK(listFolder(sys, false, [] { return false; }).items.size() > 256);
     }
 
     if (failures) {

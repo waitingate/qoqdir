@@ -44,7 +44,9 @@ void showMenu(HWND owner, IContextMenu* menu, POINT screenPt,
 bool forwardMenuMessage(UINT msg, WPARAM wp, LPARAM lp, LRESULT* result);
 bool invokeVerb(HWND owner, IContextMenu* menu, const char* verb);
 
-void copyToClipboard(HWND owner, const std::wstring& dir, const std::vector<Item>& items, bool cut);
+// False when the files could not be put on the clipboard: Windows could not describe them (a path too
+// long for the shell) or another program holds the clipboard open.
+bool copyToClipboard(HWND owner, const std::wstring& dir, const std::vector<Item>& items, bool cut);
 void pasteInto(HWND owner, const std::wstring& dir, bool shortcuts = false);   // shortcuts: "Paste shortcut"
 // False when nothing was deleted: the user said No to Windows' question, or it failed.
 bool deleteItems(HWND owner, const std::wstring& dir, const std::vector<Item>& items, bool permanently);

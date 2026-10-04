@@ -6,6 +6,7 @@
 #include <windowsx.h>
 
 #include <algorithm>
+#include <atomic>
 #include <optional>
 #include <thread>
 
@@ -18,6 +19,11 @@ enum : UINT {
 };
 
 constexpr size_t kMaxHistory = 100;
+
+// The newest folder load's generation, for the load threads: one that a newer load has replaced stops reading
+// (4.2). Not a member: a detached thread can outlive the window.
+std::atomic<UINT> g_newestLoad{0};
+
 constexpr COLORREF kBackground = RGB(235, 235, 235);   // soft gray: less glare than white
 
 bool is(const std::wstring& verb, const wchar_t* name) { return _wcsicmp(verb.c_str(), name) == 0; }
@@ -635,9 +641,12 @@ bool App::onKey(const Key& key) {
         if (ctrl && k == 'A') { list_.selectAll(); return true; }
         if (ctrl && (k == 'C' || k == 'X')) {
             std::vector<Item> items = list_.selectedItems();
-            if (!items.empty()) {
-                copyToClipboard(wnd_, list_.dir(), items, k == 'X');
+            if (items.empty()) return true;
+            if (copyToClipboard(wnd_, list_.dir(), items, k == 'X')) {
                 setMessage(std::to_wstring(items.size()) + (k == 'X' ? L" item(s) cut" : L" item(s) copied"));
+            } else {
+                setMessage(L"Can't put the items on the clipboard");
+                warn();
             }
             return true;
         }
@@ -659,6 +668,7 @@ void App::focusList() {
 void App::open(const std::wstring& path, Nav nav, ViewState view, Origin origin) {
     if (list_.renaming()) ListView_CancelEditLabel(list_.hwnd());
     UINT generation = ++generation_;
+    g_newestLoad = generation;
     pending_ = {generation, path, nav, std::move(view), tab().id, std::move(origin)};
     SetTimer(wnd_, kLoadingTimer, 250, nullptr);   // say "Loading..." only if it is slow
     if (nav == Nav::Switch) {
@@ -673,13 +683,14 @@ void App::open(const std::wstring& path, Nav nav, ViewState view, Origin origin)
     bool hidden = showHidden_;
     std::thread([wnd, generation, path, hidden] {
         HRESULT co = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE);
-        auto result = std::make_unique<Listing>(listFolder(path, hidden));
+        auto replaced = [generation] { return g_newestLoad != generation; };
+        auto result = std::make_unique<Listing>(listFolder(path, hidden, replaced));
         std::vector<std::wstring> own;
         for (const Item& it : result->items)
             if (hasOwnIcon(it)) own.push_back(it.name);
         if (PostMessageW(wnd, WM_APP_LOADED, generation, reinterpret_cast<LPARAM>(result.get()))) result.release();
         // Then the icons that need a disk (or network) lookup, so they never hold up the list.
-        if (!own.empty()) {
+        if (!own.empty() && !replaced()) {
             auto icons = std::make_unique<IconBatch>(readOwnIcons(path, own));
             if (PostMessageW(wnd, WM_APP_ICONS, 0, reinterpret_cast<LPARAM>(icons.get()))) icons.release();
         }
@@ -688,7 +699,11 @@ void App::open(const std::wstring& path, Nav nav, ViewState view, Origin origin)
 }
 
 void App::onLoaded(Listing&& listing, UINT generation) {
-    if (generation != generation_ || generation != pending_.generation) return;   // superseded
+    ++loadsDone_;
+    if (generation != generation_ || generation != pending_.generation) {   // superseded
+        if (listing.error != ERROR_OPERATION_ABORTED) ++loadsWasted_;
+        return;
+    }
     KillTimer(wnd_, kLoadingTimer);
     if (loadMessageShown_) {   // any load, not only navigation, may have shown one
         setMessage(L"");

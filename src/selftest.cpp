@@ -8,6 +8,7 @@
 #include <shellapi.h>
 
 #include <functional>
+#include <thread>
 
 struct App::SelfTest {
     struct Step {
@@ -956,6 +957,20 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
     add(L"(and the second tab keeps its selection too)", [=, this] { switchTab(1); },
         [=, this] { return idle() && active_ == 1 && list_.focusedName() == L"item 7000.dat"; });
     add(L"(back to the first tab)", [=, this] { switchTab(0); }, [=, this] { return idle() && active_ == 0; });
+    auto loadsBefore = std::make_shared<std::pair<int, int>>();
+    add(L"30 quick Ctrl+Tab presses read the folder to the end once, not 30 times (4.2: a new load replaces the old)",
+        [=, this] {
+            *loadsBefore = {loadsDone_, loadsWasted_};
+            SetFocus(list_.hwnd());
+            for (int i = 0; i < 30; ++i) selfTestKey(VK_TAB, true);
+        },
+        [=, this] {
+            int done = loadsDone_ - loadsBefore->first, wasted = loadsWasted_ - loadsBefore->second;
+            selfTest_->note =
+                std::to_wstring(wasted) + L" of " + std::to_wstring(done) + L" reads ran to the end for nothing";
+            return idle() && active_ == 0 && done == 30 && wasted <= 3;
+        },
+        30000);
     add(L"(close the other tab)", [=, this] { closeTab(1); }, [=, this] { return idle() && tabs_.size() == 1; });
     add(L"when another program removes the focused item, the focus moves to the item that took its place (4.5)",
         [=, this] {
@@ -997,6 +1012,33 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
             copyToClipboard(wnd_, list_.dir(), list_.selectedItems(), false);
         },
         [=, this] { return clipboardFiles().size() == 3; });
+    add(L"a Ctrl+C that cannot reach the clipboard says so, not \"copied\" (another program holds it open)",
+        [=, this] {
+            // Another thread holds the clipboard open, as a clipboard manager or a remote desktop can.
+            HANDLE held = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+            HANDLE release = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+            std::thread holder([held, release] {
+                bool open = OpenClipboard(nullptr);
+                SetEvent(held);
+                if (open) {
+                    WaitForSingleObject(release, 10000);
+                    CloseClipboard();
+                }
+            });
+            WaitForSingleObject(held, 5000);
+            setMessage(L"");
+            SetFocus(list_.hwnd());
+            selfTestKey('C', true);   // the 3 files still selected
+            SetEvent(release);
+            holder.join();
+            CloseHandle(held);
+            CloseHandle(release);
+        },
+        [=, this] {
+            selfTest_->note = L"status: " + statusMessage();
+            return statusMessage().find(L"copied") == std::wstring::npos &&
+                   statusMessage().find(L"clipboard") != std::wstring::npos;
+        });
 
     SetTimer(wnd_, kSelfTestTimer, 50, nullptr);
 }
