@@ -700,7 +700,11 @@ void App::onLoaded(Listing&& listing, UINT generation) {
         // 4.2: a refresh never interrupts a rename. The box opened after this load started
         // (open() closes any box it finds), so drop the result and retry once the box has closed,
         // as the timer does; applying it would move the rows under the box, and Enter would
-        // rename whatever row sits there now.
+        // rename whatever row sits there now. What it was asked to select (a new folder, a renamed item)
+        // is kept for that retry, unless a newer request is queued already (refresh() during this load).
+        bool asked = !p.view.select.empty() || !p.view.focus.empty();
+        if (asked && queuedView_.view.select.empty() && queuedView_.view.focus.empty())
+            queuedView_ = {list_.dir(), std::move(p.view)};
         queueRefresh();
         return;
     }
@@ -860,8 +864,9 @@ void App::goToTyped() {
     // "..", a subfolder's name and anything written relative to this folder (".", ".\x", "a\b")
     // are resolved here and checked by the loader, so they never reach Windows, which would open
     // the folder in an Explorer window (4.4). The rest runs as a command (5.3).
+    bool relative = isRelativePath(path);
     if (path == L"..") path = parentPath(tab().path);
-    else if (!tab().path.empty() && (list_.hasFolder(path) || isRelativePath(path)))
+    else if (!tab().path.empty() && (list_.hasFolder(path) || relative))
         path = normalizePath(joinPath(tab().path, path));   // GetFullPathName folds "." and ".." away
     if (path.empty() || isAbsolutePath(path)) {
         // Checked by the folder loader on its worker thread, so a dead network
@@ -872,7 +877,10 @@ void App::goToTyped() {
     }
     // The folder shown, not tab().path: a tab keeps an unavailable folder (4.3), but handing it to
     // Windows as the working folder would wait on the dead server before the program starts.
-    if (!runCommand(wnd_, text, list_.dir())) {   // "cmd", "notepad", a web address...
+    // On This PC a relative place (".", "a\b") has no folder to be relative to: Windows would use
+    // the app's own start folder and open it in Explorer.
+    // The rest is a command: "cmd", "notepad", a web address...
+    if ((relative && tab().path.empty()) || !runCommand(wnd_, text, list_.dir())) {
         setMessage(L"Can't find \"" + text + L"\"");
         focusEdit(address_);   // left selected, like a bad path, so it can be corrected (5.3)
         warn();
@@ -897,7 +905,7 @@ void App::activate(bool inNewTab) {
         // like the other folders (Windows would open it in Explorer); any other shortcut is a file.
         if (!folder && extensionOf(path) == L".lnk") {
             std::optional<std::wstring> target = shortcutTarget(path, &folder);
-            if (folder && opensInTab(target)) path = *target;
+            if (folder && opensInTab(target)) path = normalizePath(*target);   // as openShortcut() does (L7)
             else folder = false;
         }
         (folder ? dirs : files).push_back(path);

@@ -179,7 +179,7 @@ int main() {
     CHECK_EQ(extensionOf(L"\U0001F600.JPG"), L".jpg");
     CHECK_EQ(normalizePath(L"c:/\u5831\u544A/"), L"C:\\\u5831\u544A");
     {
-        std::wstring deep = L"C:\\" + std::wstring(300, L'a') + L"\\b";   // 306 characters
+        std::wstring deep = L"C:\\" + std::wstring(300, L'a') + L"\\b";   // 305 characters
         CHECK_EQ(normalizePath(deep + L"\\"), deep);
         CHECK_EQ(parentPath(deep), deep.substr(0, 303));
         CHECK_EQ(leafName(deep), L"b");

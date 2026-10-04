@@ -340,6 +340,20 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
         [=, this] { return at(dir) && list_.renaming() && GetFocus() != address_; });
     add(L"(cancel that rename)", [=, this] { ListView_CancelEditLabel(list_.hwnd()); },
         [=, this] { return !list_.renaming(); });
+    add(L"a refresh asked to select an item, landing during a rename, keeps that for later",
+        [=, this] {
+            SetFocus(list_.hwnd());
+            list_.select({L"file1.txt"}, L"file1.txt");
+            refresh(ViewState::selecting(L"added.txt"));   // as after a rename or a new folder; the load is in flight
+            selfTestKey(VK_F2);                             // the box opens before it lands
+        },
+        [=, this] { return idle() && list_.renaming(); });
+    add(L"...and once the box closes the queued refresh selects it",
+        [=, this] { ListView_CancelEditLabel(list_.hwnd()); },
+        [=, this] {
+            selfTest_->note = L"focused " + list_.focusedName();
+            return idle() && !refreshQueued_ && list_.focusedName() == L"added.txt";
+        });
     add(L"a command that does not exist says Can't find",
         [=, this] { SetWindowTextW(address_, L"no-such-program-qoqdir"); SetFocus(address_); selfTestKey(VK_RETURN); },
         [=, this] {
@@ -348,6 +362,15 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
             return at(dir) && statusMessage().find(L"Can't find") != std::wstring::npos && from == 0 &&
                    int(to) == GetWindowTextLengthW(address_);
         });
+
+    add(L"(open This PC)", [=, this] { open(L"", Nav::New); }, [=, this] { return at(L""); });
+    add(L"typing . on This PC says Can't find (not handed to Windows, which opens Explorer)",
+        [=, this] { setMessage(L""); SetWindowTextW(address_, L"."); SetFocus(address_); selfTestKey(VK_RETURN); },
+        [=, this] {
+            selfTest_->note = L"status: " + statusMessage();
+            return at(L"") && statusMessage().find(L"Can't find") != std::wstring::npos;
+        });
+    add(L"(back to the test folder from This PC)", [=, this] { open(dir, Nav::New); }, [=, this] { return at(dir); });
 
     add(L"typing a folder path opens it",
         [=, this] { SetWindowTextW(address_, path(L"sub").c_str()); SetFocus(address_); selfTestKey(VK_RETURN); },
@@ -448,6 +471,24 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
                samePath(tabs_[2].path, path(L"sub"));
     });
     add(L"(close those tabs)", [=, this] { closeTab(1); closeTab(1); },
+        [=, this] { return idle() && tabs_.size() == 1 && at(dir); });
+    add(L"Enter on two shortcuts, one whose target ends with a backslash, opens both",
+        [=, this] {
+            makeShortcut(path(L"slash2.lnk"), path(L"sub") + L"\\");
+            refresh(ViewState{{L"sub-link.lnk", L"slash2.lnk"}, L"sub-link.lnk"});
+        },
+        [=, this] {
+            if (!idle() || list_.selection().size() != 2) return false;
+            SetFocus(list_.hwnd());
+            selfTestKey(VK_RETURN);
+            return true;
+        });
+    add(L"(both background tabs have a clean path, so a caption)", nullptr, [=, this] {
+        if (tabs_.size() != 3 || !at(dir)) return false;
+        selfTest_->note = L"tab paths: " + tabs_[1].path + L" | " + tabs_[2].path;
+        return tabs_[1].path.back() != L'\\' && tabs_[2].path.back() != L'\\';
+    });
+    add(L"(close those tabs again)", [=, this] { closeTab(1); closeTab(1); },
         [=, this] { return idle() && tabs_.size() == 1 && at(dir); });
     add(L"in a network folder that is not available, paste, new folder and a drag over its tab return at once",
         [=, this] {
