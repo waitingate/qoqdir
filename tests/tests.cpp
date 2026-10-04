@@ -136,6 +136,11 @@ int main() {
         CHECK(parseCommandLine({L"--selftest"}).selfTest);
         CHECK_EQ(parseCommandLine({L"-x"}).error, L"Unknown switch: -x");
         CHECK(!parseCommandLine({L"-t"}).error.empty());               // -t without a folder
+        // A network folder comes out as itself; "-t:" with a colon, as the user typed it, means the same as -t.
+        CHECK_EQ(parseCommandLine({L"-t\\\\nas\\share\\"}).folders.at(0), L"\\\\nas\\share");
+        CommandLine colon = parseCommandLine({L"-t:\\\\nas\\share"});
+        CHECK_EQ(colon.folders.empty() ? L"" : colon.folders[0], L"\\\\nas\\share");
+        CHECK(!parseCommandLine({L"-t:"}).error.empty());
         CHECK(!parseCommandLine({L"-tC:\\A", L"-q"}).error.empty());
         CHECK(!parseCommandLine({L"-n"}).error.empty());               // -n no longer exists
     }

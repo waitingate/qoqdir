@@ -151,11 +151,14 @@ CommandLine parseCommandLine(const std::vector<std::wstring>& args) {
         if (!folder.empty() && !known) cmd.folders.push_back(folder);   // each folder once
     };
     for (const std::wstring& arg : args) {
+        // "-t:D:\x" is -tD:\x, as other tools write switches: no folder name starts with a colon.
+        size_t at = arg.rfind(L"-t:", 0) == 0 ? 3 : 2;
         if (arg.empty() || arg[0] != L'-') addFolder(arg);   // a plain folder
         else if (arg == L"--selftest") cmd.selfTest = true;
         else if (arg == L"-h" || arg == L"-?" || arg == L"--help") cmd.help = true;
-        else if (arg.size() > 2 && arg[1] == L't') addFolder(arg.substr(2));
-        else if (arg == L"-t") cmd.error = L"-t needs a folder right after it, with no space: -tD:\\logs";
+        else if (arg.size() > at && arg[1] == L't') addFolder(arg.substr(at));
+        else if (arg == L"-t" || arg == L"-t:")
+            cmd.error = L"-t needs a folder right after it, with no space: -tD:\\logs";
         else cmd.error = L"Unknown switch: " + arg;
         if (!cmd.error.empty()) break;
     }
