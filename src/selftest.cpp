@@ -472,7 +472,7 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
         });
     add(L"(back up to the test folder)", [=, this] { open(dir, Nav::New); }, [=, this] { return at(dir); });
 
-    // Stress runs: a folder whose name looks like an environment variable. Only what the user types is expanded.
+    // A folder whose name looks like an environment variable: only what the user types is expanded.
     add(L"(open a folder literally named %TEMP%, with sub and other in it)",
         [=, this] {
             for (const wchar_t* name : {L"%TEMP%", L"%TEMP%\\sub", L"%TEMP%\\other"})
@@ -577,7 +577,7 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
         });
     add(L"(F5 shows it again)", [=, this] { selfTestKey(VK_F5); }, [=, this] { return at(dir) && !tab().unavailable; });
 
-    // Second review: history entries for deleted folders, and shortcuts.
+    // History entries for deleted folders, and shortcuts.
     add(L"(open a folder that will be deleted)",
         [=, this] { CreateDirectoryW(path(L"temp1").c_str(), nullptr); open(path(L"temp1"), Nav::New); },
         [=, this] { return at(path(L"temp1")); });
@@ -697,7 +697,7 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
     add(L"(This PC is shown, with its drives)", nullptr, [=, this] { return at(L"") && list_.count() > 0; });
     add(L"(back to the test folder)", [=, this] { open(dir, Nav::New); }, [=, this] { return at(dir); });
 
-    // Regression tests for bugs found in code review.
+    // Regression tests for bugs fixed earlier.
     add(L"holding F5 while a folder loads does not start more loads",
         [=, this] {
             UINT before = generation_;

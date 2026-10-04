@@ -463,7 +463,7 @@ impl App {
             5000,
         );
 
-        // Second review: history entries for deleted folders, and shortcuts.
+        // History entries for deleted folders, and shortcuts.
         let (t1, t1b) = (p("temp1"), p("temp1"));
         add(
             "(open a folder that will be deleted)",
@@ -631,7 +631,7 @@ impl App {
             5000,
         );
 
-        // Regression tests for bugs found in code review.
+        // Regression tests for bugs fixed earlier.
         let (sub, sub2) = (p("sub"), p("sub"));
         add(
             "holding F5 while a folder loads does not start more loads",
