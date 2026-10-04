@@ -18,9 +18,7 @@ Pidl pidlFromPath(const std::wstring& path) {
 
 using ChildPidl = std::unique_ptr<std::remove_pointer_t<PITEMID_CHILD>, CoTaskMemDeleter>;
 
-// Asks the shell for an interface on one item given by its full path (a context menu, a
-// data object, a drop target...). Resolving the full path exactly also covers items without
-// an ordinary parent folder: This PC, and a network share's top (\server\share).
+// An interface (menu, data object, drop target...) on one item by its full path; covers This PC and \\server\share.
 HRESULT uiObject(HWND owner, const std::wstring& path, REFIID iid, void** out) {
     *out = nullptr;
     Pidl pidl = pidlFromPath(path);
@@ -31,10 +29,7 @@ HRESULT uiObject(HWND owner, const std::wstring& path, REFIID iid, void** out) {
     return parent->GetUIObjectOf(owner, 1, &child, iid, nullptr, out);
 }
 
-// What the folder listing already said about an item, handed to the shell through a bind
-// context (STR_FILE_SYS_BIND_DATA) so that parsing the item's name needs no disk access.
-// Without it the shell asks the disk about every item: one round trip each on a network
-// folder, tens of seconds for 10,000 selected files.
+// The listing's find data, handed to the shell (STR_FILE_SYS_BIND_DATA) so parsing a name needs no disk query.
 class FindData final : public IFileSystemBindData {
 public:
     HRESULT STDMETHODCALLTYPE QueryInterface(REFIID iid, void** out) override {
@@ -66,10 +61,8 @@ private:
     WIN32_FIND_DATAW fd_{};
 };
 
-// The same for items of one folder, as the list read them. The folder is opened once and each
-// item is looked up by name inside it, from its own find data: resolving every full path from
-// the desktop down took ~9 ms per file (90 s for 10,000 files), and even the name lookup cost
-// one disk query per item (the 1.5-2.5 s of spec 4.7 on an SSD, far more on a network folder).
+// The same for listed items of one folder: opened once, each item parsed from its own find data. Full
+// paths took ~9 ms per file (90 s for 10,000), plain names a disk query each (spec 4.7).
 HRESULT uiObject(HWND owner, const std::wstring& dir, const std::vector<Item>& items, REFIID iid, void** out) {
     *out = nullptr;
     if (items.empty()) return E_INVALIDARG;
@@ -81,8 +74,7 @@ HRESULT uiObject(HWND owner, const std::wstring& dir, const std::vector<Item>& i
                      ? desktop->QueryInterface(IID_IShellFolder, reinterpret_cast<void**>(parent.put()))
                      : desktop->BindToObject(dirPidl.get(), nullptr, IID_IShellFolder, reinterpret_cast<void**>(parent.put()));
     if (FAILED(hr)) return hr;
-    // STGM_CREATE tells the shell to take the find data as given instead of checking the disk.
-    // (RegisterObjectParam wants a writable key string but never writes it.)
+    // STGM_CREATE: take the find data as given. (RegisterObjectParam never writes its non-const key.)
     Com<IFileSystemBindData> known;
     *known.put() = new FindData;
     Com<IBindCtx> bind;
@@ -154,8 +146,7 @@ struct TypeInfo {
     std::wstring type;
 };
 
-// Icon and type name depend only on the extension, so ask the shell once per extension.
-// Uses SHGFI_USEFILEATTRIBUTES: no disk access, never blocks.
+// Icon and type name depend only on the extension: one cached shell call each, with no disk access.
 const TypeInfo& typeInfo(const Item& it) {
     static std::unordered_map<std::wstring, TypeInfo> cache;
     std::wstring key = it.isDir() ? L"\\" : extensionOf(it.name);
@@ -338,8 +329,7 @@ void pasteInto(HWND owner, const std::wstring& dir, bool shortcuts) {
 bool deleteItems(HWND owner, const std::wstring& dir, const std::vector<Item>& items, bool permanently) {
     Com<IDataObject> obj = shellObject<IDataObject>(owner, dir, items);
     if (!obj) return false;
-    // FOF_WANTNUKEWARNING in both cases: Windows still asks before destroying an item it cannot recycle
-    // (network share, USB stick, oversized file); without it FOF_NOCONFIRMATION answers Yes for the user.
+    // FOF_WANTNUKEWARNING always: Windows still asks before deleting what it cannot recycle (a share, a USB stick).
     DWORD flags = FOF_WANTNUKEWARNING | (permanently ? 0 : FOF_ALLOWUNDO | FOFX_RECYCLEONDELETE | FOF_NOCONFIRMATION);
     return SUCCEEDED(fileOperation(owner, flags, [&](IFileOperation* op) { return op->DeleteItems(obj.get()); }));
 }
@@ -511,8 +501,7 @@ public:
     }
 
 private:
-    // Points the drop at the folder under the cursor. Returns true if that changed
-    // (then the new folder has already been told about the drag).
+    // Aims the drop at the folder under the cursor; true if it changed (that folder has been told already).
     bool aim(DWORD keys, POINTL pt, DWORD* effect) {
         POINT p{pt.x, pt.y};
         std::optional<std::wstring> dir = target_(&p);

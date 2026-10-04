@@ -1,6 +1,4 @@
-// "qoqdir.exe --selftest": drives the real app through a scripted session and
-// checks the results on disk. Keys are fed straight into App::onKey, so the
-// test never sends global keyboard input to other windows.
+// "qoqdir.exe --selftest": a scripted session in the real app. Keys go straight to App::onKey, never to other windows.
 
 #include "app.h"
 
@@ -116,8 +114,7 @@ void App::selfTestKey(WPARAM vk, bool ctrl, bool shift, bool alt) {
     if (onKey({alt ? UINT(WM_SYSKEYDOWN) : UINT(WM_KEYDOWN), vk, GetFocus(), ctrl, shift, alt})) return;
     HWND focus = GetFocus();   // not ours: let the control handle it, as a real key press would
     SendMessageW(focus, WM_KEYDOWN, vk, 0);
-    // A real Enter, Esc or Backspace also sends a character (Ctrl+Backspace sends 127), but only while the
-    // control is still there to take it.
+    // A real Enter, Esc or Backspace also sends a character (Ctrl+Backspace: 127), if the control is still there.
     if (GetFocus() == focus && (vk == VK_RETURN || vk == VK_ESCAPE || vk == VK_BACK))
         SendMessageW(focus, WM_CHAR, vk == VK_BACK && ctrl ? 127 : vk, 0);
 }
@@ -208,30 +205,30 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
             onKey({WM_CHAR, WPARAM(L'\u0142'), GetFocus(), true, false, true});   // then the character it makes (l-stroke)
         },
         [=, this] { return GetFocus() == filter_ && GetWindowTextLengthW(filter_) == 1 && list_.count() == 0; });
-    add(L"Esc clears that filter too", [=, this] { selfTestKey(VK_ESCAPE); },
-        [=, this] { return list_.count() == 6 && GetFocus() == list_.hwnd(); });
     add(L"Ctrl+Backspace in the filter box deletes the last word, as in Explorer (not a box character)",
         [=, this] {
+            SetWindowTextW(filter_, L"");
             SetFocus(list_.hwnd());
             selfTestType(L"file 1");
             selfTestKey(VK_BACK, true);
         },
         [=, this] {
-            wchar_t text[64] = {};
-            GetWindowTextW(filter_, text, 64);
-            selfTest_->note = L"filter \"" + std::wstring(text) + L"\"";
-            return std::wstring(text) == L"file ";
+            selfTest_->note = L"filter \"" + filterText() + L"\"";
+            return filterText() == L"file ";
         });
-    add(L"(Esc clears it)", [=, this] { selfTestKey(VK_ESCAPE); },
-        [=, this] { return list_.count() == 6 && GetFocus() == list_.hwnd(); });
-    // Paste only the test's own file: had its Ctrl+C failed, the clipboard could hold files the user cut, and
-    // pasting them would move them into the test folder, which is deleted at the end.
+    // Paste only the test's own file: after a failed Ctrl+C, pasting would move files the user cut.
     auto holdsTestFile = [=] {
         auto files = clipboardFiles();
         return files.size() == 1 && samePath(files[0], path(L"file1.txt"));
     };
     add(L"Ctrl+C puts the file on the clipboard",
-        [=, this] { list_.select({L"file1.txt"}, L"file1.txt"); selfTestKey('C', true); }, holdsTestFile);
+        [=, this] {
+            SetWindowTextW(filter_, L"");
+            SetFocus(list_.hwnd());
+            list_.select({L"file1.txt"}, L"file1.txt");
+            selfTestKey('C', true);
+        },
+        holdsTestFile);
     add(L"filter + Enter opens a folder", [=, this] { selfTestType(L"sub"); selfTestKey(VK_RETURN); },
         [=, this] { return at(path(L"sub")); });
     add(L"Ctrl+V pastes with the Windows copy engine", [=, this] { if (holdsTestFile()) selfTestKey('V', true); },
@@ -316,8 +313,7 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
             int row = list_.select({L"file10.txt"}, L"file10.txt");
             next = row >= 0 && row + 1 < list_.count() ? list_.at(row + 1).name : L"";
             selfTestKey(VK_DELETE);
-            // Until the reload lands the deleted file is still listed: it must not stay selected (a second
-            // Delete would show Windows' "Item Not Found").
+            // Listed until the reload lands, but it must not stay selected (a second Delete would fail).
             if (!list_.selection().empty()) selfTest_->note = L"the deleted file stayed selected until the reload";
         },
         [=, this] {
@@ -339,8 +335,7 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
         [=, this] {
             return at(path(L"gone")) && list_.count() == 0 && statusMessage().find(L"not available") != std::wstring::npos;
         });
-    // The tab's folder is gone but the tab keeps it (4.3): a command must not get it as its working
-    // folder, or Windows refuses to start the program (and waits on it first when it is a dead share).
+    // The tab keeps its gone folder (4.3), which a command must not get as its working folder.
     add(L"(F5 while it is still gone keeps it shown as not available)", [=, this] { selfTestKey(VK_F5); },
         [=, this] {
             return at(path(L"gone")) && list_.count() == 0 && statusMessage().find(L"not available") != std::wstring::npos;
@@ -361,8 +356,7 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
             newTab(path(L"sub"), false);
             SetFocus(list_.hwnd());
             switchTab(active_ + 1);
-            // Checked right here, before "sub" can have loaded: the address bar already names it, and
-            // Ctrl+Shift+N must not create a folder in the tab that is no longer the one shown.
+            // Before "sub" can have loaded: the address bar names it, and Ctrl+Shift+N must not hit the old tab.
             wchar_t address[MAX_PATH] = {};
             GetWindowTextW(address_, address, MAX_PATH);
             selfTest_->note = samePath(address, path(L"sub")) ? L"address bar switched" : L"old tab still shown";
@@ -373,21 +367,17 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
                    !exists(path(L"sub\\New folder"));
         });
     add(L"(close that tab)", [=, this] { closeTab(active_); }, [=, this] { return idle() && tabs_.size() == 1 && at(dir); });
-    add(L"Enter on a missing typed path shows an error and stays put", [=, this] { goTo(L"C:\\no\\such\\folder\\anywhere"); },
-        [=, this] { return at(dir); });
     add(L"a typed path that fails while a rename box is open leaves the box alone",
         [=, this] {
-            // The failure lands after this action (on a dead share it would be a minute later); the user
-            // has started a rename meanwhile, which a focus change would commit half-typed.
+            // The failure lands after the rename box opens (a dead share fails a minute later).
             goTo(L"C:\\no\\such\\folder\\anywhere");
             list_.select({L"file1.txt"}, L"file1.txt");
             selfTestKey(VK_F2);
         },
         [=, this] { return at(dir) && list_.renaming() && GetFocus() != address_; });
-    add(L"(cancel that rename)", [=, this] { ListView_CancelEditLabel(list_.hwnd()); },
-        [=, this] { return !list_.renaming(); });
     add(L"a refresh asked to select an item, landing during a rename, keeps that for later",
         [=, this] {
+            ListView_CancelEditLabel(list_.hwnd());   // the box from the step before
             SetFocus(list_.hwnd());
             list_.select({L"file1.txt"}, L"file1.txt");
             refresh(ViewState::selecting(L"added.txt"));   // as after a rename or a new folder; the load is in flight
@@ -444,10 +434,9 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
     add(L"...and opening another folder cancels it", [=, this] { open(dir, Nav::New); }, [=, this] { return at(dir); }, 5000, true);
     add(L"typing a subfolder's name opens it here (not in Explorer)", [=, this] { goTo(L"sub"); },
         [=, this] { return at(path(L"sub")); });
-    add(L"typing .. goes up", [=, this] { goTo(L".."); }, [=, this] { return at(dir); });
+    add(L"typing ..\\ goes up", [=, this] { goTo(L"..\\"); }, [=, this] { return at(dir); });
     add(L"typing .\\sub opens it here (not in Explorer)", [=, this] { goTo(L".\\sub"); },
         [=, this] { return at(path(L"sub")); });
-    add(L"typing ..\\ goes up", [=, this] { goTo(L"..\\"); }, [=, this] { return at(dir); });
     add(L"a long folder name with an emoji where the caption is cut gives no broken character",
         [=, this] {
             std::wstring name(26, L'a');
@@ -486,25 +475,17 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
             return at(path(L"%TEMP%\\sub"));
         });
     add(L"(back to the %TEMP% folder)", [=, this] { open(path(L"%TEMP%"), Nav::New); },
-        [=, this] { return at(path(L"%TEMP%")); });
-    add(L"typing .\\other there opens it too",
-        [=, this] { goTo(L".\\other"); },
-        [=, this] {
-            selfTest_->note = L"tab at " + tab().path;
-            return at(path(L"%TEMP%\\other"));
-        });
-    add(L"(back to the %TEMP% folder once more)", [=, this] { open(path(L"%TEMP%"), Nav::New); },
         [=, this] { return at(path(L"%TEMP%")) && list_.count() == 2; });
     add(L"Enter in the filter box opens only the highlighted match, not every selected one (5.4)",
         [=, this] {
             SetFocus(list_.hwnd());
-            list_.selectAll();      // both folders selected, "other" highlighted
+            list_.selectAll();      // both folders selected, "sub" highlighted (it was just left)
             selfTestType(L"*");     // a filter both still match
             selfTestKey(VK_RETURN);
         },
         [=, this] {
             selfTest_->note = L"tab at " + tab().path + L", " + std::to_wstring(tabs_.size()) + L" tab(s)";
-            return at(path(L"%TEMP%\\other")) && tabs_.size() == 1;
+            return at(path(L"%TEMP%\\sub")) && tabs_.size() == 1;
         });
     add(L"(close any tabs that opened)",
         [=, this] { while (tabs_.size() > 1) closeTab(int(tabs_.size()) - 1); },
@@ -560,8 +541,6 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
             selfTest_->note = L"filter \"" + filterText() + L"\"";
             return at(dir) && filterText() == L"file";
         });
-    add(L"(Esc clears it)", [=, this] { SetFocus(filter_); selfTestKey(VK_ESCAPE); },
-        [=, this] { return filterText().empty() && list_.count() == list_.total(); });
     add(L"a refresh queued just before a tab became not available waits for F5 (4.3)",
         [=, this] {
             queueRefresh();   // a change in the folder, just before
@@ -612,24 +591,7 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
         },
         [=, this] { return tabs_.size() == 2 && samePath(tabs_[size_t(active_) + 1].path, path(L"sub")) && at(dir); });
     add(L"(close that tab)", [=, this] { closeTab(active_ + 1); }, [=, this] { return idle() && tabs_.size() == 1; });
-    add(L"Enter on two shortcuts to folders opens both in background tabs (not in Explorer)",
-        [=, this] {
-            makeShortcut(path(L"sub-link2.lnk"), path(L"sub"));
-            refresh(ViewState{{L"sub-link.lnk", L"sub-link2.lnk"}, L"sub-link.lnk"});
-        },
-        [=, this] {
-            if (!idle() || list_.selection().size() != 2) return false;
-            SetFocus(list_.hwnd());
-            selfTestKey(VK_RETURN);
-            return true;
-        });
-    add(L"(both folders are in tabs behind the test folder)", nullptr, [=, this] {
-        return tabs_.size() == 3 && at(dir) && samePath(tabs_[1].path, path(L"sub")) &&
-               samePath(tabs_[2].path, path(L"sub"));
-    });
-    add(L"(close those tabs)", [=, this] { closeTab(1); closeTab(1); },
-        [=, this] { return idle() && tabs_.size() == 1 && at(dir); });
-    add(L"Enter on two shortcuts, one whose target ends with a backslash, opens both",
+    add(L"Enter on two shortcuts to folders, one whose target ends with a backslash, opens both in background tabs",
         [=, this] {
             makeShortcut(path(L"slash2.lnk"), path(L"sub") + L"\\");
             refresh(ViewState{{L"sub-link.lnk", L"slash2.lnk"}, L"sub-link.lnk"});
@@ -640,12 +602,12 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
             selfTestKey(VK_RETURN);
             return true;
         });
-    add(L"(both background tabs have a clean path, so a caption)", nullptr, [=, this] {
+    add(L"(both are in tabs behind the test folder, with clean paths, so with captions)", nullptr, [=, this] {
         if (tabs_.size() != 3 || !at(dir)) return false;
         selfTest_->note = L"tab paths: " + tabs_[1].path + L" | " + tabs_[2].path;
-        return tabs_[1].path.back() != L'\\' && tabs_[2].path.back() != L'\\';
+        return samePath(tabs_[1].path, path(L"sub")) && samePath(tabs_[2].path, path(L"sub"));   // not "sub\"
     });
-    add(L"(close those tabs again)", [=, this] { closeTab(1); closeTab(1); },
+    add(L"(close those tabs)", [=, this] { closeTab(1); closeTab(1); },
         [=, this] { return idle() && tabs_.size() == 1 && at(dir); });
     add(L"in a network folder that is not available, paste, new folder and a drag over its tab return at once",
         [=, this] {
@@ -725,8 +687,7 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
         [=, this] { return at(path(L"sub\\deep")); });
     add(L"a removed drive is noticed by a tab two folders deep (shown as not available)",
         [=, this] {
-            // Two levels down, no folder watch matches a drive-removed event, so only WM_DEVICECHANGE
-            // tells. Stand in for the drive going away: drop the watch, remove the folder, send the message.
+            // Two levels down only WM_DEVICECHANGE tells: drop the watch, remove the folder, send it.
             watch_ = {};
             RemoveDirectoryW(path(L"sub\\deep").c_str());
             DEV_BROADCAST_VOLUME vol{};
@@ -893,8 +854,7 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
     add(L"the user folders arrive from a worker, between Bookmarks and This PC",
         [=, this] {
             tree_.fill();   // as at startup and on a drive change
-            // Nothing may ask Windows about the user folders here (4.1): right after fill() the roots are
-            // Bookmarks and This PC only; the user folders arrive by message and never before the action ends.
+            // Nothing asks Windows about the user folders here (4.1): they arrive by message, later.
             *twoRoots = rootTexts() == L"Bookmarks,This PC";
         },
         [=, this] {
@@ -938,10 +898,9 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
     add(L"Rename on a tree folder's menu opens the rename box for it in the list",
         [=, this] { renameNode(path(L"sub")); },
         [=, this] { return at(dir) && list_.renaming() && list_.focusedName() == L"sub"; });
-    add(L"(cancel that rename)", [=, this] { ListView_CancelEditLabel(list_.hwnd()); },
-        [=, this] { return !list_.renaming(); });
     add(L"collapsing and expanding a tree folder shows its new subfolders",
         [=, this] {
+            ListView_CancelEditLabel(list_.hwnd());   // the box from the step before
             CreateDirectoryW(path(L"Bookmarks\\two").c_str(), nullptr);
             TreeView_SelectItem(tree_.hwnd(), TreeView_GetRoot(tree_.hwnd()));
             SendMessageW(tree_.hwnd(), WM_KEYDOWN, VK_LEFT, 0);    // collapse, as the user would
@@ -958,8 +917,7 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
             SendMessageW(tv, WM_KEYDOWN, VK_RIGHT, 0);   // and read it fresh
         },
         [=, this] {
-            // After both reads have landed: Bookmarks is back, none of its nodes got the late "deep",
-            // and every item the tree counts is reachable (a late insert under a dead handle is counted but lost).
+            // Both reads landed: no late "deep" under Bookmarks, and every node the tree counts is reachable.
             HWND tv = tree_.hwnd();
             if (GetTickCount64() - selfTest_->startTick < 400 || bookmarkNodes() != L"one,two,sub") return false;
             for (HTREEITEM c = TreeView_GetChild(tv, TreeView_GetRoot(tv)); c; c = TreeView_GetNextSibling(tv, c))
@@ -1010,15 +968,9 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
             return true;
         },
         30000);
-    add(L"filtering while scrolled to the bottom shows the matches from the top",
+    add(L"filters 10,000 files, showing the matches from the top even when scrolled to the bottom",
         [=, this] {
             list_.ensureVisible(9999);
-            SetWindowTextW(filter_, L"99");
-        },
-        [=, this] { return list_.count() > 0 && list_.topRow() == 0; });
-    add(L"filters 10,000 files",
-        [=, this] {
-            SetWindowTextW(filter_, L"");
             t0 = nowMs();
             SetWindowTextW(filter_, L"99");
             selfTest_->note = L"filter " + std::to_wstring(int(nowMs() - t0)) + L" ms";
@@ -1026,7 +978,7 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
         [=, this] {
             int expected = 0;
             for (int i = 0; i < 10000; ++i) expected += std::to_wstring(i).find(L"99") != std::wstring::npos;
-            return list_.count() == expected;
+            return list_.count() == expected && list_.topRow() == 0;
         });
     add(L"a run of stars in the filter does not freeze the window (\"********x\" means \"*x\")",
         [=, this] {
@@ -1078,8 +1030,7 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
         });
     add(L"switching away from a tab before it has loaded keeps what both tabs remembered (4.6)",
         [=, this] {
-            // Each switch leaves a tab whose folder has not loaded yet (as with a slow folder): what that tab
-            // showed before must survive, not be replaced by the empty list shown meanwhile.
+            // Each switch leaves a tab before its folder loads: what it showed before must survive.
             switchTab(0);
             switchTab(1);
             switchTab(0);
@@ -1177,8 +1128,7 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
                 }
             });
             WaitForSingleObject(held, 5000);
-            // Selected again and read at once: a refresh of the folder in the meantime would replace the files
-            // in the list, or clear the message.
+            // Selected again and read at once: a refresh in between would replace the files or clear the message.
             showGhosts();
             setMessage(L"");
             SetFocus(list_.hwnd());

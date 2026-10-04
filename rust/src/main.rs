@@ -1,7 +1,4 @@
-//! Qoqdir: a light, fast, portable file manager for Windows.
-//!
-//! qoqdir.exe [folder ...]   opens each folder as a tab (relative paths are fine: "qoqdir .")
-//! qoqdir.exe --selftest     drives the app through a scripted session (see selftest.rs)
+//! Qoqdir: a light, fast, portable file manager for Windows (usage: USAGE below; `--selftest`: selftest.rs).
 #![windows_subsystem = "windows"]
 
 mod app;

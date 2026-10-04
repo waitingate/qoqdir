@@ -1,4 +1,3 @@
 #pragma once
-// Spec 4.10: when the program hits an internal bug, it stops and %TEMP%\qoqdir-crash.log says why.
-// Call once, first thing in wWinMain.
+// Spec 4.10: on an internal bug, stop and say why in %TEMP%\qoqdir-crash.log. Call first in wWinMain.
 void installCrashLog();

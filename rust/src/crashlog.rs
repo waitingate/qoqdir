@@ -1,11 +1,6 @@
-//! Spec 4.10: an internal bug stops the program, and %TEMP%\qoqdir-crash.log says why. A bug ends
-//! the program in one of two ways, and each has its hook here:
-//!   - a panic (a bad index, a failed check...): the panic hook, which logs where it happened;
-//!   - a CPU fault (a bad pointer in unsafe code or in a shell extension, a stack overflow...): the
-//!     unhandled-exception filter, `on_crash`.
-//! The log line is built in a stack buffer and written with Win32 calls, nothing from the heap for a
-//! fault, since a corrupted heap may be what broke. Code addresses are logged as offsets into the exe
-//! because its load address moves (ASLR).
+//! Spec 4.10: an internal bug stops the program and %TEMP%\qoqdir-crash.log says why. Hooks: panics (the panic
+//! hook) and CPU faults (`on_crash`). A fault's line is built in a stack buffer and written with Win32 calls
+//! (the heap may be what broke); addresses are exe offsets (ASLR).
 
 use std::fmt;
 use std::io::Write;
@@ -45,8 +40,7 @@ pub fn install() {
     }
     std::panic::set_hook(Box::new(|info| {
         log(format_args!("{info}"));
-        // With panic = "abort", Rust would now end the process with a __fastfail: exit code 0xC0000409 and a
-        // Windows error report about a "stack buffer overrun" that never happened. End it plainly instead.
+        // Exit 3: panic = "abort" would __fastfail with a false "stack buffer overrun" report.
         unsafe {
             let _ = TerminateProcess(GetCurrentProcess(), 3);
         }

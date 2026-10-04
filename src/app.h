@@ -1,11 +1,7 @@
 #pragma once
 // The main window: toolbar, tabs, tree, file list and status bar.
-//
-// Threading rule: all state below is touched only by the UI thread. Folders are
-// read on short-lived worker threads that own nothing shared; each result is
-// posted back tagged with a generation number, and anything but the newest
-// request is dropped. Navigation only changes state once a folder has loaded,
-// so a failed or slow load can never leave a tab half-updated.
+// All state is UI-thread only. Folders load on worker threads; only the newest result is used, and a tab
+// changes only once its folder has loaded, so a failed or slow load never leaves it half-updated.
 
 #include "filelist.h"
 

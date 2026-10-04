@@ -1,11 +1,7 @@
 #pragma once
-// The file list: a "virtual" ListView that stores no items itself. It asks for
-// the text of each visible row, so a folder with 100,000 files shows instantly.
-//
-// items_ holds the folder, view_ holds the indices that pass the filter.
-// Row i on screen is always items_[view_[i]]; update() is the only place that
-// changes view_ (together with items_), and it always clears the ListView's
-// selection with it, so no row or selection can point at the wrong file.
+// The file list: a virtual ListView that asks for each visible row's text, so 100,000 files show at once.
+// Row i is items_[view_[i]] (view_: the items that pass the filter). Only update() changes them, and it
+// clears the selection with them, so no row or selection can point at the wrong file.
 
 #include "folder.h"
 

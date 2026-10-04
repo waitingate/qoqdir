@@ -1,6 +1,5 @@
 #pragma once
-// The folder tree on the left. Subfolders are read only when a node is expanded,
-// on a worker thread, so a slow or disconnected network drive never freezes the window.
+// The folder tree. Subfolders are read on a worker thread when a node expands: a dead drive never freezes it.
 
 #include "shell.h"
 
@@ -22,9 +21,8 @@ struct TreeBatch {
 
 class FolderTree {
 public:
-    // `batchMsg` is posted to `parent` with a TreeBatch* (to pass to addChildren) when subfolders are read,
-    // `iconMsg` with an IconBatch* (to pass to setIcons) when the own icons of shortcuts among them are read.
-    // `bookmarks` is shown at the top of the tree, open, with its shortcuts as well as its folders.
+    // Posts `batchMsg` (a TreeBatch*, for addChildren) and `iconMsg` (an IconBatch*, for setIcons) to `parent`.
+    // `bookmarks` is the first root, open, with its shortcuts as well as its folders.
     void create(HWND parent, int id, UINT batchMsg, UINT iconMsg, const std::wstring& bookmarks);
     HWND hwnd() const { return tv_; }
     void fill();   // rebuilds the roots (user folders and This PC)

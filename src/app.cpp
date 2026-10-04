@@ -20,8 +20,7 @@ enum : UINT {
 
 constexpr size_t kMaxHistory = 100;
 
-// The newest folder load's generation, for the load threads: one that a newer load has replaced stops reading
-// (4.2). Not a member: a detached thread can outlive the window.
+// The newest load, for the load threads: a replaced one stops reading (4.2). Global: a thread can outlive the window.
 std::atomic<UINT> g_newestLoad{0};
 
 constexpr COLORREF kBackground = RGB(235, 235, 235);   // soft gray: less glare than white
@@ -39,8 +38,7 @@ void focusEdit(HWND edit) {   // with its text selected, ready to be typed over 
     SendMessageW(edit, EM_SETSEL, 0, -1);
 }
 
-// Ctrl+Backspace as in Explorer's boxes: deletes the selection, or else the word before the cursor.
-// A plain edit box would type a box character instead.
+// Ctrl+Backspace as in Explorer: deletes the selection or the word before the cursor (an edit box types a box).
 void deleteWordBefore(HWND edit) {
     DWORD start = 0, end = 0;
     SendMessageW(edit, EM_GETSEL, WPARAM(&start), LPARAM(&end));
@@ -332,9 +330,7 @@ LRESULT App::onMessage(UINT msg, WPARAM wp, LPARAM lp) {
         if ((wp == DBT_DEVICEARRIVAL || wp == DBT_DEVICEREMOVECOMPLETE) && lp &&
             reinterpret_cast<DEV_BROADCAST_HDR*>(lp)->dbch_devicetype == DBT_DEVTYP_VOLUME) {
             tree_.refreshDrives();   // only This PC changes; the rest of the tree stays as the user left it
-            // This PC lists the drives, and a tab's folder may sit on the drive that went: its
-            // own watch cannot tell, since the event names the drive root, not a folder below it.
-            queueRefresh();
+            queueRefresh();   // This PC lists drives, and a tab's folder may be on the drive (its watch can't tell)
         }
         return TRUE;
     case WM_SETCURSOR:
@@ -386,8 +382,7 @@ LRESULT App::onMessage(UINT msg, WPARAM wp, LPARAM lp) {
     return DefWindowProcW(wnd_, msg, wp, lp);
 }
 
-// At most one refresh per interval, even while a folder changes nonstop. The timer waits
-// while a rename or a load is in progress (onTimer), so it disturbs neither.
+// At most one refresh per interval; it waits while a rename or a load is in progress (onTimer).
 void App::queueRefresh() {
     if (refreshQueued_) return;
     refreshQueued_ = true;
@@ -400,8 +395,7 @@ void App::onTimer(UINT_PTR id) {
         if (list_.renaming() || pending_.generation) return;
         KillTimer(wnd_, kRefreshTimer);
         refreshQueued_ = false;
-        // The item a delete, rename or new folder wanted selected, unless another folder is shown by now.
-        // A tab shown as not available waits for F5 (4.3), even if this refresh was queued before it failed.
+        // What a delete, rename or new folder asked to select, if its folder is still shown. Not available: F5 (4.3).
         QueuedView q = std::exchange(queuedView_, {});
         if (!tab().unavailable) refresh(samePath(list_.dir(), q.dir) ? std::move(q.view) : ViewState{});
     } else if (id == kStatusTimer) {
@@ -491,8 +485,7 @@ void App::onContextMenu(HWND from, POINT pt) {
             ClientToScreen(list_.hwnd(), &pt);
         }
         std::vector<int> rows = list_.selection();
-        // The menu is modal and a folder load can land while it is open: the app's own commands (paste, rename,
-        // delete, open here) then do nothing. Windows' own (Copy, Properties...) act on the menu's own items.
+        // The menu is modal and a load can land meanwhile: then the app's own commands do nothing.
         const std::wstring dir = list_.dir();
         const std::vector<std::wstring> names = list_.selectedNames();
         if (rows.empty()) {
@@ -683,9 +676,7 @@ void App::open(const std::wstring& path, Nav nav, ViewState view, Origin origin)
     pending_ = {generation, nav, std::move(view), tab().id, std::move(origin), std::move(filter)};
     SetTimer(wnd_, kLoadingTimer, 250, nullptr);   // say "Loading..." only if it is slow
     if (nav == Nav::Switch) {
-        // The tab strip already shows the new tab: show its location at once instead of the old tab's list
-        // and address until its folder loads. Meanwhile the list has no folder, so paste, new folder, menus
-        // and drops have nothing to act on (the same mechanism as an unavailable folder).
+        // Show the new tab at once; until its folder loads the list has none, so nothing acts on the old one.
         list_.setListing(Listing{});
         showLocation(nav);
         showStatus();
@@ -722,11 +713,8 @@ void App::onLoaded(Listing&& listing, UINT generation) {
     Pending p = std::exchange(pending_, {});
     if (tab().id != p.tabId) return;
     if (p.nav == Nav::Refresh && list_.renaming()) {
-        // 4.2: a refresh never interrupts a rename. The box opened after this load started
-        // (open() closes any box it finds), so drop the result and retry once the box has closed,
-        // as the timer does; applying it would move the rows under the box, and Enter would
-        // rename whatever row sits there now. What it was asked to select (a new folder, a renamed item)
-        // is kept for that retry, unless a newer request is queued already (refresh() during this load).
+        // 4.2: never apply a refresh under an open rename box (Enter would rename whatever row moved there).
+        // Retry once it closes, keeping what this load was asked to select unless a newer request waits.
         if (p.view.asks() && !queuedView_.view.asks()) queuedView_ = {list_.dir(), std::move(p.view)};
         queueRefresh();
         return;
@@ -807,8 +795,7 @@ void App::onLoadFailed(const Listing& listing, const Pending& p) {
     // A navigation that fails or opens a file leaves the folder shown: its filter comes back, unless retyped.
     if (p.nav != Nav::Refresh && p.nav != Nav::Switch && GetWindowTextLengthW(filter_) == 0)
         SetWindowTextW(filter_, p.filter.c_str());
-    // The shortcut leads to a file: let Windows open it. (Not when its folder is unreachable:
-    // Windows would only show its own error, after the same long wait.)
+    // A shortcut that leads to a file: Windows opens it (never an unreachable one: that would hang, then fail).
     if (!p.origin.shortcut.empty() && listing.isFile) {
         openFile(wnd_, p.origin.shortcut);
         return;
@@ -818,15 +805,11 @@ void App::onLoadFailed(const Listing& listing, const Pending& p) {
         SetWindowTextW(address_, locationText(t.path).c_str());
         return;
     }
-    // Let the user correct what they typed (5.3), unless they have moved on since Enter left the focus on
-    // the list: a dead share fails a minute later, and taking the focus then would commit a half-typed
-    // rename or interrupt the filter box.
+    // Let the user fix what they typed (5.3), unless they moved on: a dead share fails a minute later.
     if (p.origin.typed && GetFocus() == list_.hwnd()) focusEdit(address_);
     if (p.nav == Nav::Refresh || p.nav == Nav::Switch) {
-        // The tab's own folder. A tab never changes its folder by itself (a network drive may
-        // not be connected yet, a USB drive may come back): show it empty and say why.
-        // The list gets no folder, so paste, new folder, menus and drops have nothing to act on:
-        // asking Windows about an unreachable folder can freeze the window for 20-40 s.
+        // A tab never changes its folder by itself (a drive may come back): show it empty and say why. The
+        // list gets no folder, so nothing asks Windows about it (that can freeze the window for 20-40 s).
         list_.setListing(Listing{});
         t.unavailable = true;
         watch_ = {};
@@ -861,11 +844,8 @@ void App::goUp() {
 }
 
 void App::refresh(ViewState view) {
-    // A folder is already loading, and what it shows will be fresh: start nothing new.
-    // (Refreshing the old folder would cancel it; restarting it on every held-down F5
-    // would pile up stuck threads on a slow network share.) But that load started before
-    // the change the caller made, so what it wants selected (the new, renamed or next item)
-    // may be missing from it: keep it for a queued refresh, as after a change notification.
+    // A load is in progress: start nothing (a held F5 would pile up stuck threads on a dead share). That load
+    // may predate the caller's change, so keep what it wants selected for a queued refresh.
     if (pending_.generation) {
         if (view.asks()) {
             queuedView_ = {list_.dir(), std::move(view)};
@@ -880,25 +860,19 @@ void App::refresh(ViewState view) {
 void App::goToTyped() {
     std::wstring text = windowText(address_);
     std::wstring path = normalizePath(expandVars(text));   // only what the user typed has its %VARS% expanded
-    // "..", a subfolder's name and anything written relative to this folder (".", ".\x", "a\b")
-    // are resolved here and checked by the loader, so they never reach Windows, which would open
-    // the folder in an Explorer window (4.4). The rest runs as a command (5.3).
+    // "..", subfolder names and relative paths (".\x", "a\b") open here: Windows would use Explorer (4.4).
     bool relative = isRelativePath(path);
     if (path == L"..") path = parentPath(tab().path);
     else if (!tab().path.empty() && (list_.hasFolder(path) || relative))
         path = normalizePath(joinPath(tab().path, path));   // GetFullPathName folds "." and ".." away
     if (path.empty() || isAbsolutePath(path)) {
-        // Checked by the folder loader on its worker thread, so a dead network
-        // share cannot freeze the window. A file is opened when the result comes back.
+        // Checked on the loader's thread, so a dead share cannot freeze the window; a file opens then.
         open(path, Nav::New, {}, Origin::addressBar());
         focusList();
         return;
     }
-    // The folder shown, not tab().path: a tab keeps an unavailable folder (4.3), but handing it to
-    // Windows as the working folder would wait on the dead server before the program starts.
-    // On This PC a relative place (".", "a\b") has no folder to be relative to: Windows would use
-    // the app's own start folder and open it in Explorer.
-    // The rest is a command: "cmd", "notepad", a web address...
+    // A command ("cmd", a web address...), run in the folder shown: a dead tab folder would hold up its start.
+    // On This PC a relative place has no folder (Windows would open its own start folder in Explorer).
     if ((relative && tab().path.empty()) || !runCommand(wnd_, text, list_.dir())) {
         setMessage(L"Can't find \"" + text + L"\"");
         focusEdit(address_);   // left selected, like a bad path, so it can be corrected (5.3)
@@ -920,8 +894,7 @@ void App::activate(bool inNewTab) {
     for (int row : rows) {
         std::wstring path = list_.pathAt(row);
         bool folder = list_.at(row).isDir();
-        // A shortcut that says its target is a folder counts as that folder, so it opens in a tab
-        // like the other folders (Windows would open it in Explorer); any other shortcut is a file.
+        // A shortcut to a folder counts as that folder, so it opens in a tab (Windows would use Explorer).
         if (!folder && extensionOf(path) == L".lnk") {
             std::optional<std::wstring> target = shortcutTarget(path, &folder);
             if (folder && opensInTab(target)) path = normalizePath(*target);   // as openShortcut() does (L7)
@@ -941,9 +914,8 @@ void App::activate(bool inNewTab) {
     }
 }
 
-// A shortcut that leads to a folder (or to This PC) shows it here, or in a background tab when the
-// shortcut says its target is a folder; Windows opens anything else. Whether the target really
-// is a folder is found out by the folder loader on its worker thread (it may be on a network).
+// A shortcut to a folder or This PC opens here, or in a background tab; Windows opens anything else.
+// Whether the target really is a folder, the loader finds out on its thread (it may be on a network).
 void App::openShortcut(const std::wstring& path, bool inNewTab) {
     bool folder = false;
     std::optional<std::wstring> target = extensionOf(path) == L".lnk" ? shortcutTarget(path, &folder) : std::nullopt;
@@ -951,15 +923,13 @@ void App::openShortcut(const std::wstring& path, bool inNewTab) {
         openFile(wnd_, path);   // a web link, a program, a library...
         return;
     }
-    // Like every other way into a tab, the path is normalised first: a stored "D:\photos\" would
-    // otherwise give a blank caption and an Up that stays put. (String work only, no disk access.)
+    // Normalized like every way into a tab: a stored "D:\photos\" would give a blank caption and a stuck Up.
     std::wstring dir = normalizePath(*target);
     if (inNewTab && folder) newTab(dir, false);
     else open(dir, Nav::New, {}, Origin::fromShortcut(path));
 }
 
-// Rename on a tree node's menu: renaming is done in the file list, so the node's parent is shown with the
-// node selected and the rename box open.
+// Rename on a tree node's menu happens in the file list, in the node's parent folder.
 void App::renameNode(const std::wstring& path) {
     if (parentPath(path).empty()) return;   // This PC, a drive or a share: nothing to rename here
     ViewState v = ViewState::selecting(leafName(path));
@@ -983,8 +953,7 @@ ViewState App::currentView() const {
     return v;
 }
 
-// Not while the tab's own folder has yet to load since it was switched to: the list shows nothing of it
-// then, and storing that would forget what the tab showed before (a quick Ctrl+Tab past a slow folder).
+// Not while the tab's folder is still loading after a switch: that would forget what it showed before.
 void App::rememberView() {
     if (pending_.generation && pending_.nav == Nav::Switch) return;
     SetWindowTextW(filter_, L"");   // the tab comes back unfiltered (5.4): remember the unfiltered rows
@@ -1090,9 +1059,8 @@ void App::deleteSelection(bool permanently) {
     int next = rowAfterDeleting(rows, list_.count());
     ViewState v = next >= 0 ? ViewState::selecting(list_.at(next).name) : ViewState{};
     v.top = list_.topRow();
-    // Answering No to Windows' question (or an error) deletes nothing: then the selection stays where it was.
-    // Anything deleted before a cancel still shows up through the folder watch. After a delete nothing is
-    // selected until the reload lands, so a second Delete cannot hit the deleted files.
+    // No to Windows' question deletes nothing: the selection stays. After a delete nothing is selected until
+    // the reload lands, so a second Delete cannot hit the deleted files.
     if (deleteItems(wnd_, list_.dir(), list_.selectedItems(), permanently)) { list_.select({}, v.focus); refresh(v); }
 }
 

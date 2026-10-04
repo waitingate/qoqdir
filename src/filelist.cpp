@@ -73,11 +73,9 @@ void FileList::update(bool keepSelection, const std::function<void()>& change) {
         names = selectedNames();
         focus = focusedName();
     }
-    // The edit box remembers a row number, not a file: close it before the rows move, or Enter
-    // would rename whatever lands on that row (a navigation, a new sort or a filter under it).
+    // The edit box knows a row, not a file: close it before rows move, or Enter renames whatever lands there.
     if (renaming()) ListView_CancelEditLabel(lv_);
-    // Change the items and rebuild view_ before any ListView call: those can ask
-    // for row text right away, and every row must already point at a valid item.
+    // Rebuild view_ before any ListView call: those can ask for a row's text at once.
     change();
     view_.clear();
     total_ = 0;

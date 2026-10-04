@@ -1,5 +1,4 @@
-//! Small helpers: UTF-16 strings for Windows, and owners that free Windows
-//! resources automatically when they go out of scope.
+//! Small helpers: UTF-16 strings for Windows, and owners that free Windows resources when dropped.
 
 use std::ffi::{OsStr, OsString};
 use std::os::windows::ffi::{OsStrExt, OsStringExt};

@@ -1,7 +1,6 @@
 #pragma once
-// Shared includes and small RAII owners. Every Windows resource the app holds
-// lives in one of these, so nothing has to be freed by hand.
-// (UNICODE and NOMINMAX are defined for every file in CMakeLists.txt.)
+// Shared includes, and owners that free every Windows resource the app holds. (UNICODE and NOMINMAX
+// come from CMakeLists.txt.)
 
 #include <windows.h>
 #include <commctrl.h>

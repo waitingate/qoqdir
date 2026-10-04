@@ -1,13 +1,7 @@
 //! The main window: toolbar, tabs, tree, file list and status bar.
-//!
-//! Threading rule: all state is touched only by the UI thread. Folders are read
-//! on short-lived worker threads that own nothing shared; each result is posted
-//! back tagged with a generation number, and anything but the newest request
-//! is dropped. Navigation only changes state once a folder has loaded, so a
-//! failed or slow load can never leave a tab half-updated.
-//!
-//! Borrow rule: `st` is only borrowed for short, local reads and writes, never
-//! across a call into Windows (which can call straight back into `on_message`).
+//! All state is UI-thread only. Folders load on worker threads; only the newest result is used, and a tab
+//! changes only once its folder has loaded, so a failed or slow load never leaves it half-updated.
+//! `st` is never borrowed across a call into Windows, which can call straight back into `on_message`.
 
 use std::cell::{Cell, RefCell};
 use std::ffi::OsString;
@@ -103,8 +97,7 @@ const SPLITTER_WIDTH: i32 = 5; // in 96-DPI units
 const EN_CHANGE: u32 = 0x0300;
 const BN_CLICKED: u32 = 0;
 
-/// The newest folder load's generation, for the load threads: one that a newer load has replaced stops reading
-/// (4.2). Not a field: a detached thread can outlive the window.
+/// The newest load, for the load threads: a replaced one stops reading (4.2). Global: a thread can outlive the window.
 static NEWEST_LOAD: AtomicU32 = AtomicU32::new(0);
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -168,8 +161,7 @@ pub struct State {
     pub active: usize,
     next_tab_id: u32,
     pending: Option<Pending>,
-    // Kept by refresh() while a load is pending: what a delete, rename or new folder wanted selected, in
-    // that folder. The queued refresh applies it if the folder is still shown.
+    // What a delete, rename or new folder asked to select while a load was pending, and in which folder.
     pub queued_view: Option<(Location, ViewState)>,
     rename: Option<(PathBuf, OsString)>, // done after the edit box has closed
     pub watch: Option<FolderWatch>,
@@ -238,8 +230,7 @@ fn focus_edit(edit: HWND) {
     send(edit, EM_SETSEL, 0, -1);
 }
 
-/// Ctrl+Backspace as in Explorer's boxes: deletes the selection, or else the word before the cursor.
-/// A plain edit box would type a box character instead.
+/// Ctrl+Backspace as in Explorer: deletes the selection or the word before the cursor (an edit box types a box).
 fn delete_word_before(edit: HWND) {
     let (mut start, mut end) = (0u32, 0u32);
     send(edit, EM_GETSEL, &mut start as *mut _ as usize, &mut end as *mut _ as isize);
@@ -462,8 +453,7 @@ impl App {
         if app.is_null() {
             return unsafe { DefWindowProcW(h, msg, wp, lp) };
         }
-        // SAFETY: the pointer is set right after creation and cleared in WM_DESTROY;
-        // main() keeps the Rc alive for as long as the window exists.
+        // SAFETY: set right after creation and cleared in WM_DESTROY; main() keeps the Rc alive meanwhile.
         unsafe { (*app).on_message(msg, wp, lp) }
     }
 
@@ -678,9 +668,7 @@ impl App {
                     let volume = lp.0 != 0 && *((lp.0 as *const u32).add(1)) == DBT_DEVTYP_VOLUME;
                     if (wp.0 == DBT_DEVICEARRIVAL || wp.0 == DBT_DEVICEREMOVECOMPLETE) && volume {
                         self.tree.refresh_drives(); // only This PC changes; the rest of the tree stays as the user left it
-                        // This PC lists the drives, and a tab's folder may sit on the drive that went: its
-                        // own watch cannot tell, since the event names the drive root, not a folder below it.
-                        self.queue_refresh();
+                        self.queue_refresh(); // This PC lists drives, and a tab's folder may be on the drive (its watch can't tell)
                     }
                     return LRESULT(1);
                 }
@@ -750,8 +738,7 @@ impl App {
         x >= sx && x < sx + scale(SPLITTER_WIDTH, self.dpi.get())
     }
 
-    /// At most one refresh per interval, even while a folder changes nonstop. The timer waits
-    /// while a rename or a load is in progress (on_timer), so it disturbs neither.
+    /// At most one refresh per interval; it waits while a rename or a load is in progress (on_timer).
     pub fn queue_refresh(&self) {
         if !self.refresh_queued.replace(true) {
             unsafe {
@@ -764,14 +751,12 @@ impl App {
         unsafe {
             match id {
                 TIMER_REFRESH => {
-                    // Otherwise keep the timer and try again: never disturb a rename,
-                    // and never cancel a folder that is loading.
+                    // Not during a rename or a load: then the timer tries again.
                     if !self.list.renaming() && !self.is_loading() {
                         let _ = KillTimer(Some(self.wnd), TIMER_REFRESH);
                         self.refresh_queued.set(false);
-                        // The item a delete, rename or new folder wanted selected, unless another folder is shown
-                        // by now. A tab shown as not available waits for F5 (4.3), even if this refresh was
-                        // queued before it failed.
+                        // What a delete, rename or new folder asked to select, if its folder is still shown.
+                        // Not available: F5 (4.3).
                         let queued = self.st.borrow_mut().queued_view.take();
                         if !self.with_tab(|t| t.unavailable) {
                             let shown = self.list.location();
@@ -892,8 +877,7 @@ impl App {
                 }
             }
             let rows = self.list.selection();
-            // The menu is modal and a folder load can land while it is open: the app's own commands (paste, rename,
-            // delete, open here) then do nothing. Windows' own (Copy, Properties...) act on the menu's own items.
+            // The menu is modal and a load can land meanwhile: then the app's own commands do nothing.
             let dir = self.list.location();
             let names = self.list.selected_names();
             if rows.is_empty() {
@@ -1246,9 +1230,7 @@ impl App {
             SetTimer(Some(self.wnd), TIMER_LOADING, 250, None); // say "Loading..." only if it is slow
         }
         if nav == Nav::Switch {
-            // The tab strip already shows the new tab: show its location at once instead of the old tab's list
-            // and address until its folder loads. Meanwhile the list has no folder, so paste, new folder, menus
-            // and drops have nothing to act on (the same mechanism as an unavailable folder).
+            // Show the new tab at once; until its folder loads the list has none, so nothing acts on the old one.
             self.list.set_listing(Listing::default());
             self.show_location(nav);
             self.show_status();
@@ -1297,11 +1279,8 @@ impl App {
             return;
         }
         if pending.nav == Nav::Refresh && self.list.renaming() {
-            // 4.2: a refresh never interrupts a rename. The box opened after this load started
-            // (open() closes any box it finds), so drop the result and retry once the box has closed,
-            // as the timer does; applying it would move the rows under the box, and Enter would
-            // rename whatever row sits there now. What it was asked to select (a new folder, a renamed item)
-            // is kept for that retry, unless a newer request is queued already (refresh() during this load).
+            // 4.2: never apply a refresh under an open rename box (Enter would rename whatever row moved there).
+            // Retry once it closes, keeping what this load was asked to select unless a newer request waits.
             let shown = self.list.location();
             {
                 let mut st = self.st.borrow_mut();
@@ -1418,8 +1397,7 @@ impl App {
             set_text(self.filter, &pending.filter);
         }
         match (&pending.origin, &listing.location) {
-            // The shortcut leads to a file: let Windows open it. (Not when its folder is unreachable:
-            // Windows would only show its own error, after the same long wait.)
+            // A shortcut that leads to a file: Windows opens it (never an unreachable one: that would hang, then fail).
             (Origin::Shortcut(lnk), _) if listing.is_file => {
                 open_file(self.wnd, lnk);
                 return;
@@ -1429,9 +1407,7 @@ impl App {
                 set_text(self.address, self.location().text());
                 return;
             }
-            // Let the user correct what they typed (5.3), unless they have moved on since Enter left the focus on
-            // the list: a dead share fails a minute later, and taking the focus then would commit a half-typed
-            // rename or interrupt the filter box.
+            // Let the user fix what they typed (5.3), unless they moved on: a dead share fails a minute later.
             (Origin::AddressBar, _) if unsafe { GetFocus() } == self.list.hwnd() => focus_edit(self.address),
             _ => {}
         }
@@ -1456,10 +1432,8 @@ impl App {
         self.warn();
     }
 
-    /// The tab's own folder could not be read. A tab never changes its folder by itself (a network
-    /// drive may not be connected yet, a USB drive may come back): show it empty and say why.
-    /// The list gets no folder (as for This PC), so paste, new folder, menus and drops have nothing
-    /// to act on: asking Windows about an unreachable folder can freeze the window for 20-40 s.
+    /// A tab never changes its folder by itself (a drive may come back): show it empty and say why. The
+    /// list gets no folder, so nothing asks Windows about it (that can freeze the window for 20-40 s).
     pub fn show_unavailable(&self, location: &Location, error: &str, nav: Nav) {
         self.list.set_listing(Listing::default());
         self.with_tab(|t| t.unavailable = true);
@@ -1491,11 +1465,8 @@ impl App {
     }
 
     pub fn refresh(&self, view: ViewState) {
-        // A folder is already loading, and what it shows will be fresh: start nothing new.
-        // (Refreshing the old folder would cancel it; restarting it on every held-down F5
-        // would pile up stuck threads on a slow network share.) But that load started before
-        // the change the caller made, so what it wants selected (the new, renamed or next item)
-        // may be missing from it: keep it for a queued refresh, as after a change notification.
+        // A load is in progress: start nothing (a held F5 would pile up stuck threads on a dead share). That load
+        // may predate the caller's change, so keep what it wants selected for a queued refresh.
         if self.is_loading() {
             if view.asks() {
                 let shown = self.list.location();
@@ -1513,9 +1484,7 @@ impl App {
     fn go_to_typed(&self) {
         let text = window_text(self.address);
         let mut location = normalize(&expand_vars(&text)); // only what the user typed has its %VARS% expanded
-        // "..", a subfolder's name and anything written relative to this folder (".", ".\x", "a\b")
-        // are resolved here and checked by the loader, so they never reach Windows, which would open
-        // the folder in an Explorer window (4.4). The rest runs as a command (5.3).
+        // "..", subfolder names and relative paths (".\x", "a\b") open here: Windows would use Explorer (4.4).
         let relative = is_relative_path(&location.text());
         let here = self.location();
         if let Location::Dir(typed) = &location {
@@ -1526,17 +1495,13 @@ impl App {
             }
         }
         if location.path().is_none_or(|p| p.is_absolute()) {
-            // Checked by the folder loader on its worker thread, so a dead network
-            // share cannot freeze the window. A file is opened when the result comes back.
+            // Checked on the loader's thread, so a dead share cannot freeze the window; a file opens then.
             self.open_from(location, Nav::New, ViewState::default(), Origin::AddressBar);
             self.focus_list();
             return;
         }
-        // The folder shown, not the tab's: a tab keeps an unavailable folder (4.3), but handing it to
-        // Windows as the working folder would wait on the dead server before the program starts.
-        // On This PC a relative place (".", "a\b") has no folder to be relative to: Windows would use
-        // the app's own start folder and open it in Explorer.
-        // The rest is a command: "cmd", "notepad", a web address...
+        // A command ("cmd", a web address...), run in the folder shown: a dead tab folder would hold up its start.
+        // On This PC a relative place has no folder (Windows would open its own start folder in Explorer).
         let shown = self.list.location();
         if (relative && matches!(here, Location::ThisPc)) || !run_command(self.wnd, &text, shown.path()) {
             self.set_message(&format!("Can't find \"{}\"", text.to_string_lossy()));
@@ -1571,8 +1536,7 @@ impl App {
                 dirs.push(Location::dir(path));
                 continue;
             }
-            // A shortcut that says its target is a folder counts as that folder, so it opens in a tab
-            // like the other folders (Windows would open it in Explorer); any other shortcut is a file.
+            // A shortcut to a folder counts as that folder, so it opens in a tab (Windows would use Explorer).
             let target = if extension_of(path.as_os_str()) == ".lnk" { shortcut_target(&path) } else { None };
             match target {
                 Some((target, true)) if opens_in_tab(&target) => dirs.push(normalize(&target.text())), // as open_shortcut does
@@ -1598,9 +1562,8 @@ impl App {
         }
     }
 
-    /// A shortcut that leads to a folder (or to This PC) shows it here, or in a background tab when the
-    /// shortcut says its target is a folder; Windows opens anything else. Whether the target really
-    /// is a folder is found out by the folder loader on its worker thread (it may be on a network).
+    /// A shortcut to a folder or This PC opens here, or in a background tab; Windows opens anything else.
+    /// Whether the target really is a folder, the loader finds out on its thread (it may be on a network).
     pub fn open_shortcut(&self, path: PathBuf, in_new_tab: bool) {
         let lnk = extension_of(path.as_os_str()) == ".lnk";
         let target = if lnk { shortcut_target(&path).filter(|(t, _)| opens_in_tab(t)) } else { None };
@@ -1608,8 +1571,7 @@ impl App {
             open_file(self.wnd, &path); // a web link, a program, a library...
             return;
         };
-        // Like every other way into a tab, the path is normalized first: a stored "D:\photos\" would
-        // otherwise give a blank caption and an Up that stays put. (String work only, no disk access.)
+        // Normalized like every way into a tab: a stored "D:\photos\" would give a blank caption and a stuck Up.
         let dir = normalize(&target.text());
         if in_new_tab && folder {
             self.new_tab(dir, false);
@@ -1618,8 +1580,7 @@ impl App {
         }
     }
 
-    /// Rename on a tree node's menu: renaming is done in the file list, so the node's parent is shown with the
-    /// node selected and the rename box open.
+    /// Rename on a tree node's menu happens in the file list, in the node's parent folder.
     pub fn rename_node(&self, location: Location) {
         let parent = location.parent();
         // This PC, a drive or a share: nothing to rename here.
@@ -1648,9 +1609,8 @@ impl App {
         }
     }
 
-    /// The tab leaves the screen: keep its selection and scroll for when it comes back. Not while the tab's own
-    /// folder has yet to load since it was switched to: the list shows nothing of it then, and storing that
-    /// would forget what the tab showed before (a quick Ctrl+Tab past a slow folder).
+    /// The tab leaves the screen: keep its selection and scroll. Not while its folder is still loading after a
+    /// switch: that would forget what it showed before.
     fn remember_view(&self) {
         if self.st.borrow().pending.as_ref().is_some_and(|p| p.nav == Nav::Switch) {
             return;
@@ -1805,9 +1765,8 @@ impl App {
         let next = row_after_deleting(&rows, self.list.count());
         let mut view = next.and_then(|r| self.list.item(r)).map(|it| ViewState::selecting(it.name)).unwrap_or_default();
         view.top = Some(self.list.top_row());
-        // Answering No to Windows' question (or an error) deletes nothing: then the selection stays where it was.
-        // Anything deleted before a cancel still shows up through the folder watch. After a delete nothing is
-        // selected until the reload lands, so a second Delete cannot hit the deleted files.
+        // No to Windows' question deletes nothing: the selection stays. After a delete nothing is selected until
+        // the reload lands, so a second Delete cannot hit the deleted files.
         if delete_items(self.wnd, &dir, &self.list.selected_items(), permanently) {
             self.list.select(&[], view.focus.as_deref());
             self.refresh(view);

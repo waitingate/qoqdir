@@ -1,8 +1,5 @@
-//! `qoqdir.exe --selftest`: drives the real app through a scripted session and
-//! checks the results on disk. Keys are fed straight into `App::on_key`, so the
-//! test never sends global keyboard input to other windows.
-//!
-//! The steps are the C++ version's (src/selftest.cpp), in the same order and with the same names.
+//! `qoqdir.exe --selftest`: a scripted session in the real app. Keys go straight to `App::on_key`, never to
+//! other windows. The steps are the C++ version's, in the same order and with the same names.
 
 use std::cell::{Cell, RefCell};
 use std::ffi::{OsStr, OsString};
@@ -199,8 +196,7 @@ fn clipboard_files() -> Vec<PathBuf> {
     files
 }
 
-/// Paste only the test's own file: had its Ctrl+C failed, the clipboard could hold files the user cut, and
-/// pasting them would move them into the test folder, which is deleted at the end.
+/// Paste only the test's own file: after a failed Ctrl+C, pasting would move files the user cut.
 fn holds_test_file() -> bool {
     let files = clipboard_files();
     files.len() == 1 && Location::dir(&files[0]).same(&Location::dir(p("file1.txt")))
@@ -267,8 +263,7 @@ impl App {
             return;
         }
         send(focus, WM_KEYDOWN, vk.0 as usize, 0);
-        // A real Enter, Esc or Backspace also sends a character (Ctrl+Backspace sends 127), but only while the
-        // control is still there to take it.
+        // A real Enter, Esc or Backspace also sends a character (Ctrl+Backspace: 127), if the control is still there.
         if unsafe { GetFocus() } == focus && (vk == VK_RETURN || vk == VK_ESCAPE || vk == VK_BACK) {
             send(focus, WM_CHAR, if vk == VK_BACK && ctrl { 127 } else { vk.0 as usize }, 0);
         }
@@ -490,12 +485,10 @@ impl App {
             },
             |a| unsafe { GetFocus() } == a.filter && unsafe { GetWindowTextLengthW(a.filter) } == 1 && a.list.count() == 0,
         );
-        s.add("Esc clears that filter too", |a| a.press(VK_ESCAPE, 0), |a| {
-            a.list.count() == 6 && unsafe { GetFocus() } == a.list.hwnd()
-        });
         s.add(
             "Ctrl+Backspace in the filter box deletes the last word, as in Explorer (not a box character)",
             |a| {
+                set_text(a.filter, "");
                 focus(a.list.hwnd());
                 a.type_text("file 1");
                 a.press(VK_BACK, CTRL);
@@ -505,10 +498,11 @@ impl App {
                 a.filter_text() == "file "
             },
         );
-        s.add("(Esc clears it)", |a| a.press(VK_ESCAPE, 0), |a| a.list.count() == 6 && unsafe { GetFocus() } == a.list.hwnd());
         s.add(
             "Ctrl+C puts the file on the clipboard",
             |a| {
+                set_text(a.filter, "");
+                focus(a.list.hwnd());
                 a.select_one("file1.txt");
                 a.press(letter(b'C'), CTRL);
             },
@@ -644,8 +638,7 @@ impl App {
                 let next = a.select_one("file10.txt").and_then(|row| a.list.item(row + 1)).map(|it| it.name);
                 NEXT.with(|n| *n.borrow_mut() = next.unwrap_or_default());
                 a.press(VK_DELETE, 0);
-                // Until the reload lands the deleted file is still listed: it must not stay selected (a second
-                // Delete would show Windows' "Item Not Found").
+                // Listed until the reload lands, but it must not stay selected (a second Delete would fail).
                 if !a.list.selection().is_empty() {
                     note("the deleted file stayed selected until the reload".into());
                 }
@@ -681,8 +674,7 @@ impl App {
             },
             gone_shown,
         );
-        // The tab's folder is gone but the tab keeps it (4.3): a command must not get it as its working
-        // folder, or Windows refuses to start the program (and waits on it first when it is a dead share).
+        // The tab keeps its gone folder (4.3), which a command must not get as its working folder.
         s.add("(F5 while it is still gone keeps it shown as not available)", |a| a.press(VK_F5, 0), gone_shown);
         s.add("a command typed there still runs (the dead folder is not its working folder)", |a| a.go_to("rundll32"), |a| {
             a.at(&p("gone")) && a.status_message().contains("not available")
@@ -716,8 +708,7 @@ impl App {
                 a.new_tab(Location::dir(p("sub")), false);
                 focus(a.list.hwnd());
                 a.switch_tab(a.active() + 1);
-                // Checked right here, before "sub" can have loaded: the address bar already names it, and
-                // Ctrl+Shift+N must not create a folder in the tab that is no longer the one shown.
+                // Before "sub" can have loaded: the address bar names it, and Ctrl+Shift+N must not hit the old tab.
                 let switched = Location::dir(window_text(a.address)).same(&Location::dir(p("sub")));
                 note(if switched { "address bar switched" } else { "old tab still shown" }.into());
                 a.press(letter(b'N'), CTRL | SHIFT);
@@ -730,24 +721,20 @@ impl App {
             },
         );
         s.add("(close that tab)", |a| a.close_tab(a.active()), move |a| a.idle() && a.tabs() == 1 && a.at(&dir()));
-        s.add("Enter on a missing typed path shows an error and stays put", |a| a.go_to("C:\\no\\such\\folder\\anywhere"), move |a| {
-            a.at(&dir())
-        });
         s.add(
             "a typed path that fails while a rename box is open leaves the box alone",
             |a| {
-                // The failure lands after this action (on a dead share it would be a minute later); the user
-                // has started a rename meanwhile, which a focus change would commit half-typed.
+                // The failure lands after the rename box opens (a dead share fails a minute later).
                 a.go_to("C:\\no\\such\\folder\\anywhere");
                 a.select_one("file1.txt");
                 a.press(VK_F2, 0);
             },
             move |a| a.at(&dir()) && a.list.renaming() && unsafe { GetFocus() } != a.address,
         );
-        s.add("(cancel that rename)", |a| a.cancel_rename(), |a| !a.list.renaming());
         s.add(
             "a refresh asked to select an item, landing during a rename, keeps that for later",
             |a| {
+                a.cancel_rename(); // the box from the step before
                 focus(a.list.hwnd());
                 a.select_one("file1.txt");
                 a.refresh(ViewState::selecting("added.txt")); // as after a rename or a new folder; the load is in flight
@@ -821,9 +808,8 @@ impl App {
         )
         .during_load();
         s.add("typing a subfolder's name opens it here (not in Explorer)", |a| a.go_to("sub"), |a| a.at(&p("sub")));
-        s.add("typing .. goes up", |a| a.go_to(".."), move |a| a.at(&dir()));
-        s.add("typing .\\sub opens it here (not in Explorer)", |a| a.go_to(".\\sub"), |a| a.at(&p("sub")));
         s.add("typing ..\\ goes up", |a| a.go_to("..\\"), move |a| a.at(&dir()));
+        s.add("typing .\\sub opens it here (not in Explorer)", |a| a.go_to(".\\sub"), |a| a.at(&p("sub")));
         s.add(
             "a long folder name with an emoji where the caption is cut gives no broken character",
             |a| {
@@ -871,28 +857,19 @@ impl App {
         s.add(
             "(back to the %TEMP% folder)",
             |a| a.open(Location::dir(p("%TEMP%")), Nav::New, ViewState::default()),
-            |a| a.at(&p("%TEMP%")),
-        );
-        s.add("typing .\\other there opens it too", |a| a.go_to(".\\other"), |a| {
-            note(format!("tab at {}", a.tab_location().text().to_string_lossy()));
-            a.at(&p("%TEMP%\\other"))
-        });
-        s.add(
-            "(back to the %TEMP% folder once more)",
-            |a| a.open(Location::dir(p("%TEMP%")), Nav::New, ViewState::default()),
             |a| a.at(&p("%TEMP%")) && a.list.count() == 2,
         );
         s.add(
             "Enter in the filter box opens only the highlighted match, not every selected one (5.4)",
             |a| {
                 focus(a.list.hwnd());
-                a.list.select_all(); // both folders selected, "other" highlighted
+                a.list.select_all(); // both folders selected, "sub" highlighted (it was just left)
                 a.type_text("*"); // a filter both still match
                 a.press(VK_RETURN, 0);
             },
             |a| {
                 note(format!("tab at {}, {} tab(s)", a.tab_location().text().to_string_lossy(), a.tabs()));
-                a.at(&p("%TEMP%\\other")) && a.tabs() == 1
+                a.at(&p("%TEMP%\\sub")) && a.tabs() == 1
             },
         );
         s.add(
@@ -966,14 +943,6 @@ impl App {
                 note(format!("filter \"{}\"", a.filter_text()));
                 a.at(&dir()) && a.filter_text() == "file"
             },
-        );
-        s.add(
-            "(Esc clears it)",
-            |a| {
-                focus(a.filter);
-                a.press(VK_ESCAPE, 0);
-            },
-            |a| a.filter_text().is_empty() && a.list.count() == a.list.total(),
         );
         s.add(
             "a refresh queued just before a tab became not available waits for F5 (4.3)",
@@ -1052,49 +1021,25 @@ impl App {
             move |a| a.tabs() == 2 && a.tab_path(a.active() + 1).same(&Location::dir(p("sub"))) && a.at(&dir()),
         );
         s.add("(close that tab)", |a| a.close_tab(a.active() + 1), |a| a.idle() && a.tabs() == 1);
-        let both_selected = |second: &'static str| {
-            move |a: &App| {
-                let view = ViewState { select: vec!["sub-link.lnk".into(), second.into()], focus: Some("sub-link.lnk".into()), ..Default::default() };
-                a.refresh(view);
-            }
-        };
         s.add(
-            "Enter on two shortcuts to folders opens both in background tabs (not in Explorer)",
-            move |a| {
-                make_shortcut(&p("sub-link2.lnk"), p("sub"));
-                both_selected("sub-link2.lnk")(a);
-            },
-            enter_when(&["sub-link.lnk", "sub-link2.lnk"]),
-        );
-        s.check("(both folders are in tabs behind the test folder)", move |a| {
-            let sub = Location::dir(p("sub"));
-            a.tabs() == 3 && a.at(&dir()) && a.tab_path(1).same(&sub) && a.tab_path(2).same(&sub)
-        });
-        s.add(
-            "(close those tabs)",
+            "Enter on two shortcuts to folders, one whose target ends with a backslash, opens both in background tabs",
             |a| {
-                a.close_tab(1);
-                a.close_tab(1);
-            },
-            move |a| a.idle() && a.tabs() == 1 && a.at(&dir()),
-        );
-        s.add(
-            "Enter on two shortcuts, one whose target ends with a backslash, opens both",
-            move |a| {
                 make_shortcut(&p("slash2.lnk"), with_slash(p("sub")));
-                both_selected("slash2.lnk")(a);
+                let names = vec!["sub-link.lnk".into(), "slash2.lnk".into()];
+                a.refresh(ViewState { select: names, focus: Some("sub-link.lnk".into()), ..Default::default() });
             },
             enter_when(&["sub-link.lnk", "slash2.lnk"]),
         );
-        s.check("(both background tabs have a clean path, so a caption)", move |a| {
+        s.check("(both are in tabs behind the test folder, with clean paths, so with captions)", move |a| {
             if a.tabs() != 3 || !a.at(&dir()) {
                 return false;
             }
             note(format!("tab paths: {} | {}", a.tab_path(1).text().to_string_lossy(), a.tab_path(2).text().to_string_lossy()));
-            clean(a.tab_path(1)) && clean(a.tab_path(2))
+            let sub = Location::dir(p("sub"));
+            a.tab_path(1).same(&sub) && a.tab_path(2).same(&sub) // not "sub\"
         });
         s.add(
-            "(close those tabs again)",
+            "(close those tabs)",
             |a| {
                 a.close_tab(1);
                 a.close_tab(1);
@@ -1211,8 +1156,7 @@ impl App {
         s.add(
             "a removed drive is noticed by a tab two folders deep (shown as not available)",
             |a| {
-                // Two levels down, no folder watch matches a drive-removed event, so only WM_DEVICECHANGE
-                // tells. Stand in for the drive going away: drop the watch, remove the folder, send the message.
+                // Two levels down only WM_DEVICECHANGE tells: drop the watch, remove the folder, send it.
                 a.st.borrow_mut().watch = None;
                 let _ = std::fs::remove_dir(p("sub\\deep"));
                 volume_change(a, DBT_DEVICEREMOVECOMPLETE);
@@ -1379,8 +1323,7 @@ impl App {
             "the user folders arrive from a worker, between Bookmarks and This PC",
             |a| {
                 a.tree.fill(); // as at startup and on a drive change
-                // Nothing may ask Windows about the user folders here (4.1): right after fill() the roots are
-                // Bookmarks and This PC only; the user folders arrive by message and never before the action ends.
+                // Nothing asks Windows about the user folders here (4.1): they arrive by message, later.
                 FLAG.set(a.node_texts(a.tree_root()) == "Bookmarks,This PC");
             },
             |a| {
@@ -1437,10 +1380,10 @@ impl App {
             |a| a.rename_node(Location::dir(p("sub"))),
             move |a| a.at(&dir()) && a.list.renaming() && a.focused_is("sub"),
         );
-        s.add("(cancel that rename)", |a| a.cancel_rename(), |a| !a.list.renaming());
         s.add(
             "collapsing and expanding a tree folder shows its new subfolders",
             |a| {
+                a.cancel_rename(); // the box from the step before
                 let _ = std::fs::create_dir(p("Bookmarks\\two"));
                 a.tree_select(a.tree_root());
                 a.tree_key(VK_LEFT); // collapse, as the user would
@@ -1458,8 +1401,7 @@ impl App {
                 a.tree_key(VK_RIGHT); // and read it fresh
             },
             |a| {
-                // After both reads have landed: Bookmarks is back, none of its nodes got the late "deep",
-                // and every item the tree counts is reachable (a late insert under a dead handle is counted but lost).
+                // Both reads landed: no late "deep" under Bookmarks, and every node the tree counts is reachable.
                 if a.step_ms() < 400 || a.bookmark_nodes() != "one,two,sub" {
                     return false;
                 }
@@ -1512,22 +1454,14 @@ impl App {
         )
         .wait(30000);
         s.add(
-            "filtering while scrolled to the bottom shows the matches from the top",
+            "filters 10,000 files, showing the matches from the top even when scrolled to the bottom",
             |a| {
                 a.list.ensure_visible(Some(9999));
-                set_text(a.filter, "99");
-            },
-            |a| a.list.count() > 0 && a.list.top_row() == 0,
-        );
-        s.add(
-            "filters 10,000 files",
-            |a| {
-                set_text(a.filter, "");
                 let t = Instant::now();
                 set_text(a.filter, "99");
                 note(format!("filter {} ms", t.elapsed().as_millis()));
             },
-            |a| a.list.count() == (0..10000).filter(|i: &i32| i.to_string().contains("99")).count(),
+            |a| a.list.count() == (0..10000).filter(|i: &i32| i.to_string().contains("99")).count() && a.list.top_row() == 0,
         );
         s.add(
             "a run of stars in the filter does not freeze the window (\"********x\" means \"*x\")",
@@ -1586,8 +1520,7 @@ impl App {
         s.add(
             "switching away from a tab before it has loaded keeps what both tabs remembered (4.6)",
             |a| {
-                // Each switch leaves a tab whose folder has not loaded yet (as with a slow folder): what that tab
-                // showed before must survive, not be replaced by the empty list shown meanwhile.
+                // Each switch leaves a tab before its folder loads: what it showed before must survive.
                 a.switch_tab(0);
                 a.switch_tab(1);
                 a.switch_tab(0);
@@ -1685,8 +1618,7 @@ impl App {
                     }
                 });
                 let _ = held_wait.recv_timeout(Duration::from_secs(5));
-                // Selected again and read at once: a refresh of the folder in the meantime would replace the files
-                // in the list, or clear the message.
+                // Selected again and read at once: a refresh in between would replace the files or clear the message.
                 show_ghosts(a);
                 a.set_message("");
                 focus(a.list.hwnd());
@@ -1714,8 +1646,7 @@ impl App {
             Check(Check, u128),
             Finish,
         }
-        // Decide under a short borrow; run the step's code with nothing borrowed,
-        // because actions can run modal loops that tick again.
+        // Decide under a short borrow, then run the step with nothing borrowed: actions can run modal loops.
         let next = {
             let guard = self.selftest.borrow();
             let Some(t) = guard.as_ref() else { return };

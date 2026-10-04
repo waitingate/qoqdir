@@ -1,5 +1,4 @@
-//! The folder tree on the left. Subfolders are read only when a node is expanded,
-//! on a worker thread, so a slow or disconnected network drive never freezes the window.
+//! The folder tree. Subfolders are read on a worker thread when a node expands: a dead drive never freezes it.
 
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
@@ -56,8 +55,7 @@ pub struct FolderTree {
     reading: RefCell<HashMap<isize, u32>>,    // nodes whose subfolders are being read, by read number
 }
 
-/// Reads the subfolders of a location, and its shortcuts if asked, into `batch`.
-/// Runs on a worker thread, so it may block.
+/// Subfolders of a location (This PC: the drives), and its shortcuts if asked, into `batch`. Worker thread: may block.
 fn read_children(batch: &mut TreeBatch, location: &Location, shortcuts: bool) {
     match location {
         Location::ThisPc => {
@@ -95,9 +93,7 @@ fn read_children(batch: &mut TreeBatch, location: &Location, shortcuts: bool) {
     }
 }
 
-/// The user's folders shown as roots (only those that exist, with Windows' names and icons), into `batch`.
-/// Runs on a worker thread: verifying a folder redirected to an unreachable server, and reading
-/// its desktop.ini for the icon, can each take 20-60 s.
+/// The user folders that exist, as roots, into `batch`. Worker thread: one on a dead server can take 20-60 s.
 fn read_user_folders(batch: &mut TreeBatch) {
     for id in [&FOLDERID_Desktop, &FOLDERID_Downloads, &FOLDERID_Documents, &FOLDERID_Pictures, &FOLDERID_Music, &FOLDERID_Videos] {
         if let Some(path) = known_folder(id).filter(|p| p.is_dir()) {
@@ -109,12 +105,10 @@ fn read_user_folders(batch: &mut TreeBatch) {
 }
 
 impl FolderTree {
-    /// `batch_msg` is posted to `parent` with a `Box<TreeBatch>` (for `add_children`) when subfolders are read,
-    /// `icon_msg` with a `Box<IconBatch>` (for `set_icons`) when the own icons of shortcuts among them are read.
-    /// `bookmarks` is shown at the top of the tree, open, with its shortcuts as well as its folders.
+    /// Posts `batch_msg` (a `Box<TreeBatch>`, for `add_children`) and `icon_msg` (a `Box<IconBatch>`, for
+    /// `set_icons`) to `parent`. `bookmarks` is the first root, open, with its shortcuts as well as its folders.
     pub fn create(parent: HWND, id: i32, batch_msg: u32, icon_msg: u32, bookmarks: Location) -> FolderTree {
-        // TVS_LINESATROOT: without it the root items (Bookmarks, This PC) get no expand arrow at all.
-        // No lines are drawn because TVS_HASLINES is absent, which is how Explorer does it.
+        // TVS_LINESATROOT gives the roots an expand arrow; without TVS_HASLINES no lines show, as in Explorer.
         let style = WS_CHILD.0 | WS_VISIBLE.0 | WS_TABSTOP.0 | TVS_HASBUTTONS | TVS_LINESATROOT | TVS_SHOWSELALWAYS
             | TVS_TRACKSELECT | TVS_FULLROWSELECT | TVS_NOHSCROLL;
         let hwnd = unsafe {
@@ -168,8 +162,7 @@ impl FolderTree {
         send(self.hwnd, TVM_EXPAND, TVE_EXPAND.0 as usize, this_pc.0);
     }
 
-    /// Drives came or went: This PC's children are read again, and nothing else, so the folders the user
-    /// expanded stay expanded (4.5). A read of This PC still in flight may list the drives as they were: dropped.
+    /// Drives came or went: re-read This PC only, so expanded folders stay open (4.5); its read in flight is dropped.
     pub fn refresh_drives(&self) {
         let mut pc = self.root();
         if pc == 0 {
@@ -261,8 +254,7 @@ impl FolderTree {
     }
 
     pub fn add_children(&self, batch: TreeBatch) {
-        // A deleted node left `reading` in TVN_DELETEITEM, so a node still in there is alive; if it reuses the handle
-        // of a deleted node whose read is still in flight, the read number tells that stale batch from its own.
+        // Nodes in `reading` are alive (deleted ones leave in TVN_DELETEITEM); the read number spots a reused handle.
         if self.reading.borrow().get(&batch.node) != Some(&batch.read) {
             return;
         }
@@ -277,9 +269,7 @@ impl FolderTree {
         }
         let node = HTREEITEM(batch.node);
         if batch.children.is_empty() {
-            // The arrow stays when nothing is known (the read failed) and on Bookmarks, which is empty on a first
-            // run and filled by the user while the app runs (5.6); the next expand reads again. Other nodes are
-            // now known to have no subfolders (5.5).
+            // Keep the arrow when the read failed, and on Bookmarks (filled later, 5.6); others have no subfolders.
             if !batch.failed && batch.node != self.root() {
                 let item = TVITEMW { mask: TVIF_CHILDREN, hItem: node, cChildren: TVITEMEXW_CHILDREN(0), ..Default::default() };
                 send(self.hwnd, TVM_SETITEMW, 0, &item as *const _ as isize);

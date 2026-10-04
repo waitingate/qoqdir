@@ -6,16 +6,10 @@
 #include <cstdio>
 #include <cstdlib>
 
-// Spec 4.10: an internal bug stops the program, and %TEMP%\qoqdir-crash.log says why. A bug ends
-// the program in one of three ways, and each has its hook here:
-//   - a CPU fault (a bad pointer, a stack overflow...): the unhandled-exception filter, onCrash;
-//   - a failed _GLIBCXX_ASSERTIONS check (a bad index...): libstdc++ calls std::__glibcxx_assert_fail,
-//     defined at the bottom so the check's text reaches the log instead of a stderr nobody sees;
-//   - abort() for anything else (std::terminate...): the SIGABRT handler, onAbort.
-// The log line is built in stack buffers with snprintf and written with Win32 calls, nothing from the
-// heap, since a corrupted heap may be what broke. Code addresses are logged as offsets into the exe
-// because its load address moves (ASLR). To name the line: build the same sources with -g added and
-// -s removed, then  addr2line -e qoqdir.exe 0x140000000+offset  (0x140000000 is the exe's image base).
+// Spec 4.10: an internal bug stops the program and %TEMP%\qoqdir-crash.log says why. Hooks: CPU faults
+// (onCrash), failed _GLIBCXX_ASSERTIONS checks (at the bottom) and abort() (onAbort). Lines are built in
+// stack buffers and written with Win32 calls: the heap may be what broke. Addresses are exe offsets (ASLR);
+// to name one, rebuild with -g and without -s, then: addr2line -e qoqdir.exe 0x140000000+offset
 
 namespace {
 
@@ -61,8 +55,7 @@ LONG WINAPI onCrash(EXCEPTION_POINTERS* e) {
 
 void onAbort(int) {
     logCrash("abort() was called");
-    // msvcrt's abort() would now _exit(3); the UCRT's would go on to a __fastfail (exit 0xC0000409 and a
-    // Windows error report about a "stack buffer overrun" that never happened). End it the same way on both.
+    // Exit 3, as msvcrt's abort() does; the UCRT's would __fastfail with a false "stack buffer overrun" report.
     TerminateProcess(GetCurrentProcess(), 3);
 }
 
@@ -82,9 +75,8 @@ void installCrashLog() {
     _set_error_mode(_OUT_TO_STDERR);   // or msvcrt's abort() first shows a "Microsoft Visual C++ Runtime Library" box
 }
 
-// libstdc++ calls this when a _GLIBCXX_ASSERTIONS check fails. Its own version prints to stderr, which
-// a windowed program does not have, so this one puts the same text in the crash log, then stops the
-// program as the library would. (Defining it here keeps the library's copy out of the static link.)
+// libstdc++ calls this when a _GLIBCXX_ASSERTIONS check fails. Its own writes to a stderr a windowed program
+// lacks; this one logs the check, then stops. (Defined here, it replaces the library's in the static link.)
 void std::__glibcxx_assert_fail(const char* file, int line, const char* function, const char* condition) noexcept {
     char at[64], what[1024];
     snprintf(what, sizeof what, "%s:%d: %s: Assertion '%s' failed  [%s]", file, line, function, condition,

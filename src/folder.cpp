@@ -226,8 +226,7 @@ bool isAbsolutePath(const std::wstring& path) {
 bool isRelativePath(const std::wstring& text) {
     if (text.empty() || isAbsolutePath(text)) return false;
     if (text[0] == L'.') return true;   // ".", ".\sub", "..\other", "..\"
-    // Only the first word decides, so "notepad a\b.txt" and "cmd \c dir" (normalizePath turned the
-    // slash around) stay commands; a web address ("https:\\x") is told apart by its colon.
+    // Only the first word counts ("notepad a\b.txt" stays a command); a colon marks a web address ("https:\\x").
     size_t end = text.find_first_of(L" \t");   // npos when the text is one word
     return text.find(L'\\') < end && text.find(L':') >= end;
 }

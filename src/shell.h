@@ -1,7 +1,6 @@
 #pragma once
-// Everything that talks to the Windows shell. Copying, deleting, renaming,
-// context menus and icons are done by Windows itself, exactly as in Explorer,
-// so the app never re-implements (and never gets wrong) any of that.
+// Everything that talks to the Windows shell. Windows itself copies, deletes, renames and shows the menus,
+// as in Explorer, so the app never re-implements (or gets wrong) any of that.
 
 #include "folder.h"
 
@@ -11,8 +10,7 @@
 HIMAGELIST systemImageList();                          // small icons, shared by the whole process
 int iconFor(const std::wstring& path, const Item& it); // UI thread only; never touches the disk
 
-// Files like .exe and .lnk carry their own icon, which needs a disk (maybe network)
-// lookup. That runs on a worker thread; until it arrives the file shows its type's icon.
+// .exe, .lnk and the like have their own icon, read on a worker thread (it may need the network).
 bool hasOwnIcon(const Item& it);
 struct IconBatch {
     std::wstring dir;
@@ -26,16 +24,13 @@ std::wstring knownFolder(REFKNOWNFOLDERID id);
 
 // One item, given by its full path, as a shell data object (what copy, drag and drop hand around).
 Com<IDataObject> dataObject(HWND owner, const std::wstring& path);
-// The functions below that take a folder and the file list's items, not paths, let the shell build
-// the items from the listing's find data instead of asking the disk about each one.
-// Context menu for items of one folder, for one item given by its full path (the tree's
-// folders, This PC, a drive), or for a folder's background.
+// Below, taking the list's items (not paths) spares the shell a disk query per item.
+// Context menus for items of one folder, for one item by its full path, or for a folder's background.
 Com<IContextMenu> itemMenu(HWND owner, const std::wstring& dir, const std::vector<Item>& items);
 Com<IContextMenu> itemMenu(HWND owner, const std::wstring& path);
 Com<IContextMenu> backgroundMenu(HWND owner, const std::wstring& dir);
-// Shows the menu. 'intercept' sees the chosen verb first and returns true if it handled it.
-// With 'paste', Paste and Paste shortcut come first: a folder's own menu has neither (Explorer
-// adds its own). 'paste' is called with true for Paste shortcut.
+// 'intercept' sees the chosen verb first and returns true if it handled it.
+// With 'paste', Paste and Paste shortcut come first (a folder's own menu has neither).
 void showMenu(HWND owner, IContextMenu* menu, POINT screenPt,
               const std::function<bool(const std::wstring& verb)>& intercept,
               const std::function<void(bool shortcuts)>& paste = nullptr);
@@ -43,8 +38,7 @@ void showMenu(HWND owner, IContextMenu* menu, POINT screenPt,
 bool forwardMenuMessage(UINT msg, WPARAM wp, LPARAM lp, LRESULT* result);
 bool invokeVerb(HWND owner, IContextMenu* menu, const char* verb);
 
-// False when the files could not be put on the clipboard: Windows could not describe them (a path too
-// long for the shell) or another program holds the clipboard open.
+// False when the clipboard could not be set: a path too long for the shell, or another program holds it.
 bool copyToClipboard(HWND owner, const std::wstring& dir, const std::vector<Item>& items, bool cut);
 void pasteInto(HWND owner, const std::wstring& dir, bool shortcuts = false);   // shortcuts: "Paste shortcut"
 // False when nothing was deleted: the user said No to Windows' question, or it failed.
@@ -53,13 +47,11 @@ HRESULT renameItem(HWND owner, const std::wstring& path, const std::wstring& new
 void openFile(HWND owner, const std::wstring& path);
 bool runCommand(HWND owner, const std::wstring& command, const std::wstring& workDir);
 void dragOut(HWND owner, const std::wstring& dir, const std::vector<Item>& items);
-// The target stored in a shortcut: a path, "" for This PC, or nothing (a web link, a library). 'folder'
-// says whether the target was a folder when the shortcut was made (false if not recorded). Reads only
-// the shortcut file, never the target, so a shortcut to a server that is off costs nothing.
+// A shortcut's stored target: a path, "" for This PC, or nothing (a web link, a library); 'folder' if it
+// was one. Reads only the .lnk file, never the target, so a server that is off costs nothing.
 std::optional<std::wstring> shortcutTarget(const std::wstring& lnkPath, bool* folder);
 
-// Posts 'msg' to 'owner' when something inside 'dir' changes, or when 'dir' itself
-// is deleted or renamed (seen from its parent). Stops watching when destroyed.
+// Posts 'msg' to 'owner' when something in 'dir' changes, or 'dir' itself goes; stops when destroyed.
 class FolderWatch {
 public:
     FolderWatch() = default;
@@ -75,9 +67,7 @@ private:
 };
 void acknowledgeChange(WPARAM wp, LPARAM lp);
 
-// A drop target that hands drops to whatever folder 'target' returns for the cursor
-// position (screen coordinates; none = refuse). 'target' is called with nullptr when
-// the drag leaves or ends, so it can remove any highlight it showed.
+// Drops go to the folder 'target' returns for the cursor (none: refused); nullptr means the drag left or ended.
 using DropTargetFn = std::function<std::optional<std::wstring>(const POINT* screenPt)>;
 IDropTarget* newDropTarget(HWND owner, DropTargetFn target);
 

@@ -1,7 +1,5 @@
-//! Everything that talks to the Windows shell. Copying, deleting, renaming,
-//! context menus and icons are done by Windows itself, exactly as in Explorer,
-//! so the app never re-implements (and never gets wrong) any of that.
-//! COM objects are released automatically when dropped.
+//! Everything that talks to the Windows shell. Windows itself copies, deletes, renames and shows the menus,
+//! as in Explorer, so the app never re-implements (or gets wrong) any of that.
 
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -90,8 +88,7 @@ pub fn system_image_list() -> HIMAGELIST {
     HIMAGELIST(list as _)
 }
 
-/// Icon and type name depend only on the extension, so ask the shell once per
-/// extension. SHGFI_USEFILEATTRIBUTES means no disk access: it never blocks.
+/// Icon and type name depend only on the extension: one cached shell call each, with no disk access.
 fn type_info(it: &Item) -> (i32, OsString) {
     let key = if it.is_dir() { "\\".to_string() } else { extension_of(&it.name) };
     if let Some(found) = TYPES.with(|t| t.borrow().get(&key).cloned()) {
@@ -105,9 +102,7 @@ fn type_info(it: &Item) -> (i32, OsString) {
     info
 }
 
-/// Files like .exe and .lnk carry their own icon, which needs a disk (maybe
-/// network) lookup. That runs on a worker thread (`read_own_icons`); until it
-/// arrives, the file shows its type's icon.
+/// .exe, .lnk and the like have their own icon, read on a worker thread (`read_own_icons`): it may need the network.
 pub fn has_own_icon(it: &Item) -> bool {
     const OWN: [&str; 10] = [".exe", ".lnk", ".ico", ".url", ".cur", ".ani", ".msc", ".cpl", ".scr", ".appref-ms"];
     !it.is_dir() && OWN.contains(&extension_of(&it.name).as_str())
@@ -167,9 +162,7 @@ pub fn known_folder(id: &GUID) -> Option<PathBuf> {
     }
 }
 
-/// How a shortcut looks before its own icon is read: Windows' name for it ("Work", not "Work.lnk"), and the
-/// icon of a folder or of the target's file type. From the shortcut file alone: asking Windows for the
-/// target's own icon waits on a server that is off.
+/// A shortcut's name and a folder or file-type icon, from the .lnk alone: its own icon can wait on a dead server.
 pub fn describe_shortcut(lnk: &Path) -> (OsString, i32) {
     let (target, folder) = shortcut_target(lnk).map_or((None, false), |(t, folder)| (Some(t), folder));
     let name = file_info(&wide(lnk), FILE_FLAGS_AND_ATTRIBUTES(0), SHGFI_DISPLAYNAME)
@@ -209,9 +202,7 @@ fn pidl_from(location: &Location) -> Option<Pidl> {
     }
 }
 
-/// Asks the shell for an interface on one item given by its full path (a context menu, a
-/// data object, a drop target...). Resolving the full path exactly also covers items without
-/// an ordinary parent folder: This PC, and a network share's top (\\server\share).
+/// An interface (menu, data object, drop target...) on one item by its full path; covers This PC and \\server\share.
 fn ui_object_at<T: Interface>(owner: HWND, location: &Location) -> Result<T> {
     let pidl = pidl_from(location).ok_or(E_FAIL)?;
     unsafe {
@@ -220,10 +211,7 @@ fn ui_object_at<T: Interface>(owner: HWND, location: &Location) -> Result<T> {
     }
 }
 
-/// What the folder listing already said about an item, handed to the shell through a bind
-/// context (STR_FILE_SYS_BIND_DATA) so that parsing the item's name needs no disk access.
-/// Without it the shell asks the disk about every item: one round trip each on a network
-/// folder, tens of seconds for 10,000 selected files.
+/// The listing's find data, handed to the shell (STR_FILE_SYS_BIND_DATA) so parsing a name needs no disk query.
 #[implement(IFileSystemBindData)]
 struct FindData(RefCell<WIN32_FIND_DATAW>);
 
@@ -238,10 +226,8 @@ impl IFileSystemBindData_Impl for FindData_Impl {
     }
 }
 
-/// The same for items of one folder, as the list read them. The folder is opened once and each
-/// item is looked up by name inside it, from its own find data: resolving every full path from
-/// the desktop down took ~9 ms per file (90 s for 10,000 files), and even the name lookup cost
-/// one disk query per item (the 1.5-2.5 s of spec 4.7 on an SSD, far more on a network folder).
+/// The same for listed items of one folder: opened once, each item parsed from its own find data. Full
+/// paths took ~9 ms per file (90 s for 10,000), plain names a disk query each (spec 4.7).
 fn ui_object_of<T: Interface>(owner: HWND, dir: &Location, items: &[Item]) -> Result<T> {
     match items {
         [] => return Err(E_INVALIDARG.into()),
@@ -280,8 +266,7 @@ fn ui_object_of<T: Interface>(owner: HWND, dir: &Location, items: &[Item]) -> Re
     }
 }
 
-/// One item by its full path, as a shell data object (what copy, drag and drop hand around). The file
-/// list's own items go through `ui_object_of` (copy, delete, drag), which builds them from the listing.
+/// One item, given by its full path, as a shell data object (what copy, drag and drop hand around).
 pub fn data_object_at(owner: HWND, location: &Location) -> Option<IDataObject> {
     ui_object_at(owner, location).ok()
 }
@@ -305,10 +290,8 @@ pub fn background_menu(owner: HWND, dir: &Location) -> Option<IContextMenu> {
     }
 }
 
-/// Shows a context menu. `intercept` sees the chosen verb first and returns
-/// true if it handled it (e.g. "rename", or "open" on a folder). With `paste`, Paste and
-/// Paste shortcut come first: a folder's own menu has neither (Explorer adds its own).
-/// `paste` is called with true for Paste shortcut.
+/// `intercept` sees the chosen verb first and returns true if it handled it.
+/// With `paste`, Paste and Paste shortcut come first (a folder's own menu has neither).
 pub fn show_menu(owner: HWND, cm: &IContextMenu, pt: POINT, intercept: &mut dyn FnMut(&str) -> bool, paste: Option<&dyn Fn(bool)>) {
     let Ok(menu) = (unsafe { CreatePopupMenu() }) else { return };
     let menu = OwnedMenu(menu);
@@ -404,8 +387,7 @@ pub fn invoke_verb(owner: HWND, cm: Option<IContextMenu>, verb: &str) -> bool {
     }
 }
 
-/// False when the files could not be put on the clipboard: Windows could not describe them (a path too
-/// long for the shell) or another program holds the clipboard open.
+/// False when the clipboard could not be set: a path too long for the shell, or another program holds it.
 pub fn copy_to_clipboard(owner: HWND, dir: &Location, items: &[Item], cut: bool) -> bool {
     let Ok(obj) = ui_object_of::<IDataObject>(owner, dir, items) else { return false };
     unsafe {
@@ -462,8 +444,7 @@ fn file_operation(owner: HWND, flags: u32, add: impl FnOnce(&IFileOperation) -> 
 /// False when nothing was deleted: the user said No to Windows' question, or it failed.
 pub fn delete_items(owner: HWND, dir: &Location, items: &[Item], permanently: bool) -> bool {
     let Ok(obj) = ui_object_of::<IDataObject>(owner, dir, items) else { return false };
-    // FOF_WANTNUKEWARNING in both cases: Windows still asks before destroying an item it cannot recycle
-    // (network share, USB stick, oversized file); without it FOF_NOCONFIRMATION answers Yes for the user.
+    // FOF_WANTNUKEWARNING always: Windows still asks before deleting what it cannot recycle (a share, a USB stick).
     let mut flags = FOF_WANTNUKEWARNING.0 as u32;
     if !permanently {
         flags |= FOF_ALLOWUNDO.0 as u32 | FOFX_RECYCLEONDELETE.0 as u32 | FOF_NOCONFIRMATION.0 as u32;
@@ -530,9 +511,8 @@ pub fn drag_out(owner: HWND, dir: &Location, items: &[Item]) {
     }
 }
 
-/// The target stored in a shortcut: a path (as stored: normalize it before use), This PC, or nothing (a
-/// web link, a library); and whether the target was a folder when the shortcut was made (false if not
-/// recorded). Reads only the shortcut file, never the target, so a shortcut to a server that is off costs nothing.
+/// A shortcut's stored target (normalize it before use): a path, This PC, or nothing (a web link, a library),
+/// and whether it was a folder. Reads only the .lnk file, never the target, so a server that is off costs nothing.
 pub fn shortcut_target(lnk: &Path) -> Option<(Location, bool)> {
     unsafe {
         let link: IShellLinkW = CoCreateInstance(&ShellLink, None, CLSCTX_INPROC_SERVER).ok()?;
@@ -551,8 +531,7 @@ pub fn shortcut_target(lnk: &Path) -> Option<(Location, bool)> {
     }
 }
 
-/// Posts `msg` to `owner` when something inside `dir` changes, or when `dir`
-/// itself is deleted or renamed (seen from its parent). Stops when dropped.
+/// Posts `msg` to `owner` when something in `dir` changes, or `dir` itself goes; stops when dropped.
 pub struct FolderWatch {
     ids: [u32; 2],
 }
@@ -600,9 +579,7 @@ pub fn acknowledge_change(wp: WPARAM, lp: LPARAM) {
     }
 }
 
-/// Picks the folder a drop goes to, from the cursor position (screen coordinates;
-/// None = refuse). Called with None when the drag leaves or ends, so it can remove
-/// any highlight it showed.
+/// The folder a drop goes to, for the cursor (None: refused); called with None when the drag leaves or ends.
 pub type DropTargetFn = Box<dyn Fn(Option<POINT>) -> Option<Location>>;
 
 #[implement(IDropTarget)]
@@ -622,8 +599,7 @@ pub fn new_drop_target(owner: HWND, target: DropTargetFn) -> IDropTarget {
 }
 
 impl DropTarget {
-    /// Points the drop at the folder under the cursor. Returns true if that changed
-    /// (then the new folder has already been told about the drag).
+    /// Aims the drop at the folder under the cursor; true if it changed (that folder has been told already).
     fn aim(&self, keys: MODIFIERKEYS_FLAGS, pt: &POINTL, effect: *mut DROPEFFECT) -> bool {
         let dir = (self.target)(Some(POINT { x: pt.x, y: pt.y }));
         let unchanged = match (&dir, &*self.dir.borrow()) {
@@ -717,9 +693,7 @@ impl IDropTarget_Impl for DropTarget_Impl {
     }
 }
 
-/// Keeps the process alive while Windows finishes background copies (and
-/// Properties dialogs) started from the app. Windows holds references to this
-/// object; when the last one goes away, `done` is signaled.
+/// Keeps the process alive while Windows finishes copies and Properties dialogs started here (`done`: all released).
 #[implement(windows::Win32::System::Com::IAgileObject)]
 struct ShellRef {
     done: HANDLE,
@@ -748,8 +722,7 @@ impl ShellProcessRef {
         ShellProcessRef { obj: Some(obj), done }
     }
 
-    /// Call after the message loop ends: waits (still pumping messages) until
-    /// Windows has released every reference.
+    /// After the message loop: waits, still pumping messages, until Windows has released every reference.
     pub fn wait_for_shell(&mut self) {
         unsafe { SHSetInstanceExplorer(None::<&IUnknown>) };
         self.obj = None;

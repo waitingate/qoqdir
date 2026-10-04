@@ -1,5 +1,4 @@
-//! Folder contents and path rules. No UI here, so all of it is unit-tested
-//! (`cargo test`).
+//! Folder contents and path rules, with no UI, so all of it is unit-tested (`cargo test`).
 
 use std::ffi::{OsStr, OsString};
 use std::os::windows::ffi::{OsStrExt, OsStringExt};
@@ -191,8 +190,7 @@ pub fn resolve_argument(arg: &OsStr) -> Location {
     normalize(std::path::absolute(&arg).as_deref().map_or(arg.as_os_str(), |p| p.as_os_str()))
 }
 
-/// The command line, 7z style: one-letter switches with the value attached.
-///   qoqdir [switches] [folders...]     (see USAGE in main.rs)
+/// The command line, 7z style: qoqdir [switches] [folders...] (see USAGE in main.rs).
 #[derive(Default, Debug)]
 pub struct CommandLine {
     pub folders: Vec<Location>, // -t{folder} and plain folders, in order, each once
@@ -254,14 +252,12 @@ pub fn is_relative_path(text: &OsStr) -> bool {
     if w[0] == b'.' as u16 {
         return true; // ".", ".\sub", "..\other", "..\"
     }
-    // Only the first word decides, so "notepad a\b.txt" and "cmd \c dir" (normalize turned the
-    // slash around) stay commands; a web address ("https:\\x") is told apart by its colon.
+    // Only the first word counts ("notepad a\b.txt" stays a command); a colon marks a web address ("https:\\x").
     let end = w.iter().position(|&c| c == b' ' as u16 || c == b'\t' as u16).unwrap_or(w.len());
     w[..end].contains(&(b'\\' as u16)) && !w[..end].contains(&(b':' as u16))
 }
 
-/// The row to select after deleting `rows` (ascending): the item that takes the first deleted one's place,
-/// else the one before it; None when nothing is left. (4.6: "the item that followed the deleted ones")
+/// After deleting `rows` (ascending), the row of the item that takes the first one's place, else the one before.
 pub fn row_after_deleting(rows: &[usize], count: usize) -> Option<usize> {
     let first = *rows.first()?;
     let mut next = first;
@@ -310,8 +306,7 @@ impl Listing {
     }
 }
 
-/// Reads a folder. Blocking: call it off the UI thread. `stop` is asked every few hundred entries; once it
-/// says true the read ends at once with ERROR_OPERATION_ABORTED and no items.
+/// Reads a folder; blocking, so off the UI thread. Once `stop` says true it ends with ERROR_OPERATION_ABORTED.
 pub fn list_folder(location: &Location, show_hidden: bool, stop: Option<&dyn Fn() -> bool>) -> Listing {
     let mut r = Listing { location: location.clone(), ..Default::default() };
     let Location::Dir(dir) = location else {
@@ -481,8 +476,7 @@ pub fn is_shortcut(name: &OsStr) -> bool {
     matches!(extension_of(name).as_str(), ".lnk" | ".url")
 }
 
-/// Case-insensitive substring match, or a wildcard match when the filter has * or ?.
-/// `filter` is NUL-terminated.
+/// Case-insensitive substring match, or a wildcard match when the filter has * or ?. `filter` ends in a NUL.
 pub fn matches_filter(item: &Item, filter: &[u16]) -> bool {
     if filter.len() <= 1 {
         return true;

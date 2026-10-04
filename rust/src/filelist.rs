@@ -1,13 +1,7 @@
-//! The file list: a "virtual" ListView that stores no items itself. It asks for
-//! the text of each visible row, so a folder with 100,000 files shows instantly.
-//!
-//! `items` holds the folder, `view` holds the indices that pass the filter.
-//! Row i on screen is always items[view[i]]; `update` is the only place that
-//! changes `view` (together with `items`), and it always clears the ListView's
-//! selection with it, so no row or selection can point at the wrong file.
-//!
-//! Borrow rule: the model is never borrowed while a message is sent to the
-//! ListView, because Windows may call straight back into `on_notify`.
+//! The file list: a virtual ListView that asks for each visible row's text, so 100,000 files show at once.
+//! Row i is items[view[i]] (view: the items that pass the filter). Only `update` changes them, and it
+//! clears the selection with them, so no row or selection can point at the wrong file. The model is
+//! never borrowed while a message goes to the ListView, which can call straight back into `on_notify`.
 
 use std::cell::RefCell;
 use std::collections::HashSet;
@@ -168,13 +162,10 @@ impl FileList {
         (m.key, m.ascending)
     }
 
-    /// The only way the model changes: `change` edits it and `view` is rebuilt in
-    /// the same borrow, so Windows can never see a row that points at the wrong
-    /// (or a missing) item. The ListView's selection is reset with it.
+    /// The only way the model changes: `view` is rebuilt in the same borrow, and the selection reset with it.
     fn update(&self, keep_selection: bool, change: impl FnOnce(&mut Model)) {
         let (names, focus) = if keep_selection { (self.selected_names(), self.focused_name()) } else { (Vec::new(), None) };
-        // The edit box remembers a row number, not a file: close it before the rows move, or Enter
-        // would rename whatever lands on that row (a navigation, a new sort or a filter under it).
+        // The edit box knows a row, not a file: close it before rows move, or Enter renames whatever lands there.
         if self.renaming() {
             send(self.hwnd, LVM_CANCELEDITLABEL, 0, 0);
         }

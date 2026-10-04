@@ -8,8 +8,7 @@
 
 namespace {
 
-// Reads the subfolders of `dir` ("" = the drives), and its shortcuts if asked, into `batch`.
-// Runs on a worker thread, so it may block.
+// Subfolders of `dir` ("" = the drives), and its shortcuts if asked, into `batch`. Worker thread: may block.
 void readChildren(TreeBatch& batch, const std::wstring& dir, bool shortcuts) {
     std::vector<TreeBatch::Child>& children = batch.children;
     if (dir.empty()) {   // the drives (not via listFolder: its free-space check can wait on a network drive)
@@ -31,9 +30,8 @@ void readChildren(TreeBatch& batch, const std::wstring& dir, bool shortcuts) {
         if (it.isDir()) {
             children.push_back({path, it.name, -1});
         } else if (shortcuts && isShortcut(it.name)) {
-            // From the shortcut file alone: asking Windows for the target's own icon waits on a server that is
-            // off, and would hold up the whole node. Windows' name for it ("Work", not "Work.lnk") and the icon
-            // of a folder or of the target's file type need no such lookup; its own icon follows (startWorker).
+            // From the .lnk alone: its name and a folder or file-type icon. Its own icon can wait on a server
+            // that is off, so it follows later (startWorker).
             bool folder = false;
             std::optional<std::wstring> target = shortcutTarget(path, &folder);
             SHFILEINFOW name{}, icon{};
@@ -46,9 +44,7 @@ void readChildren(TreeBatch& batch, const std::wstring& dir, bool shortcuts) {
     }
 }
 
-// The user's folders shown as roots (only those that exist, with Windows' names and icons), into `batch`.
-// Runs on a worker thread: verifying a folder redirected to an unreachable server, and reading
-// its desktop.ini for the icon, can each take 20-60 s.
+// The user folders that exist, as roots, into `batch`. Worker thread: one on a dead server can take 20-60 s.
 void readUserFolders(TreeBatch& batch) {
     const KNOWNFOLDERID* folders[] = {&FOLDERID_Desktop, &FOLDERID_Downloads, &FOLDERID_Documents,
                                       &FOLDERID_Pictures, &FOLDERID_Music,    &FOLDERID_Videos};
@@ -69,8 +65,7 @@ void FolderTree::create(HWND parent, int id, UINT batchMsg, UINT iconMsg, const 
     bookmarks_ = bookmarks;
     batchMsg_ = batchMsg;
     iconMsg_ = iconMsg;
-    // TVS_LINESATROOT: without it the root items (Bookmarks, This PC) get no expand arrow at all.
-    // No lines are drawn because TVS_HASLINES is absent, which is how Explorer does it.
+    // TVS_LINESATROOT gives the roots an expand arrow; without TVS_HASLINES no lines show, as in Explorer.
     tv_ = CreateWindowExW(0, WC_TREEVIEWW, L"",
                           WS_CHILD | WS_VISIBLE | WS_TABSTOP | TVS_HASBUTTONS | TVS_LINESATROOT | TVS_SHOWSELALWAYS |
                               TVS_TRACKSELECT | TVS_FULLROWSELECT | TVS_NOHSCROLL,
@@ -112,8 +107,7 @@ void FolderTree::setIcons(const IconBatch& batch) {
     }
 }
 
-// Drives came or went: This PC's children are read again, and nothing else, so the folders the user
-// expanded stay expanded (4.5). A read of This PC still in flight may list the drives as they were: dropped.
+// Drives came or went: re-read This PC only, so expanded folders stay open (4.5); its read in flight is dropped.
 void FolderTree::refreshDrives() {
     HTREEITEM pc = TreeView_GetRoot(tv_);
     for (HTREEITEM n = pc; n; n = TreeView_GetNextSibling(tv_, n)) pc = n;   // This PC is the last root
@@ -176,8 +170,7 @@ void FolderTree::startWorker(HTREEITEM node, std::function<void(TreeBatch&)> rea
 }
 
 void FolderTree::addChildren(const TreeBatch& batch) {
-    // A deleted node left reading_ in TVN_DELETEITEM, so a node still in there is alive; if it reuses the handle
-    // of a deleted node whose read is still in flight, the read number tells that stale batch from its own.
+    // Nodes in reading_ are alive (deleted ones leave in TVN_DELETEITEM); the read number spots a reused handle.
     auto it = reading_.find(batch.node);
     if (it == reading_.end() || it->second != batch.read) return;
     reading_.erase(it);
@@ -187,9 +180,7 @@ void FolderTree::addChildren(const TreeBatch& batch) {
         return;
     }
     if (batch.children.empty()) {
-        // The arrow stays when nothing is known (the read failed) and on Bookmarks, which is empty on a first
-        // run and filled by the user while the app runs (5.6); the next expand reads again. Other nodes are
-        // now known to have no subfolders (5.5).
+        // Keep the arrow when the read failed, and on Bookmarks (filled later, 5.6); others have no subfolders.
         if (batch.failed || batch.node == TreeView_GetRoot(tv_)) return;
         TVITEMW item{};
         item.mask = TVIF_CHILDREN;
