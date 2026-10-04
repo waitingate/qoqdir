@@ -1,11 +1,6 @@
-# Builds qoqdir.exe on a hosted Windows runner and runs every check the spec names:
-# unit tests, the in-process self-test (under the popup watch) and the command-line checks.
-# The exe, the self-test log and the popup-watch output are kept as artifacts.
-#
-# GitHub's Windows runners run the job in an interactive desktop session, so the self-test
-# can open its window, use the clipboard, the Recycle Bin and Windows' copy engine. A step
-# that fails here but passes on a PC usually means one of those was missing on the runner
-# (see the popup-watch output and the log), not a bug in the code.
+# Builds qoqdir.exe on a Windows runner and runs the unit tests, the self-test (with the
+# popup watch) and the command-line checks. The exe and the logs are kept as artifacts.
+# A step that fails here but passes on a PC probably hit something the runner lacks.
 name: build
 
 on:
