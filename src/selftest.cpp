@@ -1145,19 +1145,22 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
             selfTest_->note = L"copy " + std::to_wstring(int(nowMs() - t0)) + L" ms";
         },
         [=, this] { return clipboardFiles().size() == 10000; });
+    // Files that exist only in the list, all selected: a copy that asked the disk about each one would find nothing.
+    auto showGhosts = [=, this] {
+        Listing l;
+        l.path = path(L"big");
+        for (int i = 0; i < 3; ++i) {
+            Item it;
+            it.name = L"ghost " + std::to_wstring(i) + L".dat";
+            it.attrs = FILE_ATTRIBUTE_ARCHIVE;   // as FindFirstFile reports a plain file
+            l.items.push_back(it);
+        }
+        list_.setListing(std::move(l));
+        list_.selectAll();
+    };
     add(L"copying takes the files from the list, not from the disk",
         [=, this] {
-            // Files that exist only in the list: a copy that asked the disk about each one would find nothing.
-            Listing l;
-            l.path = path(L"big");
-            for (int i = 0; i < 3; ++i) {
-                Item it;
-                it.name = L"ghost " + std::to_wstring(i) + L".dat";
-                it.attrs = FILE_ATTRIBUTE_ARCHIVE;   // as FindFirstFile reports a plain file
-                l.items.push_back(it);
-            }
-            list_.setListing(std::move(l));
-            list_.selectAll();
+            showGhosts();
             copyToClipboard(wnd_, list_.dir(), list_.selectedItems(), false);
         },
         [=, this] { return clipboardFiles().size() == 3; });
@@ -1175,18 +1178,21 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
                 }
             });
             WaitForSingleObject(held, 5000);
+            // Selected again and read at once: a refresh of the folder in the meantime would replace the files
+            // in the list, or clear the message.
+            showGhosts();
             setMessage(L"");
             SetFocus(list_.hwnd());
-            selfTestKey('C', true);   // the 3 files still selected
+            selfTestKey('C', true);
+            selfTest_->note = L"status: " + statusMessage();
             SetEvent(release);
             holder.join();
             CloseHandle(held);
             CloseHandle(release);
         },
         [=, this] {
-            selfTest_->note = L"status: " + statusMessage();
-            return statusMessage().find(L"copied") == std::wstring::npos &&
-                   statusMessage().find(L"clipboard") != std::wstring::npos;
+            return selfTest_->note.find(L"copied") == std::wstring::npos &&
+                   selfTest_->note.find(L"clipboard") != std::wstring::npos;
         });
 
     SetTimer(wnd_, kSelfTestTimer, 50, nullptr);

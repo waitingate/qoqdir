@@ -23,6 +23,7 @@ struct ViewState {                  // what to select and scroll to after a fold
     bool rename = false;            // start renaming 'focus'
 
     static ViewState selecting(const std::wstring& name) { return {{name}, name}; }
+    bool asks() const { return !select.empty() || !focus.empty(); }   // for an item, as a rename or new folder does
 };
 
 // Where a load was started from, when that changes what happens if it is not a folder.
@@ -153,7 +154,6 @@ private:
 
     struct Pending {
         UINT generation = 0;
-        std::wstring path;
         Nav nav = Nav::New;
         ViewState view;
         int tabId = 0;

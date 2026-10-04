@@ -686,7 +686,7 @@ void App::open(const std::wstring& path, Nav nav, ViewState view, Origin origin)
     if (nav != Nav::Refresh && !filter.empty()) SetWindowTextW(filter_, L"");
     UINT generation = ++generation_;
     g_newestLoad = generation;
-    pending_ = {generation, path, nav, std::move(view), tab().id, std::move(origin), std::move(filter)};
+    pending_ = {generation, nav, std::move(view), tab().id, std::move(origin), std::move(filter)};
     SetTimer(wnd_, kLoadingTimer, 250, nullptr);   // say "Loading..." only if it is slow
     if (nav == Nav::Switch) {
         // The tab strip already shows the new tab: show its location at once instead of the old tab's list
@@ -733,9 +733,7 @@ void App::onLoaded(Listing&& listing, UINT generation) {
         // as the timer does; applying it would move the rows under the box, and Enter would
         // rename whatever row sits there now. What it was asked to select (a new folder, a renamed item)
         // is kept for that retry, unless a newer request is queued already (refresh() during this load).
-        bool asked = !p.view.select.empty() || !p.view.focus.empty();
-        if (asked && queuedView_.view.select.empty() && queuedView_.view.focus.empty())
-            queuedView_ = {list_.dir(), std::move(p.view)};
+        if (p.view.asks() && !queuedView_.view.asks()) queuedView_ = {list_.dir(), std::move(p.view)};
         queueRefresh();
         return;
     }
@@ -769,13 +767,13 @@ void App::onLoaded(Listing&& listing, UINT generation) {
 
     ViewState view = std::move(p.view);
     // An item a rename, delete or new folder asked for (a tab switch restores the scroll exactly instead).
-    bool requested = p.nav == Nav::Refresh && (!view.select.empty() || !view.focus.empty());
+    bool requested = p.nav == Nav::Refresh && view.asks();
     bool moved = p.nav == Nav::New || p.nav == Nav::Back || p.nav == Nav::Forward;
     if (p.nav == Nav::Refresh && sameFolder) {
-        if (view.select.empty() && view.focus.empty()) view = currentView();
+        if (!view.asks()) view = currentView();
         if (view.top < 0) view.top = list_.topRow();
     }
-    if (moved && view.select.empty() && view.focus.empty()) {
+    if (moved && !view.asks()) {
         // Going up (or back to a parent) selects the folder you came from.
         std::wstring child = childToward(listing.path, old);
         if (!child.empty()) view = ViewState::selecting(child);
@@ -875,13 +873,13 @@ void App::refresh(ViewState view) {
     // the change the caller made, so what it wants selected (the new, renamed or next item)
     // may be missing from it: keep it for a queued refresh, as after a change notification.
     if (pending_.generation) {
-        if (!view.select.empty() || !view.focus.empty()) {
+        if (view.asks()) {
             queuedView_ = {list_.dir(), std::move(view)};
             queueRefresh();
         }
         return;
     }
-    if (!view.select.empty() || !view.focus.empty()) queuedView_ = {};   // newer than any request still waiting
+    if (view.asks()) queuedView_ = {};   // newer than any request still waiting
     open(tab().path, Nav::Refresh, std::move(view));
 }
 
