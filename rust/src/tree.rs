@@ -29,9 +29,10 @@ use windows::Win32::UI::WindowsAndMessaging::{
 };
 use windows::core::{PWSTR, w};
 
-use crate::folder::{Location, SortKey, is_shortcut, list_folder, sort_items};
+use crate::folder::{Location, SortKey, is_shortcut, list_folder, normalize, sort_items};
 use crate::shell::{
-    IconBatch, describe, describe_shortcut, folder_icon, known_folder, read_own_icons, system_image_list, use_explorer_theme,
+    IconBatch, describe, describe_shortcut, folder_icon, known_folder, read_own_icons, shortcut_target, system_image_list,
+    use_explorer_theme,
 };
 use crate::util::{pcwstr, send, wide};
 
@@ -60,6 +61,7 @@ pub struct FolderTree {
     paths: RefCell<HashMap<isize, Location>>, // each node's folder (or shortcut); a node leaves it when deleted
     reading: RefCell<HashMap<isize, u32>>,    // nodes whose subfolders are being read, by read number
     hover_since: Cell<u64>,                   // when a drag came over the node it lights up
+    drop_folder: RefCell<Option<Location>>,   // and where a drop on that node goes
 }
 
 /// Subfolders of a location (This PC: the drives), and its shortcuts if asked, into `batch`. Worker thread: may block.
@@ -98,6 +100,26 @@ fn read_children(batch: &mut TreeBatch, location: &Location, shortcuts: bool) {
                 .collect();
         }
     }
+}
+
+/// The local folder a node stands for: its own, or a bookmark shortcut's target (read from the .lnk alone). None for
+/// This PC, a link to a file or a web page, and anything on the network: asking Windows about a server that is off
+/// would freeze the drag.
+fn local_folder(location: Location) -> Option<Location> {
+    let path = location.path()?.to_path_buf(); // This PC: none
+    let location = if is_shortcut(path.as_os_str()) {
+        match shortcut_target(&path)? {
+            (target, true) => normalize(&target.text()),
+            _ => return None, // a link to a file
+        }
+    } else {
+        location
+    };
+    let w: Vec<u16> = location.path()?.as_os_str().encode_wide().collect();
+    let local = w.len() >= 3
+        && w[1] == u16::from(b':')
+        && unsafe { GetDriveTypeW(pcwstr(&[w[0], w[1], w[2], 0])) } != DRIVE_REMOTE;
+    local.then_some(location)
 }
 
 /// The user folders that exist, as roots, into `batch`. Worker thread: one on a dead server can take 20-60 s.
@@ -149,6 +171,7 @@ impl FolderTree {
             paths: RefCell::new(HashMap::new()),
             reading: RefCell::new(HashMap::new()),
             hover_since: Cell::new(0),
+            drop_folder: RefCell::new(None),
         }
     }
 
@@ -330,10 +353,10 @@ impl FolderTree {
         (node != 0).then(|| self.location_of(HTREEITEM(node)))
     }
 
-    /// During a drag: the folder under the cursor that may take the drop (`None` for `pt`: the drag left or ended).
-    /// The node lights up, and a closed one opens after 0.7 s (Windows asks again many times a second during a
-    /// drag), so the folders inside it can be reached. Only a local folder takes the drop: not This PC, not a
-    /// bookmark shortcut, and nothing on the network (a server that is off would freeze the drag).
+    /// During a drag: the local folder under the cursor, or a bookmark shortcut's, that may take the drop (`None` for
+    /// `pt`: the drag left or ended). The node lights up, and a closed one opens after 0.7 s (Windows asks again many
+    /// times a second during a drag), so the folders inside it can be reached. Where a drop there goes is worked out
+    /// once, as it lights up.
     pub fn drop_target(&self, pt: Option<POINT>) -> Option<Location> {
         let node = pt.map_or(0, |pt| {
             let mut hit = TVHITTESTINFO { pt, ..Default::default() };
@@ -346,19 +369,12 @@ impl FolderTree {
         if node != send(self.hwnd, TVM_GETNEXTITEM, TVGN_DROPHILITE as usize, 0) {
             send(self.hwnd, TVM_SELECTITEM, TVGN_DROPHILITE as usize, node);
             self.hover_since.set(now);
+            let folder = if node == 0 { None } else { local_folder(self.location_of(HTREEITEM(node))) };
+            *self.drop_folder.borrow_mut() = folder;
         } else if node != 0 && now - self.hover_since.get() >= 700 {
             send(self.hwnd, TVM_EXPAND, TVE_EXPAND.0 as usize, node); // nothing once it is open
         }
-        if node == 0 {
-            return None;
-        }
-        let location = self.location_of(HTREEITEM(node));
-        let path = location.path()?; // This PC
-        let w: Vec<u16> = path.as_os_str().encode_wide().collect();
-        let local = w.len() >= 3
-            && w[1] == u16::from(b':')
-            && unsafe { GetDriveTypeW(pcwstr(&[w[0], w[1], w[2], 0])) } != DRIVE_REMOTE;
-        (local && !is_shortcut(path.as_os_str())).then_some(location)
+        self.drop_folder.borrow().clone()
     }
 
     /// Returns the folder to open when the user chose one.

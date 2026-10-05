@@ -1065,6 +1065,16 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
         },
         [=, this] { return exists(path(L"Bookmarks\\two\\file1.txt")) && !TreeView_GetDropHilight(tree_.hwnd()); },
         10000);
+    add(L"a bookmark shortcut to a folder on this PC takes a drop into that folder",
+        [=, this] {
+            POINTL shortcut = nodePoint(TreeView_GetNextSibling(tree_.hwnd(), two()));   // "sub", to the folder sub
+            Com<IDataObject> data = dataObject(wnd_, path(L"renamed.txt"));   // not in sub yet: Windows would ask
+            dragEffect = DROPEFFECT_COPY;
+            treeDrop_->DragEnter(data.get(), MK_LBUTTON, shortcut, &dragEffect);
+            DWORD effect = DROPEFFECT_COPY;
+            treeDrop_->Drop(data.get(), MK_LBUTTON, shortcut, &effect);
+        },
+        [=, this] { return dragEffect == DROPEFFECT_COPY && exists(path(L"sub\\renamed.txt")); }, 10000);
     backHome(L"(back to the test folder)");
 
     // Saved tabs: Ctrl+S writes a shortcut per tab in Bookmarks\Tabs, Ctrl+O opens their folders as tabs.

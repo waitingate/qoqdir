@@ -6,6 +6,17 @@
 
 namespace {
 
+// The local folder a node stands for: its own, or a bookmark shortcut's target (read from the .lnk alone). None for
+// This PC, a link to a file or a web page, and anything on the network: asking Windows about a server that is off
+// would freeze the drag.
+std::optional<std::wstring> localFolder(std::wstring path) {
+    bool folder = true;
+    if (isShortcut(path)) path = normalizePath(shortcutTarget(path, &folder).value_or(L""));
+    bool local = folder && path.size() >= 3 && path[1] == L':' &&
+                 GetDriveTypeW(path.substr(0, 3).c_str()) != DRIVE_REMOTE;
+    return local ? std::optional(path) : std::nullopt;
+}
+
 // Subfolders of `dir` ("" = the drives), and its shortcuts if asked, into `batch`. Worker thread: may block.
 void readChildren(TreeBatch& batch, const std::wstring& dir, bool shortcuts) {
     std::vector<TreeBatch::Child>& children = batch.children;
@@ -207,8 +218,7 @@ bool FolderTree::pathAt(POINT pt, std::wstring* path) const {
 }
 
 // The node under the cursor lights up, and a closed one opens after 0.7 s (Windows asks again many times a second
-// during a drag), so the folders inside it can be reached. Only a local folder takes the drop: not This PC, not a
-// bookmark shortcut, and nothing on the network (a server that is off would freeze the drag).
+// during a drag), so the folders inside it can be reached. Where a drop there goes is worked out once, as it lights up.
 std::optional<std::wstring> FolderTree::dropTarget(const POINT* screenPt) {
     HTREEITEM node = nullptr;
     if (screenPt) {
@@ -220,14 +230,11 @@ std::optional<std::wstring> FolderTree::dropTarget(const POINT* screenPt) {
     if (node != TreeView_GetDropHilight(tv_)) {
         TreeView_SelectDropTarget(tv_, node);
         hoverSince_ = GetTickCount64();
+        dropFolder_ = node ? localFolder(pathOf(node)) : std::nullopt;
     } else if (node && GetTickCount64() - hoverSince_ >= 700) {
         TreeView_Expand(tv_, node, TVE_EXPAND);   // nothing once it is open
     }
-    if (!node) return std::nullopt;
-    const std::wstring& path = pathOf(node);
-    bool local = path.size() >= 3 && path[1] == L':' && GetDriveTypeW(path.substr(0, 3).c_str()) != DRIVE_REMOTE;
-    if (!local || isShortcut(path)) return std::nullopt;
-    return path;
+    return dropFolder_;
 }
 
 bool FolderTree::onNotify(NMHDR* nm, std::wstring* open) {

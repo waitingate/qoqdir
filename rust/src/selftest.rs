@@ -1636,6 +1636,24 @@ impl App {
             |a| exists(&p("Bookmarks\\two\\file1.txt")) && a.drop_highlight() == 0,
         )
         .wait(10000);
+        s.add(
+            "a bookmark shortcut to a folder on this PC takes a drop into that folder",
+            |a| {
+                let shortcut = a.node_point(a.tree_next(a.tree_two())); // "sub", to the folder sub
+                let data = data_object_at(a.wnd, &Location::dir(p("renamed.txt"))); // not in sub yet: Windows would ask
+                let mut effect = DROPEFFECT_COPY;
+                if let (Some(data), Some(target)) = (data, a.tree_drop.borrow().clone()) {
+                    unsafe {
+                        let _ = target.DragEnter(&data, MK_LBUTTON, shortcut, &mut effect);
+                        EFFECT.set(effect.0);
+                        effect = DROPEFFECT_COPY;
+                        let _ = target.Drop(&data, MK_LBUTTON, shortcut, &mut effect);
+                    }
+                }
+            },
+            |_| EFFECT.get() == DROPEFFECT_COPY.0 && exists(&p("sub\\renamed.txt")),
+        )
+        .wait(10000);
         s.home("(back to the test folder)");
 
         // Saved tabs: Ctrl+S writes a shortcut per tab in Bookmarks\Tabs, Ctrl+O opens their folders as tabs.

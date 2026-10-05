@@ -280,11 +280,13 @@ Back, Forward and Up are disabled when they can't do anything.
 - Right-click gives Windows' context menu for that folder (Open opens here, Open
   in new tab or window opens a background tab).
 - Files dropped on a folder in the tree are copied or moved there, exactly as
-  dropping on that folder in Explorer would. The folder under the pointer lights
-  up, and a closed one opens after about 0.7 s, so the folders inside it can be
-  reached. Only folders on local drives take drops: not This PC, not a bookmark
-  shortcut, nothing on the network (a server that is off would freeze the drag),
-  and not the folder the files come from.
+  dropping on that folder in Explorer would; dropped on a bookmark shortcut to a
+  folder, they go to that folder (read from the shortcut alone). The node under
+  the pointer lights up, and a closed folder opens after about 0.7 s, so the
+  folders inside it can be reached. Only folders on local drives take drops: not
+  This PC, not a shortcut to a file or a web page, nothing on the network (a
+  server that is off would freeze the drag), and not the folder the files come
+  from.
 - Backspace in the tree goes up.
 - The splitter sets the tree's width, which is remembered.
 
@@ -568,6 +570,7 @@ result:
 47. In the tree (a drag simulated inside the process): This PC refuses a file; a
     closed folder in Bookmarks lights up, opens after a moment while the drag is
     held over it, and a drop copies the file into it.
+48. A drop on the bookmark shortcut to `sub` in the tree copies the file into `sub`.
 
 ### 7.3 Command-line checks
 Run on a copy of the exe in a temp folder:
