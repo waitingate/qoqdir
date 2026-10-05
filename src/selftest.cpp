@@ -1022,12 +1022,17 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
             selfTest_->note = L"filter " + std::to_wstring(int(keyMs)) + L" ms";
         },
         [=, this] { return keyMs < 1000 && list_.count() == 0; });
-    add(L"sorts 10,000 files by date",
+    add(L"sorts 10,000 files by each column",
         [=, this] {
             SetWindowTextW(filter_, L"");
-            t0 = nowMs();
-            list_.setSort(SortKey::Modified, false);
-            selfTest_->note = L"sort " + std::to_wstring(int(nowMs() - t0)) + L" ms";
+            selfTest_->note = L"sort";
+            for (auto [key, name] : {std::pair(SortKey::Name, L"name"), std::pair(SortKey::Type, L"type"),
+                                      std::pair(SortKey::Modified, L"date"), std::pair(SortKey::Size, L"size")}) {
+                t0 = nowMs();
+                list_.setSort(key, false);   // descending: the list is in name order already
+                selfTest_->note += std::wstring(L" ") + name + L" " + std::to_wstring(int(nowMs() - t0));
+            }
+            selfTest_->note += L" ms";
             list_.setSort(SortKey::Name, true);
         },
         [=, this] { return list_.count() == 10000; });

@@ -1534,12 +1534,16 @@ impl App {
             |a| KEY_MS.get() < 1000 && a.list.count() == 0,
         );
         s.add(
-            "sorts 10,000 files by date",
+            "sorts 10,000 files by each column",
             |a| {
                 set_text(a.filter, "");
-                let t = Instant::now();
-                a.list.set_sort(SortKey::Modified, false);
-                note(format!("sort {} ms", t.elapsed().as_millis()));
+                let mut text = String::from("sort");
+                for (key, name) in [(SortKey::Name, "name"), (SortKey::Type, "type"), (SortKey::Modified, "date"), (SortKey::Size, "size")] {
+                    let t = Instant::now();
+                    a.list.set_sort(key, false); // descending: the list is in name order already
+                    text += &format!(" {name} {}", t.elapsed().as_millis());
+                }
+                note(text + " ms");
                 a.list.set_sort(SortKey::Name, true);
             },
             |a| a.list.count() == 10000,

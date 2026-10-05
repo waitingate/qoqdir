@@ -1,6 +1,7 @@
 // Tests for the path and folder rules. Run: ctest --test-dir build  (or build\unit_tests.exe)
 #include "folder.h"
 
+#include <algorithm>
 #include <cstdio>
 
 static int failures = 0;
@@ -202,6 +203,22 @@ int main() {
         v[2].type = L"Microsoft Word Document";
         sortItems(v, SortKey::Type, true);
         CHECK_EQ(names(v), L"a.zip,c.docx,b.txt");
+    }
+
+    // sortItems orders names exactly as Windows' StrCmpLogicalW (Explorer) does, tricky names included
+    {
+        std::vector<std::wstring> want = {L"file10", L"file2", L"File1", L"file01", L"file 1", L"file_1", L"file-1",
+            L"file1a", L"a", L"_a", L"(a)", L"!a", L"a b", L"New folder (10)", L"New folder", L"New folder (2)", L"v1.10",
+            L"v1.2.9", L"報告10.pdf", L"報告2.pdf", L"１２", L"äbc", L"abc", L"straße",
+            L"strasse", L"\U0001F600.jpg", L"12345678901234567891", L"12345678901234567890", L"IMG_0100.JPG", L"img_0099.jpg"};
+        std::vector<Item> v;
+        for (const std::wstring& n : want) v.push_back(file(n.c_str()));
+        sortItems(v, SortKey::Name, true);
+        std::stable_sort(want.begin(), want.end(),
+                         [](const std::wstring& a, const std::wstring& b) { return StrCmpLogicalW(a.c_str(), b.c_str()) < 0; });
+        std::wstring expected;
+        for (const std::wstring& n : want) expected += (expected.empty() ? L"" : L",") + n;
+        CHECK_EQ(names(v), expected);
     }
 
     // rowAfterDeleting: the item that takes the first deleted one's place, else the one before it

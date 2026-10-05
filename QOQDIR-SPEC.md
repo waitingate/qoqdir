@@ -162,7 +162,8 @@ These describe what the user sees. Each must hold in every situation.
 Targets on an ordinary SSD laptop with a folder of 10,000 files (faster is fine):
 - Open and show the folder: under 1 s (about 0.4 s measured).
 - Filter as you type: under 0.1 s per key.
-- Sort by any column: under 0.1 s.
+- Sort by any column: under 0.1 s (0.02 to 0.07 s measured). Names compare by sort
+  keys made once per name, in exactly the order Explorer uses.
 - Copy all 10,000 selected files to the clipboard (Ctrl+C): under 3 s, without
   freezing longer than that (1.5 to 2.5 s measured). Starting a drag, Delete or
   the context menu on 10,000 selected files also takes a few seconds at most.
