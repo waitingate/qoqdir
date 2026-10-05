@@ -407,8 +407,6 @@ void App::onTimer(UINT_PTR id) {
             setMessage(L"Loading…");
             loadMessageShown_ = true;
         }
-    } else if (id == kSelfTestTimer) {
-        selfTestTick();
     }
 }
 

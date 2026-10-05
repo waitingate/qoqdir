@@ -44,10 +44,9 @@ Priorities, in order:
 - Platform: Windows 10 and 11, x64, with the native Win32 UI (standard Windows
   controls, so it looks like part of Windows). No web view, no UI framework, no
   .NET, no runtime to install.
-- Language: C++ or Rust (see 3.1). Without installing anything system-wide, the
-  build machine has MinGW-w64 GCC 13 in `C:\mingw64` (with CMake and Ninja) and a
-  portable Rust toolchain (GNU target) in `C:\rust`, set up per terminal by
-  `C:\rust\rust-env.ps1`. No Visual Studio.
+- Language: C++ or Rust (see 3.1). Build tools: MinGW-w64 GCC 13 (with CMake and
+  Ninja) and, for the Rust version, a Rust toolchain for the GNU target. Both run
+  from their own folders, with nothing installed system-wide and no Visual Studio.
 - Output: one `qoqdir.exe`, statically linked, with no DLLs beside it. Its
   embedded manifest asks for per-monitor DPI awareness (v2), long paths and the
   modern common controls. Well under 1 MB.
@@ -79,8 +78,8 @@ Qoqdir was first built twice, in C++ and in Rust, with the same features and tes
   Rust's own trap is the other way round: Windows often calls back into the app
   while it is inside a Windows call, so shared state must never stay borrowed
   across one.
-- On this machine Rust's own `dlltool` fails, so the portable cargo config points
-  at `C:\mingw64\bin\dlltool.exe`. COM objects in Rust (drop targets) also need
+- Rust's own `dlltool` failed on the build machine, so the cargo config pointed
+  at MinGW's `dlltool.exe` instead. COM objects in Rust (drop targets) also need
   the `windows-core` crate. C++ needed only MinGW, static linking and the manifest
   in a resource file.
 - Two versions doubled every change and every test run, and the second version
@@ -391,7 +390,8 @@ qoqdir [switches] [folders...]
   closing quote (Windows reads `\"` as a quote); tabs aren't remembered between
   runs; keep folders you use often as shortcuts in the Bookmarks folder next to
   `qoqdir.exe`. Examples: `qoqdir .` and `qoqdir -tD:\projects -tD:\logs`.
-- `--selftest` runs the self-test (7.2). It isn't in the help.
+- `--selftest` runs the self-test (7.2) in `qoqdir-test.exe`; the exe users get
+  treats it as an unknown switch. It isn't in the help.
 
 ### 5.11 Settings (`qoqdir.ini`)
 Saved when the window closes and loaded at start:
@@ -433,12 +433,13 @@ At least these, with concrete examples:
   lists at least one drive, and a path that is a file is reported as one.
 - Spotting shortcuts by extension (`.lnk`, `.url`, any letter case).
 
-### 7.2 Self-test (`qoqdir --selftest`)
-Runs the real app on a fresh test folder in `%TEMP%` (for example
-`%TEMP%\qoqdir-selftest`) and drives it from inside the process, through the
-app's own key handling and controls, never global input. It writes one line per
-step (`ok` or `FAIL`, with timings) to a log next to that folder, and exits with
-code 0 only if every step passed. It must:
+### 7.2 Self-test (`qoqdir-test --selftest`)
+`qoqdir-test.exe` is the same compiled app as `qoqdir.exe` plus the self-test,
+which users don't get. It runs the real app on a fresh test folder in `%TEMP%`
+(for example `%TEMP%\qoqdir-selftest`) and drives it from inside the process,
+through the app's own key handling and controls, never global input. It writes
+one line per step (`ok` or `FAIL`, with timings) to a log next to that folder,
+and exits with code 0 only if every step passed. It must:
 - never take the focus (the window opens without activating), never beep, never
   show a window that waits for an answer, and never open an Explorer window
   (Windows' copy progress may flash up during copy steps);

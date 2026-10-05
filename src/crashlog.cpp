@@ -10,7 +10,7 @@
 // Spec 4.10: an internal bug stops the program and %TEMP%\qoqdir-crash.log says why. Hooks: CPU faults
 // (onCrash), failed _GLIBCXX_ASSERTIONS checks (at the bottom) and abort() (onAbort). Lines are built in
 // stack buffers and written with Win32 calls: the heap may be what broke. Addresses are exe offsets (ASLR);
-// to name one, rebuild with -g and without -s, then: addr2line -e qoqdir.exe 0x140000000+offset
+// to name one, use the debug copy release.ps1 keeps: addr2line -e qoqdir-<version>-debug.exe 0x140000000+offset
 
 namespace {
 

@@ -1,10 +1,10 @@
-# Runs "qoqdir.exe --selftest" and lists every new window that appears meanwhile, from ANY
+# Runs "qoqdir-test.exe --selftest" and lists every new window that appears meanwhile, from ANY
 # program, so a Windows error window caused by the app (an Explorer "can't access" window, a
 # dialog) is caught. It only reports: it never closes or touches any window. Other programs you
 # use during the run show up too; only Qoqdir's own windows (and Windows' copy-progress windows
 # from the test's own process) are expected.
 #
-#   powershell -File tests\watch-windows.ps1 -Exe build\qoqdir.exe
+#   powershell -File tests\watch-windows.ps1 -Exe build\qoqdir-test.exe
 #   powershell -File tests\watch-windows.ps1 -Exe rust\target\release\qoqdir.exe -Log $env:TEMP\qoqdir-rs-selftest.log
 param([Parameter(Mandatory)][string]$Exe, [string]$Log = (Join-Path $env:TEMP 'qoqdir-selftest.log'))
 

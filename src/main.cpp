@@ -39,6 +39,9 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int) {
         LocalFree(argv);
     }
     CommandLine cmd = parseCommandLine(args);   // "qoqdir ." is resolved here, against the terminal's folder
+#ifndef QOQDIR_SELFTEST
+    if (cmd.selfTest) cmd.error = L"Unknown switch: --selftest";   // only qoqdir-test.exe has the self-test
+#endif
     // Then leave it: a program's working folder cannot be renamed, deleted or ejected. Explorer's is System32.
     wchar_t sys[MAX_PATH];
     if (GetSystemDirectoryW(sys, MAX_PATH)) SetCurrentDirectoryW(sys);
@@ -55,11 +58,15 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int) {
         INITCOMMONCONTROLSEX icc{sizeof icc, ICC_LISTVIEW_CLASSES | ICC_TREEVIEW_CLASSES | ICC_TAB_CLASSES |
                                                  ICC_BAR_CLASSES | ICC_STANDARD_CLASSES};
         InitCommonControlsEx(&icc);
+#ifdef QOQDIR_SELFTEST
         if (cmd.selfTest) cmd.folders = {App::prepareSelfTest()};
+#endif
 
         App app;
         if (app.create(instance, cmd, !cmd.selfTest)) {
+#ifdef QOQDIR_SELFTEST
             if (cmd.selfTest) app.startSelfTest(cmd.folders[0], cmd.folders[0] + L".log");
+#endif
             MSG msg;
             while (GetMessageW(&msg, nullptr, 0, 0) > 0) {
                 if (app.handleKey(msg)) continue;

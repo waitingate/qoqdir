@@ -24,9 +24,6 @@ struct App::SelfTest {
     int failures = 0;
 };
 
-App::App() = default;
-App::~App() = default;
-
 namespace {
 
 std::wstring testRoot() {
@@ -125,7 +122,7 @@ void App::selfTestType(const std::wstring& text) {
 }
 
 void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
-    selfTest_ = std::make_unique<SelfTest>();
+    selfTest_ = std::make_shared<SelfTest>();
     SelfTest& t = *selfTest_;
     t.dir = dir;
     t.logPath = logPath;
@@ -1144,7 +1141,10 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
                    selfTest_->note.find(L"clipboard") != std::wstring::npos;
         });
 
-    SetTimer(wnd_, kSelfTestTimer, 50, nullptr);
+    // Its own timer callback, so the app's code doesn't mention the self-test (qoqdir.exe has none).
+    SetTimer(wnd_, kSelfTestTimer, 50, [](HWND w, UINT, UINT_PTR, DWORD) {
+        reinterpret_cast<App*>(GetWindowLongPtrW(w, GWLP_USERDATA))->selfTestTick();
+    });
 }
 
 // One line of the log, written at once (7.2): a hang or a crash later still leaves the steps so far.

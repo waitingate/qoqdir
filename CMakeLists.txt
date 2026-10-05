@@ -8,6 +8,8 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 if(NOT CMAKE_BUILD_TYPE)
   set(CMAKE_BUILD_TYPE Release)
 endif()
+# -O2, not CMake's -O3: as fast here (sorting and filtering are mostly Windows calls), and smaller.
+set(CMAKE_CXX_FLAGS_RELEASE "-O2 -DNDEBUG")
 
 add_compile_definitions(UNICODE _UNICODE NOMINMAX _WIN32_WINNT=0x0A00 WINVER=0x0A00)
 add_compile_options(-Wall -Wextra -Wshadow -Wconversion -Wduplicated-cond -Wduplicated-branches -Wlogical-op)
@@ -17,8 +19,10 @@ add_compile_definitions(_GLIBCXX_ASSERTIONS)
 # A signed integer overflow stops it too, instead of giving a wrong number (as in the Rust
 # version). The crash log then shows exception 0xC000001D (an illegal instruction).
 add_compile_options(-fsanitize=signed-integer-overflow -fsanitize-undefined-trap-on-error)
-# One self-contained exe: no MinGW DLLs to ship alongside it.
-add_link_options(-static $<$<CONFIG:Release>:-s>)
+# One self-contained exe: no MinGW DLLs to ship alongside it. The linker drops the code and data
+# nothing uses (most of Windows' GUID table, for one).
+add_compile_options(-ffunction-sections -fdata-sections)
+add_link_options(-static -Wl,--gc-sections $<$<CONFIG:Release>:-s>)
 
 set(WIN_LIBS ole32 oleaut32 shell32 shlwapi comctl32 uuid)
 
@@ -26,10 +30,19 @@ set(WIN_LIBS ole32 oleaut32 shell32 shlwapi comctl32 uuid)
 add_library(core STATIC src/folder.cpp)
 target_link_libraries(core PUBLIC ${WIN_LIBS})
 
-add_executable(${PROJECT_NAME} WIN32
-  src/main.cpp src/crashlog.cpp src/app.cpp src/filelist.cpp src/tree.cpp src/shell.cpp src/selftest.cpp src/app.rc)
-target_link_libraries(${PROJECT_NAME} PRIVATE core)
+# The app, compiled once and linked twice: into qoqdir.exe, what users get, and into qoqdir-test.exe, the
+# same plus the self-test. So the self-test checks the very code that ships.
+add_library(app OBJECT src/crashlog.cpp src/app.cpp src/filelist.cpp src/tree.cpp src/shell.cpp)
+target_link_libraries(app PUBLIC core)
+
+add_executable(${PROJECT_NAME} WIN32 src/main.cpp src/app.rc)
+target_link_libraries(${PROJECT_NAME} PRIVATE app)
 target_link_options(${PROJECT_NAME} PRIVATE -municode)
+
+add_executable(${PROJECT_NAME}-test WIN32 src/main.cpp src/selftest.cpp src/app.rc)
+target_compile_definitions(${PROJECT_NAME}-test PRIVATE QOQDIR_SELFTEST)
+target_link_libraries(${PROJECT_NAME}-test PRIVATE app)
+target_link_options(${PROJECT_NAME}-test PRIVATE -municode)
 
 enable_testing()
 add_executable(unit_tests tests/tests.cpp)
@@ -37,4 +50,4 @@ target_link_libraries(unit_tests PRIVATE core)
 target_include_directories(unit_tests PRIVATE src)
 add_test(NAME unit_tests COMMAND unit_tests)
 # Drives the real app in-process (opens a window briefly; never sends global keystrokes).
-add_test(NAME selftest COMMAND ${PROJECT_NAME} --selftest)
+add_test(NAME selftest COMMAND ${PROJECT_NAME}-test --selftest)

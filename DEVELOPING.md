@@ -5,7 +5,7 @@ Notes for working on the code. `QOQDIR-SPEC.md` decides what is right: section 4
 
 ## Build and test
 
-Windows only: MinGW-w64 GCC 13 in `C:\mingw64`, with CMake and Ninja on the PATH.
+Windows only: MinGW-w64 GCC 13 with CMake and Ninja on the PATH (see the README).
 
 ```powershell
 $env:PATH = 'C:\mingw64\bin;' + $env:PATH
@@ -16,8 +16,10 @@ ctest --test-dir build --output-on-failure
 
 - `build\unit_tests.exe`: paths, command line, sorting, filtering, listing. It is
   one `main()` of `CHECK` macros that prints `FAIL line N` and keeps going.
-- `build\qoqdir.exe --selftest`: about 150 steps that drive the real app. Each
-  step has a timeout and a failure doesn't stop the run. The log
+- `build\qoqdir-test.exe --selftest`: about 150 steps that drive the real app.
+  `qoqdir-test.exe` is `qoqdir.exe` plus the self-test, from the same compiled
+  app code; users get only `qoqdir.exe`. Each step has a timeout and a failure
+  doesn't stop the run. The log
   (`%TEMP%\qoqdir-selftest.log`) gets an `ok` or `FAIL` line as each step ends.
   There is no way to run a single step: run them all and read the log.
 - `tests\cli-checks.ps1` and `tests\watch-windows.ps1`, see the README.
@@ -45,7 +47,7 @@ test that fails, then fix it.
   parent folder once, because looking up each full path costs about 9 ms a file.
 - `filelist.cpp`, `tree.cpp`: the two controls.
 - `app.cpp`: main window, tabs, navigation, keys, settings. `selftest.cpp` is part
-  of `App` so it can reach private state.
+  of `App` so it can reach private state; only `qoqdir-test.exe` links it in.
 - `main.cpp`: command line, help box, message loop. It turns off Windows' "No Disk"
   box and, after reading the command line, moves the working folder to System32,
   so the start folder can still be renamed or ejected.

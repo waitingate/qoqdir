@@ -41,13 +41,11 @@ struct Tab {
 
 class App {
 public:
-    App();
-    ~App();
     // Opens the command line's folders as tabs (or the home folder).
     bool create(HINSTANCE instance, const CommandLine& cmd, bool useSettings = true);
     bool handleKey(const MSG& msg);   // called for every message before dispatch
 
-    // Self-test: drives the app from inside (no global keyboard input) and logs results.
+    // Self-test (in qoqdir-test.exe only): drives the app from inside (no global keyboard input) and logs results.
     static std::wstring prepareSelfTest();   // makes a fresh test folder, returns its path
     void startSelfTest(const std::wstring& dir, const std::wstring& logPath);
     int exitCode() const { return exitCode_; }
@@ -62,7 +60,7 @@ private:
     bool onKey(const Key& key);
 
     struct SelfTest;
-    std::unique_ptr<SelfTest> selfTest_;
+    std::shared_ptr<SelfTest> selfTest_;   // shared_ptr: it can be destroyed where SelfTest isn't defined
     void selfTestTick();
     void selfTestLog(const std::wstring& line);   // appends to the log file at once
     void selfTestKey(WPARAM vk, bool ctrl = false, bool shift = false, bool alt = false);

@@ -15,8 +15,8 @@ $env:RUSTUP_HOME = 'C:\rust\rustup'; $env:CARGO_HOME = 'C:\rust\cargo'
 C:\rust\rustup-init.exe -y --no-modify-path --profile minimal -c clippy --default-host x86_64-pc-windows-gnu --default-toolchain stable
 ```
 
-The `dlltool` that comes with Rust fails on this machine, so
-`C:\rust\cargo\config.toml` points at MinGW's:
+If the `dlltool` that comes with Rust fails (it did on the first build machine),
+point cargo at MinGW's in `C:\rust\cargo\config.toml`:
 
 ```toml
 [target.x86_64-pc-windows-gnu]

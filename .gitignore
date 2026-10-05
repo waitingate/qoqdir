@@ -1,6 +1,7 @@
 # Build output (rebuilt from source)
 /build/
 /rust/target/
+/release/
 
 # Settings written next to a test exe
 *.ini
