@@ -72,7 +72,8 @@ fn log(what: fmt::Arguments) {
     let n = {
         let mut w = std::io::Cursor::new(&mut line[..]);
         let t = unsafe { GetLocalTime() };
-        let _ = write!(w, "{:04}-{:02}-{:02} {:02}:{:02}:{:02}  ", t.wYear, t.wMonth, t.wDay, t.wHour, t.wMinute, t.wSecond);
+        let version = env!("CARGO_PKG_VERSION");
+        let _ = write!(w, "{:04}-{:02}-{:02} {:02}:{:02}:{:02}  v{version}  ", t.wYear, t.wMonth, t.wDay, t.wHour, t.wMinute, t.wSecond);
         let _ = write!(w, "{what}"); // cut short at the end of the buffer
         let _ = w.write_all(b"\r\n");
         w.position() as usize

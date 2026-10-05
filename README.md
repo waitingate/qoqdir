@@ -91,3 +91,7 @@ Nothing goes in the registry or AppData. The only other file is
 - `rust/` the same program in Rust (see its README)
 - `QOQDIR-SPEC.md` what Qoqdir must do and how it must behave
 - `DEVELOPING.md` notes for working on the code
+
+## License
+
+MIT, see `LICENSE`.

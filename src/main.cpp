@@ -1,12 +1,15 @@
 #include "app.h"
 #include "crashlog.h"
 #include "shell.h"
+#include "version.h"
 
 #include <shellapi.h>
 
 namespace {
 
 const wchar_t kUsage[] =
+    L"Version " QOQDIR_VERSION "\n"
+    L"\n"
     L"Usage: qoqdir [switches] [folders...]\n"
     L"\n"
     L"  {folder}\tOpen the folder in a tab (relative paths work: qoqdir .)\n"

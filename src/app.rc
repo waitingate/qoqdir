@@ -1,3 +1,28 @@
 #include <winuser.h>
+#include <winver.h>
+#include "version.h"
 
 CREATEPROCESS_MANIFEST_RESOURCE_ID RT_MANIFEST "app.manifest"
+
+// What the exe's Properties show (Details tab), and Task Manager's name for the process.
+VS_VERSION_INFO VERSIONINFO
+FILEVERSION QOQDIR_VERSION_NUMBERS
+PRODUCTVERSION QOQDIR_VERSION_NUMBERS
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        BLOCK "040904B0"
+        BEGIN
+            VALUE "FileDescription", "Qoqdir"
+            VALUE "FileVersion", QOQDIR_VERSION
+            VALUE "LegalCopyright", "Copyright (c) 2026 waitingate. MIT License."
+            VALUE "OriginalFilename", "qoqdir.exe"
+            VALUE "ProductName", "Qoqdir"
+            VALUE "ProductVersion", QOQDIR_VERSION
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x409, 1200
+    END
+END

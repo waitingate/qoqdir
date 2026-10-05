@@ -51,6 +51,8 @@ test that fails, then fix it.
   so the start folder can still be renamed or ejected.
 - `crashlog.cpp`: writes `%TEMP%\qoqdir-crash.log` on a crash, a failed library
   check or `abort()`.
+- `version.h`: the version, shown in the exe's Properties, the help box and each
+  crash-log line. The Rust version keeps its own in `rust/Cargo.toml`.
 
 ## How it works
 

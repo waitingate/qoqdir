@@ -26,7 +26,7 @@ use windows::Win32::UI::WindowsAndMessaging::{MB_ICONINFORMATION, MB_ICONWARNING
 
 use crate::util::{from_wide, pcwstr, wide};
 
-const USAGE: &str = "Usage: qoqdir [switches] [folders...]\n\
+const USAGE: &str = concat!("Version ", env!("CARGO_PKG_VERSION"), "\n\nUsage: qoqdir [switches] [folders...]\n\
 \n\
   {folder}\tOpen the folder in a tab (relative paths work: qoqdir .)\n\
   -t{folder}\tThe same, as a switch: -tD:\\logs  -t\"C:\\My Files\"\n\
@@ -38,7 +38,7 @@ shortcuts in the Bookmarks folder next to qoqdir.exe (shown at the top of the tr
 \n\
 Examples:\n\
   qoqdir .\n\
-  qoqdir -tD:\\projects -tD:\\logs";
+  qoqdir -tD:\\projects -tD:\\logs");
 
 /// The app's name: window title, settings file, logs. (The exe name is set in Cargo.toml.)
 pub const APP_NAME: &str = "Qoqdir";

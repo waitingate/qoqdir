@@ -1,6 +1,7 @@
 #include "crashlog.h"
 
 #include "folder.h"
+#include "version.h"
 
 #include <csignal>
 #include <cstdio>
@@ -37,8 +38,8 @@ void logCrash(const char* what) {
     SYSTEMTIME t;
     GetLocalTime(&t);
     char line[1200];
-    int n = snprintf(line, sizeof line, "%04u-%02u-%02u %02u:%02u:%02u  %s\r\n", t.wYear, t.wMonth, t.wDay, t.wHour,
-                     t.wMinute, t.wSecond, what);
+    int n = snprintf(line, sizeof line, "%04u-%02u-%02u %02u:%02u:%02u  v" QOQDIR_VERSION "  %s\r\n", t.wYear,
+                     t.wMonth, t.wDay, t.wHour, t.wMinute, t.wSecond, what);
     DWORD written = 0;
     if (n > 0) WriteFile(f, line, DWORD(n < int(sizeof line) ? n : int(sizeof line) - 1), &written, nullptr);
     CloseHandle(f);

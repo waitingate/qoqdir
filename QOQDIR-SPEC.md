@@ -185,7 +185,7 @@ Targets on an ordinary SSD laptop with a folder of 10,000 files (faster is fine)
 ### 4.10 Crashes
 - On an internal bug the program stops at once instead of running on with
   corrupt memory, and when it can, it writes the reason to
-  `%TEMP%\qoqdir-crash.log`.
+  `%TEMP%\qoqdir-crash.log`, after the time and the version.
 
 ## 5. Features
 
@@ -384,9 +384,9 @@ qoqdir [switches] [folders...]
 - `qoqdir .` opens the terminal's current folder, and `D:` means `D:\`.
 - A folder that can't be opened still gets its tab, in the "not available" state
   (4.3). That helps with network drives that connect later.
-- `-h` and `-?` show the help in a small window and exit with code 0. An unknown
-  switch (or `-t` without a folder) shows the error ("Unknown switch: -x") above
-  the help and exits with code 1.
+- `-h` and `-?` show the version and the help in a small window and exit with
+  code 0. An unknown switch (or `-t` without a folder) shows the error ("Unknown
+  switch: -x") above the help and exits with code 1.
 - The help says: quote folders with spaces, but don't end them with `\` before the
   closing quote (Windows reads `\"` as a quote); tabs aren't remembered between
   runs; keep folders you use often as shortcuts in the Bookmarks folder next to
