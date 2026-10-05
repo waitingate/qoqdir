@@ -15,8 +15,8 @@ cmake --build build
 ```
 
 That gives `build\qoqdir.exe`, statically linked. GCC's runtime checks are on, so
-a bad index stops the program and writes the reason to `%TEMP%\qoqdir-crash.log`
-instead of reading the wrong memory.
+a bad index or a signed integer overflow stops the program and writes the reason
+to `%TEMP%\qoqdir-crash.log` instead of running on with wrong data.
 
 ## Test
 

@@ -14,6 +14,9 @@ add_compile_options(-Wall -Wextra -Wshadow -Wconversion -Wduplicated-cond -Wdupl
 # A bad index (or other misuse of the standard library) stops the program with a message
 # instead of quietly reading the wrong memory.
 add_compile_definitions(_GLIBCXX_ASSERTIONS)
+# A signed integer overflow stops it too, instead of giving a wrong number (as in the Rust
+# version). The crash log then shows exception 0xC000001D (an illegal instruction).
+add_compile_options(-fsanitize=signed-integer-overflow -fsanitize-undefined-trap-on-error)
 # One self-contained exe: no MinGW DLLs to ship alongside it.
 add_link_options(-static $<$<CONFIG:Release>:-s>)
 
