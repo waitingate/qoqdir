@@ -57,7 +57,7 @@ function HelpExitCode([string]$arg) {   # starts the copy with a help/error swit
 $title = TitleAfterStart @('-tC:\Users\Public', '-tc:\users\public')
 Check ($title -eq 'Public - Qoqdir') "the same folder given twice opens one tab: '$title'"
 $ini = Join-Path $dir 'qoqdir.ini'
-Check (-not ((Test-Path $ini) -and (Select-String -Path $ini -Pattern ':\\' -Quiet))) 'qoqdir.ini holds no paths (tabs are not saved)'
+Check (-not ((Test-Path $ini) -and (Select-String -Path $ini -Pattern ':\\' -Quiet))) 'qoqdir.ini holds no paths (saved tabs are shortcuts in Bookmarks)'
 Check (Test-Path (Join-Path $dir 'Bookmarks') -PathType Container) 'a Bookmarks folder is created next to the exe'
 $homeName = Split-Path ([Environment]::GetFolderPath('UserProfile')) -Leaf
 $title = TitleAfterStart @()

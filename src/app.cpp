@@ -15,7 +15,7 @@ namespace {
 enum : int { ID_BACK = 100, ID_FORWARD, ID_UP, ID_ADDRESS, ID_FILTER, ID_TABS, ID_PLUS, ID_TREE, ID_LIST, ID_STATUS };
 enum : UINT {
     WM_APP_LOADED = WM_APP + 1, WM_APP_CHANGED, WM_APP_CLOSETAB, WM_APP_RENAME, WM_APP_ICONS, WM_APP_TREE,
-    WM_APP_MIDDLECLICK
+    WM_APP_MIDDLECLICK, WM_APP_TABS_SAVED, WM_APP_TABS_READ
 };
 
 constexpr size_t kMaxHistory = 100;
@@ -306,6 +306,15 @@ LRESULT App::onMessage(UINT msg, WPARAM wp, LPARAM lp) {
     case WM_APP_MIDDLECLICK:
         onMiddleClick(reinterpret_cast<HWND>(wp), {GET_X_LPARAM(lp), GET_Y_LPARAM(lp)});
         return 0;
+    case WM_APP_TABS_SAVED:
+        setMessage(wp ? L"Tabs saved in Bookmarks\\Tabs" : L"Can't save every tab in Bookmarks\\Tabs");
+        if (!wp) warn();
+        return 0;
+    case WM_APP_TABS_READ: {
+        std::unique_ptr<std::vector<std::wstring>> folders(reinterpret_cast<std::vector<std::wstring>*>(lp));
+        addSavedTabs(*folders);
+        return 0;
+    }
     case WM_APP_CLOSETAB:
         closeTab(int(wp));
         return 0;
@@ -537,10 +546,15 @@ void App::onTabMenu() {
     AppendMenuW(menu.get(), MF_STRING, 1, L"Duplicate tab");
     AppendMenuW(menu.get(), MF_STRING, 2, L"Close tab\tCtrl+W");
     AppendMenuW(menu.get(), MF_STRING | (tabs_.size() > 1 ? 0 : MF_GRAYED), 3, L"Close other tabs");
+    AppendMenuW(menu.get(), MF_SEPARATOR, 0, nullptr);
+    AppendMenuW(menu.get(), MF_STRING, 4, L"Save tabs\tCtrl+S");
+    AppendMenuW(menu.get(), MF_STRING, 5, L"Open saved tabs\tCtrl+O");
     int cmd = TrackPopupMenuEx(menu.get(), TPM_RETURNCMD | TPM_RIGHTBUTTON, screen.x, screen.y, wnd_, nullptr);
     if (cmd == 1) newTab(tabs_[size_t(index)].path, true);
     if (cmd == 2) closeTab(index);
     if (cmd == 3) closeOtherTabs(index);
+    if (cmd == 4) saveTabs();
+    if (cmd == 5) openSavedTabs();
 }
 
 // ---------------------------------------------------------------- keyboard
@@ -577,6 +591,8 @@ bool App::onKey(const Key& key) {
     // Anywhere in the window.
     if (ctrl && k == 'T') { newTab(tab().path, true); return true; }
     if (ctrl && k == 'W') { closeTab(active_); return true; }
+    if (ctrl && k == 'S') { saveTabs(); return true; }
+    if (ctrl && k == 'O') { openSavedTabs(); return true; }
     if (ctrl && k == VK_TAB) { switchTab((active_ + (shift ? tabCount - 1 : 1)) % tabCount); return true; }
     if (ctrl && k >= '1' && k <= '9') { switchTab(k == '9' ? tabCount - 1 : std::min(int(k - '1'), tabCount - 1)); return true; }
     if ((ctrl && k == 'L') || (alt && k == 'D') || (k == VK_F4 && !alt)) { focusEdit(address_); return true; }
@@ -1008,6 +1024,39 @@ void App::switchTab(int index) {
     active_ = index;
     showTabs();
     open(tab().path, Nav::Switch, tab().view);
+}
+
+// ---------------------------------------------------------------- saved tabs (Bookmarks\Tabs)
+
+// Both work on a worker thread: a tab's folder may be on a server that is off, and so may Bookmarks.
+void App::saveTabs() {
+    std::vector<std::wstring> folders;
+    for (const Tab& t : tabs_) folders.push_back(t.path);
+    std::thread([wnd = wnd_, dir = joinPath(tree_.bookmarks(), L"Tabs"), folders = std::move(folders)] {
+        HRESULT co = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE);
+        bool ok = saveFolderShortcuts(dir, folders);
+        if (SUCCEEDED(co)) CoUninitialize();
+        PostMessageW(wnd, WM_APP_TABS_SAVED, ok, 0);
+    }).detach();
+}
+
+void App::openSavedTabs() {
+    std::thread([wnd = wnd_, dir = joinPath(tree_.bookmarks(), L"Tabs")] {
+        HRESULT co = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE);
+        auto folders = std::make_unique<std::vector<std::wstring>>(savedFolders(dir));
+        if (SUCCEEDED(co)) CoUninitialize();
+        if (PostMessageW(wnd, WM_APP_TABS_READ, 0, reinterpret_cast<LPARAM>(folders.get()))) folders.release();
+    }).detach();
+}
+
+// After the open tabs, each folder that isn't open yet; the first of them is shown.
+void App::addSavedTabs(const std::vector<std::wstring>& folders) {
+    int first = int(tabs_.size());
+    for (const std::wstring& f : folders)
+        if (std::none_of(tabs_.begin(), tabs_.end(), [&](const Tab& t) { return samePath(t.path, f); }))
+            tabs_.push_back(makeTab(f));
+    if (first < int(tabs_.size())) switchTab(first);
+    else setMessage(folders.empty() ? L"No saved tabs in Bookmarks\\Tabs" : L"The saved tabs are open already");
 }
 
 // The folder of the tab under the cursor, for a drop. That tab lights up while hovered.

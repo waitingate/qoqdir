@@ -104,6 +104,9 @@ private:
     void closeOtherTabs(int index);
     void switchTab(int index);
     void showTabs();
+    void saveTabs();       // Ctrl+S: a shortcut per tab in Bookmarks\Tabs
+    void openSavedTabs();  // Ctrl+O: their folders as tabs after the open ones
+    void addSavedTabs(const std::vector<std::wstring>& folders);
     std::optional<std::wstring> tabDropTarget(const POINT* screenPt);
 
     // File commands

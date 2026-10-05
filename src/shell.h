@@ -51,6 +51,11 @@ void dragOut(HWND owner, const std::wstring& dir, const std::vector<Item>& items
 // A shortcut's stored target: a path, "" for This PC, or nothing (a web link, a library); 'folder' if it
 // was one. Reads only the .lnk file, never the target, so a server that is off costs nothing.
 std::optional<std::wstring> shortcutTarget(const std::wstring& lnkPath, bool* folder);
+// Saved tabs: shortcuts in 'dir' (Bookmarks\Tabs), numbered in tab order ("1 logs.lnk"); "" is This PC.
+// Saving replaces the shortcuts there and leaves anything else. Worker thread: a folder may be on a server
+// that is off.
+bool saveFolderShortcuts(const std::wstring& dir, const std::vector<std::wstring>& folders);
+std::vector<std::wstring> savedFolders(const std::wstring& dir);   // the folders they lead to, in order
 
 // Posts 'msg' to 'owner' when something in 'dir' changes, or 'dir' itself goes; stops when destroyed.
 class FolderWatch {

@@ -53,8 +53,8 @@ use windows::Win32::UI::WindowsAndMessaging::{
 };
 use windows::core::{GUID, HRESULT, IUnknown, Interface, PCSTR, PCWSTR, PSTR, Ref, Result, implement, s, w};
 
-use crate::folder::{Item, Location, extension_of};
-use crate::util::{OwnedMenu, Pidl, from_wide, key_down, pcwstr, wide};
+use crate::folder::{Item, Location, SortKey, extension_of, list_folder, normalize, sort_items};
+use crate::util::{OwnedMenu, Pidl, copy_to, from_wide, key_down, pcwstr, wide};
 
 const CMIC_MASK_UNICODE: u32 = 0x4000; // not in the windows crate
 const FIRST_CMD: u32 = 1;
@@ -237,6 +237,18 @@ impl IFileSystemBindData_Impl for FindData_Impl {
     }
 }
 
+/// A bind context that hands the shell what the returned find data holds. STGM_CREATE tells the shell to take
+/// it as given instead of checking the disk.
+fn find_data_bind() -> Result<(IFileSystemBindData, IBindCtx)> {
+    let known: IFileSystemBindData = FindData(RefCell::new(WIN32_FIND_DATAW::default())).into();
+    unsafe {
+        let bind = CreateBindCtx(0)?;
+        bind.SetBindOptions(&BIND_OPTS { cbStruct: size_of::<BIND_OPTS>() as u32, grfMode: STGM_CREATE.0, ..Default::default() })?;
+        bind.RegisterObjectParam(STR_FILE_SYS_BIND_DATA, &known)?;
+        Ok((known, bind))
+    }
+}
+
 /// The same for listed items of one folder: opened once, each item parsed from its own find data. Full
 /// paths took ~9 ms per file (90 s for 10,000), plain names a disk query each (spec 4.7).
 fn ui_object_of<T: Interface>(owner: HWND, dir: &Location, items: &[Item]) -> Result<T> {
@@ -250,11 +262,7 @@ fn ui_object_of<T: Interface>(owner: HWND, dir: &Location, items: &[Item]) -> Re
         let desktop = SHGetDesktopFolder()?;
         let folder: IShellFolder =
             if (*dir_pidl.0).mkid.cb == 0 { desktop } else { desktop.BindToObject(dir_pidl.0, None::<&IBindCtx>)? };
-        // STGM_CREATE tells the shell to take the find data as given instead of checking the disk.
-        let known: IFileSystemBindData = FindData(RefCell::new(WIN32_FIND_DATAW::default())).into();
-        let bind = CreateBindCtx(0)?;
-        bind.SetBindOptions(&BIND_OPTS { cbStruct: size_of::<BIND_OPTS>() as u32, grfMode: STGM_CREATE.0, ..Default::default() })?;
-        bind.RegisterObjectParam(STR_FILE_SYS_BIND_DATA, &known)?;
+        let (known, bind) = find_data_bind()?;
         let mut owned: Vec<Pidl> = Vec::with_capacity(items.len());
         for it in items {
             let mut fd = WIN32_FIND_DATAW {
@@ -541,6 +549,66 @@ pub fn shortcut_target(lnk: &Path) -> Option<(Location, bool)> {
         let pc = pidl_from(&Location::ThisPc)?;
         ILIsEqual(pidl.0, pc.0).as_bool().then_some((Location::ThisPc, true))
     }
+}
+
+/// Saved tabs: shortcuts in `dir` (Bookmarks\Tabs), numbered in tab order ("1 logs.lnk"); This PC too.
+/// Saving replaces the shortcuts there and leaves anything else. Worker thread: a folder may be on a server
+/// that is off.
+pub fn save_folder_shortcuts(dir: &Path, folders: &[Location]) -> bool {
+    let _ = std::fs::create_dir(dir); // fails harmlessly if it exists
+    for it in list_folder(&Location::dir(dir), true, None).items {
+        if !it.is_dir() && extension_of(&it.name) == ".lnk" {
+            let _ = std::fs::remove_file(dir.join(&it.name));
+        }
+    }
+    // Each folder's item is made from its path and find data that say "folder": the shortcut then says so
+    // too, even for a folder that can't be reached now.
+    let Ok((known, bind)) = find_data_bind() else { return false };
+    let mut ok = true;
+    for (i, folder) in folders.iter().enumerate() {
+        let name = folder.display_name();
+        let clean: Vec<u16> = wide(&name).into_iter().filter(|c| !r#"\/:*?"<>|"#.encode_utf16().any(|b| b == *c)).collect();
+        let mut file = OsString::from(format!("{} ", i + 1));
+        file.push(from_wide(&clean));
+        file.push(".lnk");
+        let save = || -> Result<()> {
+            unsafe {
+                let pidl = match folder {
+                    Location::ThisPc => pidl_from(folder).ok_or(E_FAIL)?,
+                    Location::Dir(path) => {
+                        let mut fd = WIN32_FIND_DATAW { dwFileAttributes: FILE_ATTRIBUTE_DIRECTORY.0, ..Default::default() };
+                        copy_to(fd.cFileName.as_mut_ptr(), MAX_PATH as i32, &name);
+                        known.SetFindData(&fd)?;
+                        let mut raw: *mut ITEMIDLIST = std::ptr::null_mut();
+                        SHParseDisplayName(pcwstr(&wide(path)), &bind, &mut raw, 0, None)?;
+                        Pidl(raw)
+                    }
+                };
+                let link: IShellLinkW = CoCreateInstance(&ShellLink, None, CLSCTX_INPROC_SERVER)?;
+                link.SetIDList(pidl.0)?;
+                link.cast::<IPersistFile>()?.Save(pcwstr(&wide(dir.join(&file))), true)
+            }
+        };
+        ok &= save().is_ok();
+    }
+    ok
+}
+
+/// The folders the saved tabs' shortcuts lead to, in order. Worker thread.
+pub fn saved_folders(dir: &Path) -> Vec<Location> {
+    let mut listing = list_folder(&Location::dir(dir), true, None);
+    sort_items(&mut listing.items, SortKey::Name, true);
+    listing
+        .items
+        .iter()
+        .filter(|it| extension_of(&it.name) == ".lnk")
+        .filter_map(|it| shortcut_target(&dir.join(&it.name)))
+        .filter(|(_, folder)| *folder)
+        .map(|(target, _)| match target {
+            Location::Dir(path) => normalize(path.as_os_str()),
+            this_pc => this_pc,
+        })
+        .collect()
 }
 
 /// Posts `msg` to `owner` when something in `dir` changes, or `dir` itself goes; stops when dropped.

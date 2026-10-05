@@ -32,16 +32,22 @@ PATH to type just `qoqdir`.
 
 ## Bookmarks
 
-Tabs aren't saved between runs. Keep shortcuts to the folders you use often in
-the `Bookmarks` folder next to `qoqdir.exe`. It is created if missing and shown at
-the top of the tree. Alt+drag a folder into it, or copy a folder and use Paste
-shortcut there. Rename or delete bookmarks like any file.
+Keep shortcuts to the folders you use often in the `Bookmarks` folder next to
+`qoqdir.exe`. It is created if missing and shown at the top of the tree. Alt+drag
+a folder into it, or copy a folder and use Paste shortcut there. Rename or delete
+bookmarks like any file.
+
+Tabs aren't saved by themselves. Ctrl+S (or "Save tabs" on a tab's right-click
+menu) saves them as shortcuts in `Bookmarks\Tabs`, replacing the ones there, and
+Ctrl+O ("Open saved tabs") opens them again after your open tabs. To keep a set,
+rename that folder.
 
 ## Keys
 
 | Keys | Action |
 |---|---|
 | Ctrl+T / Ctrl+W | new tab / close tab |
+| Ctrl+S / Ctrl+O | save the tabs / open the saved tabs |
 | Ctrl+Tab, Ctrl+1 to 9 | switch tab |
 | Ctrl+L, Alt+D, F4 | address bar |
 | Ctrl+F, F3 | filter box (or just start typing in the list) |

@@ -952,6 +952,42 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
         });
     backHome(L"(back to the test folder)");
 
+    // Saved tabs: Ctrl+S writes a shortcut per tab in Bookmarks\Tabs, Ctrl+O opens their folders as tabs.
+    add(L"Ctrl+S saves each tab as a shortcut in Bookmarks\\Tabs, in tab order, replacing the old ones",
+        [=, this] {
+            CreateDirectoryW(path(L"Bookmarks\\Tabs").c_str(), nullptr);
+            makeShortcut(path(L"Bookmarks\\Tabs\\old.lnk"), path(L"sub"));   // an earlier save: replaced
+            writeFile(path(L"Bookmarks\\Tabs\\keep.txt"));                   // not a shortcut: kept
+            newTab(L"", false);
+            newTab(path(L"sub"), false);   // tabs: the test folder, sub, This PC
+            selfTestKey('S', true);
+        },
+        [=, this] {
+            Listing saved = listFolder(path(L"Bookmarks\\Tabs"), true);
+            sortItems(saved.items, SortKey::Name, true);
+            if (saved.items.size() != tabs_.size() + 1 || saved.items.back().name != L"keep.txt") return false;
+            for (size_t i = 0; i < tabs_.size(); ++i) {
+                bool folder = false;
+                auto target = shortcutTarget(path(L"Bookmarks\\Tabs\\" + saved.items[i].name), &folder);
+                if (!target || !folder || !samePath(normalizePath(*target), tabs_[i].path)) return false;
+            }
+            return true;
+        });
+    add(L"Ctrl+O opens the saved tabs after the open ones, skips any already open, and shows the first new one",
+        [=, this] {
+            closeTab(2);
+            closeTab(1);
+            selfTestKey('O', true);
+        },
+        [=, this] { return tabs_.size() == 3 && samePath(tabs_[1].path, path(L"sub")) && tabs_[2].path.empty() && at(path(L"sub")); });
+    add(L"(close those tabs and remove the saved ones)",
+        [=, this] {
+            closeTab(2);
+            closeTab(1);
+            deleteTree(path(L"Bookmarks\\Tabs"));
+        },
+        [=, this] { return tabs_.size() == 1 && at(dir); });
+
     // Speed: a folder with 10,000 files.
     add(L"loads a 10,000-file folder",
         [=, this] {

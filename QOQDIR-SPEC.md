@@ -28,7 +28,7 @@ Priorities, in order:
 - Keep it small. One clear mechanism is better than several special cases. If a
   rule here would need a lot of code, look for a simpler rule first.
 - Don't add features that aren't in this document (no themes, plugins, previews,
-  search indexes, saved sessions).
+  search indexes, tabs that come back by themselves).
 - Let Windows do the file work. Copy, move, delete, rename, paste, context menus,
   properties, Open With, icons and type names all come from the Windows shell, so
   they behave exactly like Explorer: progress windows, conflict questions, undo,
@@ -301,7 +301,8 @@ Back, Forward and Up are disabled when they can't do anything.
 - Close a tab with Ctrl+W, a middle-click on it, or its context menu. The last
   tab can't be closed.
 - Tab context menu: "Duplicate tab", "Close tab   Ctrl+W", "Close other tabs"
-  (disabled when there is only one).
+  (disabled when there is only one), then "Save tabs   Ctrl+S" and "Open saved
+  tabs   Ctrl+O".
 - Switch with a click, Ctrl+Tab and Ctrl+Shift+Tab (they wrap around), Ctrl+1 to
   Ctrl+8 (that tab, or the last), Ctrl+9 (the last tab).
 - Drop onto a tab: dragging files over a tab highlights it, and dropping copies or
@@ -309,7 +310,12 @@ Back, Forward and Up are disabled when they can't do anything.
   would (Shift, Ctrl and Alt work as usual). Not onto This PC, not onto a tab
   whose folder hasn't loaded here yet or failed, and not back into the folder the
   files come from.
-- Tabs aren't remembered between runs (5.10).
+- Tabs aren't remembered between runs by themselves. Ctrl+S saves them as
+  shortcuts in `Bookmarks\Tabs`, numbered in tab order ("1 logs.lnk"); it replaces
+  the shortcuts there and leaves anything else. Ctrl+O opens their folders as tabs
+  after the open ones, skips any already open, and shows the first new one.
+  Renaming the folder keeps a set. Both work on a worker thread, since a folder
+  may be on a server that is off.
 
 ### 5.8 File operations (all done by Windows)
 - Copy, cut and paste: Ctrl+C, Ctrl+X, Ctrl+V. The clipboard works with Explorer
@@ -340,6 +346,7 @@ Anywhere in the window:
 | Keys | Action |
 |---|---|
 | Ctrl+T / Ctrl+W | new tab / close tab |
+| Ctrl+S / Ctrl+O | save the tabs / open the saved tabs |
 | Ctrl+Tab, Ctrl+Shift+Tab, Ctrl+1 to 9 | switch tab |
 | Ctrl+L, Alt+D, F4 | address bar (text selected) |
 | Ctrl+F, F3 | filter box |
@@ -388,9 +395,9 @@ qoqdir [switches] [folders...]
   code 0. An unknown switch (or `-t` without a folder) shows the error ("Unknown
   switch: -x") above the help and exits with code 1.
 - The help says: quote folders with spaces, but don't end them with `\` before the
-  closing quote (Windows reads `\"` as a quote); tabs aren't remembered between
-  runs; keep folders you use often as shortcuts in the Bookmarks folder next to
-  `qoqdir.exe`. Examples: `qoqdir .` and `qoqdir -tD:\projects -tD:\logs`.
+  closing quote (Windows reads `\"` as a quote); keep folders you use often as
+  shortcuts in the Bookmarks folder next to `qoqdir.exe`; tabs aren't remembered
+  by themselves, but Ctrl+S saves them and Ctrl+O opens them again. Examples: `qoqdir .` and `qoqdir -tD:\projects -tD:\logs`.
 - `--selftest` runs the self-test (7.2) in `qoqdir-test.exe`; the exe users get
   treats it as an unknown switch. It isn't in the help.
 
@@ -409,10 +416,11 @@ back to the defaults, and a missing or read-only file is never an error.
 
 ## 6. Out of scope
 
-Not to be built: saving tabs or sessions, dark mode or themes, a copy engine or
-progress window of our own, previews or thumbnails, search across subfolders,
-archive browsing, dual panes, plugins or scripting, a bookmark manager, other
-languages, an installer, auto-update, telemetry.
+Not to be built: tabs or sessions that come back by themselves (saved tabs are
+shortcuts, 5.7), dark mode or themes, a copy engine or progress window of our own,
+previews or thumbnails, search across subfolders, archive browsing, dual panes,
+plugins or scripting, a bookmark manager, other languages, an installer,
+auto-update, telemetry.
 
 ## 7. Tests
 
@@ -518,6 +526,10 @@ result:
 39. Filtering and sorting 10,000 files are within the targets of 4.7.
 40. Copying 10,000 selected files to the clipboard is within the target of 4.7,
     and the clipboard then holds 10,000 files.
+41. With three tabs (the test folder, `sub`, This PC), Ctrl+S leaves one shortcut
+    per tab in `Bookmarks\Tabs`, in tab order: an old shortcut there is gone and a
+    text file there stays. After closing two tabs, Ctrl+O opens `sub` and This PC
+    after the test folder (which is open already) and shows `sub`.
 
 ### 7.3 Command-line checks
 Run on a copy of the exe in a temp folder:

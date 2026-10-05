@@ -61,6 +61,20 @@ private:
     WIN32_FIND_DATAW fd_{};
 };
 
+// A bind context that hands the shell what 'known' holds. STGM_CREATE: take the find data as given.
+// (RegisterObjectParam never writes its non-const key.)
+Com<IBindCtx> findDataBind(Com<IFileSystemBindData>& known) {
+    *known.put() = new FindData;
+    Com<IBindCtx> bind;
+    BIND_OPTS opts{};
+    opts.cbStruct = sizeof opts;
+    opts.grfMode = STGM_CREATE;
+    if (FAILED(CreateBindCtx(0, bind.put())) || FAILED(bind->SetBindOptions(&opts)) ||
+        FAILED(bind->RegisterObjectParam(const_cast<LPOLESTR>(STR_FILE_SYS_BIND_DATA), known.get())))
+        return {};
+    return bind;
+}
+
 // The same for listed items of one folder: opened once, each item parsed from its own find data. Full
 // paths took ~9 ms per file (90 s for 10,000), plain names a disk query each (spec 4.7).
 HRESULT uiObject(HWND owner, const std::wstring& dir, const std::vector<Item>& items, REFIID iid, void** out) {
@@ -74,16 +88,9 @@ HRESULT uiObject(HWND owner, const std::wstring& dir, const std::vector<Item>& i
                      ? desktop->QueryInterface(IID_IShellFolder, reinterpret_cast<void**>(parent.put()))
                      : desktop->BindToObject(dirPidl.get(), nullptr, IID_IShellFolder, reinterpret_cast<void**>(parent.put()));
     if (FAILED(hr)) return hr;
-    // STGM_CREATE: take the find data as given. (RegisterObjectParam never writes its non-const key.)
     Com<IFileSystemBindData> known;
-    *known.put() = new FindData;
-    Com<IBindCtx> bind;
-    BIND_OPTS opts{};
-    opts.cbStruct = sizeof opts;
-    opts.grfMode = STGM_CREATE;
-    if (FAILED(CreateBindCtx(0, bind.put())) || FAILED(bind->SetBindOptions(&opts)) ||
-        FAILED(bind->RegisterObjectParam(const_cast<LPOLESTR>(STR_FILE_SYS_BIND_DATA), known.get())))
-        return E_FAIL;
+    Com<IBindCtx> bind = findDataBind(known);
+    if (!bind) return E_FAIL;
     std::vector<ChildPidl> owned;
     std::vector<PCUITEMID_CHILD> children;
     for (const Item& it : items) {
@@ -408,6 +415,50 @@ std::optional<std::wstring> shortcutTarget(const std::wstring& lnkPath, bool* fo
     if (!pc || !ILIsEqual(pidl.get(), pc.get())) return std::nullopt;
     *folder = true;
     return std::wstring();
+}
+
+bool saveFolderShortcuts(const std::wstring& dir, const std::vector<std::wstring>& folders) {
+    CreateDirectoryW(dir.c_str(), nullptr);   // fails harmlessly if it exists
+    for (const Item& it : listFolder(dir, true).items)
+        if (!it.isDir() && extensionOf(it.name) == L".lnk") DeleteFileW(joinPath(dir, it.name).c_str());
+    // Each folder's item is made from its path and find data that say "folder": the shortcut then says so
+    // too, even for a folder that can't be reached now.
+    Com<IFileSystemBindData> known;
+    Com<IBindCtx> bind = findDataBind(known);
+    bool ok = bool(bind);
+    for (size_t i = 0; bind && i < folders.size(); ++i) {
+        WIN32_FIND_DATAW fd{};
+        fd.dwFileAttributes = FILE_ATTRIBUTE_DIRECTORY;
+        leafName(folders[i]).copy(fd.cFileName, MAX_PATH - 1);
+        known->SetFindData(&fd);
+        PIDLIST_ABSOLUTE p = nullptr;
+        if (folders[i].empty()) SHGetKnownFolderIDList(FOLDERID_ComputerFolder, 0, nullptr, &p);
+        else SHParseDisplayName(folders[i].c_str(), bind.get(), &p, 0, nullptr);
+        Pidl pidl(p);
+        std::wstring name = displayName(folders[i]);
+        std::erase_if(name, [](wchar_t c) { return std::wstring_view(L"\\/:*?\"<>|").find(c) != std::wstring_view::npos; });
+        Com<IShellLinkW> link;
+        Com<IPersistFile> file;
+        if (!pidl || FAILED(CoCreateInstance(CLSID_ShellLink, nullptr, CLSCTX_INPROC_SERVER, IID_IShellLinkW,
+                                             reinterpret_cast<void**>(link.put()))) ||
+            FAILED(link->SetIDList(pidl.get())) || !(file = link.as<IPersistFile>()) ||
+            FAILED(file->Save(joinPath(dir, std::to_wstring(i + 1) + L" " + name + L".lnk").c_str(), TRUE)))
+            ok = false;
+    }
+    return ok;
+}
+
+std::vector<std::wstring> savedFolders(const std::wstring& dir) {
+    Listing listing = listFolder(dir, true);
+    sortItems(listing.items, SortKey::Name, true);
+    std::vector<std::wstring> folders;
+    for (const Item& it : listing.items) {
+        bool folder = false;
+        std::optional<std::wstring> target =
+            extensionOf(it.name) == L".lnk" ? shortcutTarget(joinPath(dir, it.name), &folder) : std::nullopt;
+        if (target && folder) folders.push_back(normalizePath(*target));
+    }
+    return folders;
 }
 
 namespace {

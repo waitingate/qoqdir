@@ -44,7 +44,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
 };
 
 use crate::app::{App, Key, Nav, TIMER_LOADING, TIMER_REFRESH, ViewState};
-use crate::folder::{Item, Listing, Location, SortKey, exists, is_directory, is_shortcut, list_folder};
+use crate::folder::{Item, Listing, Location, SortKey, exists, is_directory, is_shortcut, list_folder, normalize, sort_items};
 use crate::shell::{
     copy_to_clipboard, data_object_at, item_menu_at, known_folder, paste_into, shortcut_target, type_name,
 };
@@ -1442,6 +1442,56 @@ impl App {
             },
         );
         s.home("(back to the test folder)");
+
+        // Saved tabs: Ctrl+S writes a shortcut per tab in Bookmarks\Tabs, Ctrl+O opens their folders as tabs.
+        s.add(
+            "Ctrl+S saves each tab as a shortcut in Bookmarks\\Tabs, in tab order, replacing the old ones",
+            |a| {
+                let _ = std::fs::create_dir(p("Bookmarks\\Tabs"));
+                make_shortcut(&p("Bookmarks\\Tabs\\old.lnk"), p("sub")); // an earlier save: replaced
+                write_file(&p("Bookmarks\\Tabs\\keep.txt")); // not a shortcut: kept
+                a.new_tab(Location::ThisPc, false);
+                a.new_tab(Location::dir(p("sub")), false); // tabs: the test folder, sub, This PC
+                a.press(letter(b'S'), CTRL);
+            },
+            |a| {
+                let mut saved = list_folder(&Location::dir(p("Bookmarks\\Tabs")), true, None);
+                sort_items(&mut saved.items, SortKey::Name, true);
+                let clean = |l: Location| match l {
+                    Location::Dir(d) => normalize(d.as_os_str()),
+                    this_pc => this_pc,
+                };
+                saved.items.len() == a.tabs() + 1
+                    && saved.items.last().is_some_and(|it| it.name == "keep.txt")
+                    && (0..a.tabs()).all(|i| {
+                        shortcut_target(&p("Bookmarks\\Tabs").join(&saved.items[i].name))
+                            .is_some_and(|(target, folder)| folder && clean(target).same(&a.tab_path(i)))
+                    })
+            },
+        );
+        s.add(
+            "Ctrl+O opens the saved tabs after the open ones, skips any already open, and shows the first new one",
+            |a| {
+                a.close_tab(2);
+                a.close_tab(1);
+                a.press(letter(b'O'), CTRL);
+            },
+            |a| {
+                a.tabs() == 3
+                    && a.tab_path(1).same(&Location::dir(p("sub")))
+                    && matches!(a.tab_path(2), Location::ThisPc)
+                    && a.at(&p("sub"))
+            },
+        );
+        s.add(
+            "(close those tabs and remove the saved ones)",
+            |a| {
+                a.close_tab(2);
+                a.close_tab(1);
+                let _ = std::fs::remove_dir_all(p("Bookmarks\\Tabs"));
+            },
+            move |a| a.tabs() == 1 && a.at(&dir()),
+        );
 
         // Speed: a folder with 10,000 files.
         s.add(

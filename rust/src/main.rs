@@ -35,8 +35,9 @@ const USAGE: &str = concat!("Version ", env!("CARGO_PKG_VERSION"), "\n\nUsage: q
 \t(quote folders with spaces, but don't end them with \\ before the closing quote)\n\
   -h, -?\tShow this help\n\
 \n\
-Tabs are not remembered between runs. Keep folders you use often as\n\
-shortcuts in the Bookmarks folder next to qoqdir.exe (shown at the top of the tree).\n\
+Keep folders you use often as shortcuts in the Bookmarks folder next to\n\
+qoqdir.exe (shown at the top of the tree). Tabs aren't remembered by themselves:\n\
+Ctrl+S saves them in Bookmarks\\Tabs, and Ctrl+O opens them again.\n\
 \n\
 Examples:\n\
   qoqdir .\n\

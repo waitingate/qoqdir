@@ -150,6 +150,10 @@ impl FolderTree {
         self.hwnd
     }
 
+    pub fn bookmarks(&self) -> &Location {
+        &self.bookmarks
+    }
+
     /// Rebuilds the roots: Bookmarks, the user folders, then This PC with its drives.
     pub fn fill(&self) {
         self.reading.borrow_mut().clear(); // results still being read for the old nodes will be dropped

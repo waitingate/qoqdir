@@ -38,7 +38,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
     AppendMenuW, CW_USEDEFAULT, CreatePopupMenu, CreateWindowExW, DefWindowProcW, DestroyWindow,
     GWLP_USERDATA, GetClientRect, GetCursorPos, GetParent, GetWindowLongPtrW, GetWindowPlacement, GetWindowRect,
     HMENU, HTCLIENT, IDC_ARROW, IDC_SIZEWE, IsChild, KillTimer, WPF_RESTORETOMAXIMIZED, LoadCursorW, MB_ICONQUESTION,
-    MB_ICONWARNING, MB_OKCANCEL, MF_GRAYED, MF_STRING, MINMAXINFO, MSG, MessageBoxW, MoveWindow,
+    MB_ICONWARNING, MB_OKCANCEL, MF_GRAYED, MF_SEPARATOR, MF_STRING, MINMAXINFO, MSG, MessageBoxW, MoveWindow,
     NONCLIENTMETRICSW, PostMessageW, PostQuitMessage, RegisterClassExW, SPI_GETNONCLIENTMETRICS, SW_SHOWMAXIMIZED,
     SW_SHOWNOACTIVATE, SW_SHOWNORMAL, SWP_NOACTIVATE, SWP_NOZORDER, SetCursor, SetTimer,
     SetWindowLongPtrW, SetWindowPlacement, SetWindowPos, ShowWindow, TPM_RETURNCMD,
@@ -60,7 +60,7 @@ use crate::folder::{
 use crate::shell::{
     FolderWatch, IconBatch, acknowledge_change, has_own_icon, read_own_icons, remember_icons, background_menu, copy_to_clipboard, delete_items, drag_out,
     shortcut_target, forward_menu_message, invoke_verb, item_menu, item_menu_at, known_folder, new_drop_target, open_file,
-    paste_into, rename_item, run_command, show_menu,
+    paste_into, rename_item, run_command, save_folder_shortcuts, saved_folders, show_menu,
 };
 use crate::tree::{FolderTree, TreeBatch};
 use crate::util::{Font, OwnedMenu, focus, from_wide, key_down, pcwstr, scale, send, set_text, wide, window_text};
@@ -83,6 +83,8 @@ const WM_APP_RENAME: u32 = WM_APP + 4;
 const WM_APP_ICONS: u32 = WM_APP + 5;
 const WM_APP_TREE: u32 = WM_APP + 6;
 const WM_APP_MIDDLECLICK: u32 = WM_APP + 7;
+const WM_APP_TABS_SAVED: u32 = WM_APP + 8;
+const WM_APP_TABS_READ: u32 = WM_APP + 9;
 
 pub const TIMER_REFRESH: usize = 1;
 const TIMER_STATUS: usize = 2;
@@ -631,6 +633,19 @@ impl App {
                     self.on_middle_click(HWND(wp.0 as _), point_from(lp));
                     return LRESULT(0);
                 }
+                WM_APP_TABS_SAVED => {
+                    if wp.0 != 0 {
+                        self.set_message("Tabs saved in Bookmarks\\Tabs");
+                    } else {
+                        self.set_message("Can't save every tab in Bookmarks\\Tabs");
+                        self.warn();
+                    }
+                    return LRESULT(0);
+                }
+                WM_APP_TABS_READ => {
+                    self.add_saved_tabs(*Box::from_raw(lp.0 as *mut Vec<Location>));
+                    return LRESULT(0);
+                }
                 WM_APP_CLOSETAB => {
                     self.close_tab(wp.0);
                     return LRESULT(0);
@@ -955,6 +970,9 @@ impl App {
             let _ = AppendMenuW(menu.0, MF_STRING, 2, w!("Close tab\tCtrl+W"));
             let grayed = if tab_count > 1 { MF_STRING } else { MF_STRING | MF_GRAYED };
             let _ = AppendMenuW(menu.0, grayed, 3, w!("Close other tabs"));
+            let _ = AppendMenuW(menu.0, MF_SEPARATOR, 0, PCWSTR::null());
+            let _ = AppendMenuW(menu.0, MF_STRING, 4, w!("Save tabs\tCtrl+S"));
+            let _ = AppendMenuW(menu.0, MF_STRING, 5, w!("Open saved tabs\tCtrl+O"));
             TrackPopupMenuEx(menu.0, (TPM_RETURNCMD | TPM_RIGHTBUTTON).0, screen.x, screen.y, self.wnd, None).0
         };
         match cmd {
@@ -966,6 +984,8 @@ impl App {
             }
             2 => self.close_tab(index),
             3 => self.close_other_tabs(index),
+            4 => self.save_tabs(),
+            5 => self.open_saved_tabs(),
             _ => {}
         }
     }
@@ -1026,6 +1046,14 @@ impl App {
         }
         if ctrl && letter(b'W') {
             self.close_tab(active);
+            return true;
+        }
+        if ctrl && letter(b'S') {
+            self.save_tabs();
+            return true;
+        }
+        if ctrl && letter(b'O') {
+            self.open_saved_tabs();
             return true;
         }
         if ctrl && is(VK_TAB) {
@@ -1692,6 +1720,60 @@ impl App {
         };
         self.show_tabs();
         self.open(location, Nav::Switch, view);
+    }
+
+    // ------------------------------------------------------------ saved tabs (Bookmarks\Tabs)
+
+    /// Ctrl+S: a shortcut per tab in Bookmarks\Tabs. This and `open_saved_tabs` work on a worker thread: a tab's
+    /// folder may be on a server that is off, and so may Bookmarks.
+    fn save_tabs(&self) {
+        let folders: Vec<Location> = self.st.borrow().tabs.iter().map(|t| t.location.clone()).collect();
+        let Some(dir) = self.tree.bookmarks().path().map(|p| p.join("Tabs")) else { return };
+        let wnd = self.wnd.0 as usize;
+        std::thread::spawn(move || unsafe {
+            let co = CoInitializeEx(None, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE);
+            let ok = save_folder_shortcuts(&dir, &folders);
+            if co.is_ok() {
+                CoUninitialize();
+            }
+            let _ = PostMessageW(Some(HWND(wnd as _)), WM_APP_TABS_SAVED, WPARAM(usize::from(ok)), LPARAM(0));
+        });
+    }
+
+    /// Ctrl+O: the saved tabs' folders as tabs after the open ones.
+    fn open_saved_tabs(&self) {
+        let Some(dir) = self.tree.bookmarks().path().map(|p| p.join("Tabs")) else { return };
+        let wnd = self.wnd.0 as usize;
+        std::thread::spawn(move || unsafe {
+            let co = CoInitializeEx(None, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE);
+            let folders = Box::into_raw(Box::new(saved_folders(&dir)));
+            if co.is_ok() {
+                CoUninitialize();
+            }
+            if PostMessageW(Some(HWND(wnd as _)), WM_APP_TABS_READ, WPARAM(0), LPARAM(folders as isize)).is_err() {
+                drop(Box::from_raw(folders)); // the window is gone
+            }
+        });
+    }
+
+    /// After the open tabs, each folder that isn't open yet; the first of them is shown.
+    fn add_saved_tabs(&self, folders: Vec<Location>) {
+        let (first, added) = {
+            let mut st = self.st.borrow_mut();
+            let first = st.tabs.len();
+            for folder in &folders {
+                if !st.tabs.iter().any(|t| t.location.same(folder)) {
+                    let tab = Self::make_tab(&mut st, folder.clone());
+                    st.tabs.push(tab);
+                }
+            }
+            (first, st.tabs.len() > first)
+        };
+        if added {
+            self.switch_tab(first);
+        } else {
+            self.set_message(if folders.is_empty() { "No saved tabs in Bookmarks\\Tabs" } else { "The saved tabs are open already" });
+        }
     }
 
     /// The folder of the tab under the cursor, for a drop. That tab lights up while hovered.

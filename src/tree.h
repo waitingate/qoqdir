@@ -25,6 +25,7 @@ public:
     // `bookmarks` is the first root, open, with its shortcuts as well as its folders.
     void create(HWND parent, int id, UINT batchMsg, UINT iconMsg, const std::wstring& bookmarks);
     HWND hwnd() const { return tv_; }
+    const std::wstring& bookmarks() const { return bookmarks_; }
     void fill();   // rebuilds the roots (user folders and This PC)
     void refreshDrives();   // reads This PC's drives again; the rest of the tree stays as it is
     void addChildren(const TreeBatch& batch);
