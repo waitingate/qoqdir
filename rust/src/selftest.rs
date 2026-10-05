@@ -1,5 +1,6 @@
-//! `qoqdir.exe --selftest`: a scripted session in the real app. Keys go straight to `App::on_key`, never to
-//! other windows. The steps are the C++ version's, in the same order and with the same names.
+//! `--selftest`, only in a build with the `selftest` feature: a scripted session in the real app. Keys go
+//! straight to `App::on_key`, never to other windows. The steps are the C++ version's, in the same order and
+//! with the same names.
 
 use std::cell::{Cell, RefCell};
 use std::ffi::{OsStr, OsString};
@@ -10,7 +11,7 @@ use std::rc::Rc;
 use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
-use windows::Win32::Foundation::{HGLOBAL, LPARAM, POINT, POINTL, RECT, WPARAM};
+use windows::Win32::Foundation::{HGLOBAL, HWND, LPARAM, POINT, POINTL, RECT, WPARAM};
 use windows::Win32::Graphics::Gdi::ClientToScreen;
 use windows::Win32::Storage::FileSystem::{
     FILE_ATTRIBUTE_ARCHIVE, FILE_ATTRIBUTE_HIDDEN, FILE_FLAGS_AND_ATTRIBUTES, GetFileAttributesW, GetLongPathNameW,
@@ -38,11 +39,11 @@ use windows::Win32::UI::Shell::{
     SHGFI_SYSICONINDEX, SHGetFileInfoW, SHGetKnownFolderIDList, StrCmpLogicalW,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    GetWindowTextLengthW, KillTimer, PostMessageW, SetTimer, WM_CHAR, WM_CLOSE, WM_DEVICECHANGE,
-    WM_KEYDOWN, WM_MBUTTONUP, WM_SYSKEYDOWN, WM_TIMER,
+    GWLP_USERDATA, GetWindowLongPtrW, GetWindowTextLengthW, KillTimer, PostMessageW, SetTimer, WM_CHAR, WM_CLOSE,
+    WM_DEVICECHANGE, WM_KEYDOWN, WM_MBUTTONUP, WM_SYSKEYDOWN, WM_TIMER,
 };
 
-use crate::app::{App, Key, Nav, TIMER_LOADING, TIMER_REFRESH, TIMER_SELFTEST, ViewState};
+use crate::app::{App, Key, Nav, TIMER_LOADING, TIMER_REFRESH, ViewState};
 use crate::folder::{Item, Listing, Location, SortKey, exists, is_directory, is_shortcut, list_folder};
 use crate::shell::{
     copy_to_clipboard, data_object_at, item_menu_at, known_folder, paste_into, shortcut_target, type_name,
@@ -96,7 +97,7 @@ impl Steps {
     }
 }
 
-pub struct SelfTest {
+struct SelfTest {
     steps: Vec<Step>,
     index: usize,
     started: Option<Instant>, // set once the step's act has run
@@ -116,6 +117,15 @@ thread_local! {
     static LOADS: Cell<(u32, u32)> = const { Cell::new((0, 0)) };
     static FLAG: Cell<bool> = const { Cell::new(false) };
     static NEXT: RefCell<OsString> = const { RefCell::new(OsString::new()) }; // the item after the one Delete removes
+    static RUN: RefCell<Option<SelfTest>> = const { RefCell::new(None) }; // the steps, and how far the run is
+    static EXIT_CODE: Cell<i32> = const { Cell::new(1) }; // a run that never finishes (closed by hand) has not passed
+}
+
+const TIMER_SELFTEST: usize = 50;
+
+/// The process's exit code: 0 only if every step passed.
+pub fn exit_code() -> i32 {
+    EXIT_CODE.get()
 }
 
 fn note(text: String) {
@@ -372,7 +382,7 @@ impl App {
 
     /// How long the current step has waited since its act.
     fn step_ms(&self) -> u128 {
-        self.selftest.borrow().as_ref().and_then(|t| t.started).map_or(0, |s| s.elapsed().as_millis())
+        RUN.with_borrow(|run| run.as_ref().and_then(|t| t.started).map_or(0, |s| s.elapsed().as_millis()))
     }
 
     fn tree_root(&self) -> isize {
@@ -1633,13 +1643,15 @@ impl App {
             },
         );
 
-        *self.selftest.borrow_mut() = Some(SelfTest { steps: s.0, index: 0, started: None, busy: false, failures: 0 });
+        RUN.set(Some(SelfTest { steps: s.0, index: 0, started: None, busy: false, failures: 0 }));
+        self.quiet.set(true); // the steps trigger errors on purpose: no beeps
+        // Its own timer callback, so the app's code doesn't mention the self-test (the exe you use has none).
         unsafe {
-            SetTimer(Some(self.wnd), TIMER_SELFTEST, 50, None);
+            SetTimer(Some(self.wnd), TIMER_SELFTEST, 50, Some(tick));
         }
     }
 
-    pub fn self_test_tick(&self) {
+    fn self_test_tick(&self) {
         enum Next {
             Wait,
             Act(Option<Act>),
@@ -1647,10 +1659,9 @@ impl App {
             Finish,
         }
         // Decide under a short borrow, then run the step with nothing borrowed: actions can run modal loops.
-        let next = {
-            let guard = self.selftest.borrow();
-            let Some(t) = guard.as_ref() else { return };
-            if t.busy {
+        let next = RUN.with_borrow(|run| {
+            let t = run.as_ref()?;
+            Some(if t.busy {
                 Next::Wait
             } else if t.index >= t.steps.len() {
                 Next::Finish
@@ -1660,13 +1671,14 @@ impl App {
             } else {
                 let s = &t.steps[t.index];
                 Next::Check(s.done.clone(), s.timeout_ms)
-            }
-        };
+            })
+        });
+        let Some(next) = next else { return };
         match next {
             Next::Wait => {}
             Next::Act(act) => {
                 note(String::new());
-                self.with_test(|t| {
+                with_test(|t| {
                     t.started = Some(Instant::now());
                     t.busy = true;
                 });
@@ -1674,7 +1686,7 @@ impl App {
                     act(self);
                 }
                 // The wait starts after the act: its own setup (10,000 files) is not part of it.
-                self.with_test(|t| {
+                with_test(|t| {
                     t.busy = false;
                     t.started = Some(Instant::now());
                 });
@@ -1686,7 +1698,7 @@ impl App {
                     return;
                 }
                 let note = noted();
-                let name = self.with_test(|t| {
+                let name = with_test(|t| {
                     t.failures += usize::from(!ok);
                     t.index += 1;
                     t.started = None;
@@ -1700,18 +1712,25 @@ impl App {
                 unsafe {
                     let _ = KillTimer(Some(self.wnd), TIMER_SELFTEST);
                 }
-                let failures = self.with_test(|t| t.failures);
+                let failures = with_test(|t| t.failures);
                 log(&if failures > 0 { format!("{failures} step(s) FAILED\n") } else { "all steps passed\n".into() });
                 let _ = std::fs::remove_dir_all(test_dir());
-                self.exit_code.set(if failures > 0 { 1 } else { 0 });
+                EXIT_CODE.set(if failures > 0 { 1 } else { 0 });
                 unsafe {
                     let _ = PostMessageW(Some(self.wnd), WM_CLOSE, WPARAM(0), LPARAM(0));
                 }
             }
         }
     }
+}
 
-    fn with_test<R>(&self, f: impl FnOnce(&mut SelfTest) -> R) -> R {
-        f(self.selftest.borrow_mut().as_mut().expect("self-test running"))
+fn with_test<R>(f: impl FnOnce(&mut SelfTest) -> R) -> R {
+    RUN.with_borrow_mut(|run| f(run.as_mut().expect("self-test running")))
+}
+
+unsafe extern "system" fn tick(h: HWND, _: u32, _: usize, _: u32) {
+    // SAFETY: as in App's window procedure: the window's App outlives the window.
+    if let Some(app) = unsafe { (GetWindowLongPtrW(h, GWLP_USERDATA) as *const App).as_ref() } {
+        app.self_test_tick();
     }
 }

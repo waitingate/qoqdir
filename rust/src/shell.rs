@@ -278,6 +278,7 @@ fn ui_object_of<T: Interface>(owner: HWND, dir: &Location, items: &[Item]) -> Re
 }
 
 /// One item, given by its full path, as a shell data object (what copy, drag and drop hand around).
+#[cfg(feature = "selftest")] // only the self-test uses it
 pub fn data_object_at(owner: HWND, location: &Location) -> Option<IDataObject> {
     ui_object_at(owner, location).ok()
 }

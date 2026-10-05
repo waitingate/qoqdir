@@ -37,13 +37,19 @@ deleting `C:\rust` removes it.
 ## Build and test
 
 ```powershell
-cargo build --release                  # target\release\qoqdir.exe
+cargo build --release                  # target\release\qoqdir.exe, the exe you use
 cargo test
-cargo clippy                           # extra checks: fix what it reports before a commit
-target\release\qoqdir.exe --selftest   # log: %TEMP%\qoqdir-rs-selftest.log
+cargo clippy --all-targets             # extra checks, in both builds:
+cargo clippy --all-targets --features selftest   # fix what they report before a commit
+cargo build --release --features selftest --target-dir target\selftest
+target\selftest\release\qoqdir.exe --selftest    # log: %TEMP%\qoqdir-rs-selftest.log
 ```
 
-The scripts in `..\tests` work with this exe too (`-Exe target\release\qoqdir.exe`).
+The self-test is only in a build with the `selftest` feature, as in the C++
+version: the exe you use doesn't carry it. That build gets its own folder, so it
+never replaces your exe. The scripts in `..\tests` work with these exes too:
+`cli-checks.ps1 -Exe target\release\qoqdir.exe`, and `watch-windows.ps1` with
+`-Exe target\selftest\release\qoqdir.exe -Log $env:TEMP\qoqdir-rs-selftest.log`.
 
 ## Code
 
@@ -51,7 +57,7 @@ The scripts in `..\tests` work with this exe too (`-Exe target\release\qoqdir.ex
 - `shell.rs`: the Windows shell: menus, clipboard, delete, rename, icons, drag and drop
 - `filelist.rs`, `tree.rs`: the file list and the folder tree
 - `app.rs`: main window, tabs, navigation, keys, settings
-- `selftest.rs`: the `--selftest` session
+- `selftest.rs`: the `--selftest` session (only with the `selftest` feature)
 - `crashlog.rs`: writes `%TEMP%\qoqdir-crash.log` when the app stops on a bug
 - `util.rs`: UTF-16 strings and owners that free Windows resources
 

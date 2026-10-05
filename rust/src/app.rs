@@ -57,7 +57,6 @@ use crate::folder::{
     CommandLine, Listing, Location, SortKey, byte_size, expand_vars, extension_of, is_relative_path, is_shortcut,
     list_folder, normalize, row_after_deleting,
 };
-use crate::selftest::SelfTest;
 use crate::shell::{
     FolderWatch, IconBatch, acknowledge_change, has_own_icon, read_own_icons, remember_icons, background_menu, copy_to_clipboard, delete_items, drag_out,
     shortcut_target, forward_menu_message, invoke_verb, item_menu, item_menu_at, known_folder, new_drop_target, open_file,
@@ -88,7 +87,6 @@ const WM_APP_MIDDLECLICK: u32 = WM_APP + 7;
 pub const TIMER_REFRESH: usize = 1;
 const TIMER_STATUS: usize = 2;
 pub const TIMER_LOADING: usize = 3;
-pub const TIMER_SELFTEST: usize = 50;
 
 const MAX_HISTORY: usize = 100;
 /// Soft gray (#EBEBEB): less glare than white.
@@ -209,8 +207,7 @@ pub struct App {
     use_settings: bool,
     ini: Vec<u16>, // settings file
     pub st: RefCell<State>,
-    pub selftest: RefCell<Option<SelfTest>>,
-    pub exit_code: Cell<i32>,
+    pub quiet: Cell<bool>, // no beeps (set by the self-test, which triggers errors on purpose)
 }
 
 
@@ -406,8 +403,7 @@ impl App {
                     watch: None,
                     last_focus: None,
                 }),
-                selftest: RefCell::new(None),
-                exit_code: Cell::new(1), // a self-test that never finishes (closed by hand, no window) has not passed
+                quiet: Cell::new(false),
             });
             SetWindowLongPtrW(wnd, GWLP_USERDATA, Rc::as_ptr(&app) as isize);
 
@@ -773,7 +769,6 @@ impl App {
                         self.load_message_shown.set(true);
                     }
                 }
-                TIMER_SELFTEST => self.self_test_tick(),
                 _ => {}
             }
         }
@@ -1821,9 +1816,9 @@ impl App {
     }
 
     fn warn(&self) {
-        if self.selftest.borrow().is_none() {
+        if !self.quiet.get() {
             unsafe {
-                let _ = MessageBeep(MB_ICONWARNING); // self-tests trigger errors on purpose; keep them quiet
+                let _ = MessageBeep(MB_ICONWARNING);
             }
         }
     }

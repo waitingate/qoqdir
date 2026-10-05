@@ -5,7 +5,7 @@
 # from the test's own process) are expected.
 #
 #   powershell -File tests\watch-windows.ps1 -Exe build\qoqdir-test.exe
-#   powershell -File tests\watch-windows.ps1 -Exe rust\target\release\qoqdir.exe -Log $env:TEMP\qoqdir-rs-selftest.log
+#   powershell -File tests\watch-windows.ps1 -Exe rust\target\selftest\release\qoqdir.exe -Log $env:TEMP\qoqdir-rs-selftest.log
 param([Parameter(Mandatory)][string]$Exe, [string]$Log = (Join-Path $env:TEMP 'qoqdir-selftest.log'))
 
 Add-Type @'

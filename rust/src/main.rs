@@ -1,10 +1,12 @@
-//! Qoqdir: a light, fast, portable file manager for Windows (usage: USAGE below; `--selftest`: selftest.rs).
+//! Qoqdir: a light, fast, portable file manager for Windows (usage: USAGE below; `--selftest`: selftest.rs,
+//! only in a build with the `selftest` feature).
 #![windows_subsystem = "windows"]
 
 mod app;
 mod crashlog;
 mod filelist;
 mod folder;
+#[cfg(feature = "selftest")]
 mod selftest;
 mod shell;
 mod tree;
@@ -60,6 +62,10 @@ fn main() {
     if unsafe { GetSystemDirectoryW(Some(&mut system)) } > 0 {
         let _ = std::env::set_current_dir(from_wide(&system));
     }
+    #[cfg(not(feature = "selftest"))]
+    if cmd.self_test {
+        cmd.error = Some("Unknown switch: --selftest".into()); // only a build with the selftest feature has it
+    }
     if cmd.help || cmd.error.is_some() {
         // There is no console, so the help is a small window.
         let text = match &cmd.error {
@@ -81,6 +87,7 @@ fn main() {
         };
         let _ = InitCommonControlsEx(&icc);
 
+        #[cfg(feature = "selftest")]
         if cmd.self_test {
             cmd.folders = vec![selftest::prepare()];
         }
@@ -88,6 +95,7 @@ fn main() {
         let instance = GetModuleHandleW(None).unwrap_or_default().into();
         let code = match app::App::create(instance, cmd, !self_test) {
             Some(app) => {
+                #[cfg(feature = "selftest")]
                 if self_test {
                     app.start_self_test();
                 }
@@ -100,10 +108,12 @@ fn main() {
                     DispatchMessageW(&msg);
                 }
                 shell_ref.wait_for_shell(); // let background copies and Properties dialogs finish
-                if self_test { app.exit_code.get() } else { 0 }
+                0
             }
             None => 1,
         };
+        #[cfg(feature = "selftest")]
+        let code = if self_test && code == 0 { selftest::exit_code() } else { code };
         let _ = OleFlushClipboard(); // files copied here stay pasteable after the app has closed (nothing to do otherwise)
         OleUninitialize();
         code

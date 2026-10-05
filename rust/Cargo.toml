@@ -38,6 +38,11 @@ windows = { version = "0.62.2", features = [
 # Needed by the #[implement] macro (used to write COM objects).
 windows-core = "0.62.2"
 
+[features]
+# The self-test (`--selftest`, src/selftest.rs) is only in a build with this feature, not in the exe you use:
+#   cargo build --release --features selftest --target-dir target\selftest
+selftest = []
+
 [build-dependencies]
 embed-manifest = "1.5.1"
 
