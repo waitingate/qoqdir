@@ -1,6 +1,7 @@
-# Builds qoqdir.exe on a Windows runner and runs the unit tests, the self-test (with the
-# popup watch) and the command-line checks. The exe and the logs are kept as artifacts.
-# A step that fails here but passes on a PC probably hit something the runner lacks.
+# Builds qoqdir.exe and qoqdir-test.exe on a Windows runner and runs the unit tests, the self-test
+# (qoqdir-test.exe, with the popup watch) and the command-line checks (qoqdir.exe, what users get).
+# The exe and the logs are kept as artifacts. A step that fails here but passes on a PC probably hit
+# something the runner lacks.
 name: build
 
 on:
@@ -16,12 +17,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # MinGW-w64 GCC (MSYS2's current release), CMake and Ninja; no Visual Studio, as in the spec.
+      # MinGW-w64 GCC with the UCRT runtime, as for releases (MSYS2's current release), CMake and
+      # Ninja; no Visual Studio, as in the spec.
       - uses: msys2/setup-msys2@v2
         with:
-          msystem: MINGW64
+          msystem: UCRT64
           update: true
-          install: mingw-w64-x86_64-gcc mingw-w64-x86_64-cmake mingw-w64-x86_64-ninja
+          install: mingw-w64-ucrt-x86_64-gcc mingw-w64-ucrt-x86_64-cmake mingw-w64-ucrt-x86_64-ninja
 
       - name: Build
         shell: msys2 {0}
@@ -48,7 +50,7 @@ jobs:
       # The self-test, with every new window from any process listed (spec 7.4).
       - name: Self-test with popup watch
         shell: pwsh
-        run: powershell -NoProfile -File tests\watch-windows.ps1 -Exe build\qoqdir.exe
+        run: powershell -NoProfile -File tests\watch-windows.ps1 -Exe build\qoqdir-test.exe
 
       - name: Command-line checks
         shell: pwsh

@@ -39,12 +39,12 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int) {
         LocalFree(argv);
     }
     CommandLine cmd = parseCommandLine(args);   // "qoqdir ." is resolved here, against the terminal's folder
-#ifndef QOQDIR_SELFTEST
-    if (cmd.selfTest) cmd.error = L"Unknown switch: --selftest";   // only qoqdir-test.exe has the self-test
-#endif
     // Then leave it: a program's working folder cannot be renamed, deleted or ejected. Explorer's is System32.
     wchar_t sys[MAX_PATH];
     if (GetSystemDirectoryW(sys, MAX_PATH)) SetCurrentDirectoryW(sys);
+#ifndef QOQDIR_SELFTEST
+    if (cmd.selfTest) cmd.error = L"Unknown switch: --selftest";   // only qoqdir-test.exe has the self-test
+#endif
     if (cmd.help || !cmd.error.empty()) {   // there is no console, so the help is a small window
         std::wstring text = cmd.error.empty() ? kUsage : cmd.error + L"\n\n" + kUsage;
         MessageBoxW(nullptr, text.c_str(), kAppName, cmd.error.empty() ? MB_ICONINFORMATION : MB_ICONWARNING);

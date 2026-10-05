@@ -1,4 +1,5 @@
-// "qoqdir.exe --selftest": a scripted session in the real app. Keys go straight to App::onKey, never to other windows.
+// "qoqdir-test.exe --selftest": a scripted session in the real app. Keys go straight to App::onKey, never to
+// other windows. Only qoqdir-test.exe links this file in; users get qoqdir.exe without it.
 
 #include "app.h"
 
