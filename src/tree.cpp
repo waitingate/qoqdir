@@ -77,7 +77,7 @@ void FolderTree::create(HWND parent, int id, UINT batchMsg, UINT iconMsg, const 
 void FolderTree::fill() {
     reading_.clear();   // results still being read for the old nodes will be dropped
     TreeView_DeleteAllItems(tv_);   // forgets each node's path too (TVN_DELETEITEM)
-    HTREEITEM bookmarks = add(TVI_ROOT, bookmarks_, L"Bookmarks", folderIcon());
+    HTREEITEM bookmarksNode = add(TVI_ROOT, bookmarks_, L"Bookmarks", folderIcon());
     startWorker(nullptr, readUserFolders);   // the user folders arrive later, like the drives
     SHFILEINFOW pc{};
     PIDLIST_ABSOLUTE pidl = nullptr;
@@ -86,7 +86,7 @@ void FolderTree::fill() {
         CoTaskMemFree(pidl);
     }
     HTREEITEM thisPc = add(TVI_ROOT, L"", L"This PC", pc.iIcon);
-    TreeView_Expand(tv_, bookmarks, TVE_EXPAND);
+    TreeView_Expand(tv_, bookmarksNode, TVE_EXPAND);
     TreeView_Expand(tv_, thisPc, TVE_EXPAND);
 }
 

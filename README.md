@@ -63,8 +63,8 @@ rename that folder.
 | Alt+Enter | properties |
 | Esc | clear the filter |
 
-Middle-click a folder to open it in a background tab. Drop files on a tab to copy
-them into that tab's folder.
+Middle-click a folder to open it in a background tab. Drop files on a tab to
+move or copy them into that tab's folder, as Explorer would.
 
 ## Files it writes
 
@@ -116,8 +116,9 @@ copy of the exe in a temp folder, so your settings and Bookmarks stay untouched.
 Raise the version in `src/version.h` and commit, then run
 `powershell -File release.ps1`. It builds that commit in a clean copy, runs the
 tests (the self-test on `qoqdir-test.exe`, the rest on the exe that ships) and
-writes `release\qoqdir-<version>.zip` with its SHA-256. Keep `release\qoqdir-<version>-debug.exe`: it turns the offsets in a
-crash log from that version into source lines.
+writes `release\qoqdir-<version>.zip` with its SHA-256. Keep
+`release\qoqdir-<version>-debug.exe`: it turns the offsets in a crash log from
+that version into source lines.
 
 ## Source
 

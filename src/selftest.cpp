@@ -759,7 +759,9 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
             dragEffect = DROPEFFECT_COPY;
             t0 = nowMs();
             tabDrop_->DragEnter(data.get(), MK_LBUTTON, cursor, &dragEffect);
-            tabDrop_->DragOver(MK_LBUTTON, cursor, &dragEffect);
+            DWORD over = DROPEFFECT_COPY;
+            tabDrop_->DragOver(MK_LBUTTON, cursor, &over);
+            dragEffect |= over;   // refused as the drag enters, and as it moves
             tabDrop_->DragLeave();
             keyMs = nowMs() - t0;
             selfTest_->note = L"took " + std::to_wstring(int(keyMs)) + L" ms";

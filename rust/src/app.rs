@@ -643,7 +643,7 @@ impl App {
                     return LRESULT(0);
                 }
                 WM_APP_TABS_READ => {
-                    self.add_saved_tabs(*Box::from_raw(lp.0 as *mut Vec<Location>));
+                    self.add_saved_tabs(&Box::from_raw(lp.0 as *mut Vec<Location>));
                     return LRESULT(0);
                 }
                 WM_APP_CLOSETAB => {
@@ -1025,7 +1025,7 @@ impl App {
             // Typing in the file list filters it.
             if focused == list && key.code >= 32 && key.code != 127 && !ctrl && !alt {
                 focus(self.filter);
-                let len = window_text(self.filter).len();
+                let len = window_text(self.filter).encode_wide().count();
                 send(self.filter, EM_SETSEL, len, len as isize);
                 send(self.filter, WM_CHAR, key.code, 0);
                 return true;
@@ -1757,11 +1757,11 @@ impl App {
     }
 
     /// After the open tabs, each folder that isn't open yet; the first of them is shown.
-    fn add_saved_tabs(&self, folders: Vec<Location>) {
+    fn add_saved_tabs(&self, folders: &[Location]) {
         let (first, added) = {
             let mut st = self.st.borrow_mut();
             let first = st.tabs.len();
-            for folder in &folders {
+            for folder in folders {
                 if !st.tabs.iter().any(|t| t.location.same(folder)) {
                     let tab = Self::make_tab(&mut st, folder.clone());
                     st.tabs.push(tab);
@@ -1905,12 +1905,14 @@ impl App {
         }
     }
 
-    /// A number from qoqdir.ini; missing or not a number: the default.
+    /// A number from qoqdir.ini; missing, not a number or far off any screen (a damaged file: x + width must not
+    /// overflow): the default.
     fn number(&self, key: &str, fallback: i32) -> i32 {
         let mut buf = [0u16; 32];
         let k = wide(key);
         unsafe { GetPrivateProfileStringW(w!("Window"), pcwstr(&k), w!(""), Some(&mut buf), pcwstr(&self.ini)) };
-        from_wide(&buf).to_string_lossy().trim().parse().unwrap_or(fallback)
+        let value: Option<i32> = from_wide(&buf).to_string_lossy().trim().parse().ok();
+        value.filter(|v| (-100_000..=100_000).contains(v)).unwrap_or(fallback)
     }
 
     fn load_settings(&self, cmd: &CommandLine) {

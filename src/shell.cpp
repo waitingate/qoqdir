@@ -533,7 +533,7 @@ public:
             data->AddRef();
             *data_.put() = data;
         }
-        aim(keys, pt, effect);
+        if (!aim(keys, pt, effect)) *effect = DROPEFFECT_NONE;   // still no folder (each drag starts with none)
         POINT p{pt.x, pt.y};
         if (helper_) helper_->DragEnter(owner_, data, &p, *effect);
         return S_OK;

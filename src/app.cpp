@@ -1159,12 +1159,13 @@ void App::setMessage(const std::wstring& text) {
 }
 
 void App::loadSettings(const CommandLine& cmd) {
-    auto number = [&](const std::wstring& key, int fallback) {   // missing or not a number: the default
+    // Missing, not a number or far off any screen (a damaged file: x + width must not overflow): the default.
+    auto number = [&](const std::wstring& key, int fallback) {
         wchar_t text[32] = {};
         GetPrivateProfileStringW(L"Window", key.c_str(), L"", text, 32, ini_.c_str());
         wchar_t* end = nullptr;
         long value = wcstol(text, &end, 10);
-        return end != text && *end == 0 ? int(value) : fallback;
+        return end != text && *end == 0 && value >= -100000 && value <= 100000 ? int(value) : fallback;
     };
 
     treeWidth_ = number(L"TreeWidth", 220);

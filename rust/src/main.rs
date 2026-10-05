@@ -28,19 +28,22 @@ use windows::Win32::UI::WindowsAndMessaging::{MB_ICONINFORMATION, MB_ICONWARNING
 
 use crate::util::{from_wide, pcwstr, wide};
 
-const USAGE: &str = concat!("Version ", env!("CARGO_PKG_VERSION"), "\n\nUsage: qoqdir [switches] [folders...]\n\
-\n\
-  {folder}\tOpen the folder in a tab (relative paths work: qoqdir .)\n\
-  -t{folder}\tThe same, as a switch: -tD:\\logs  -t\"C:\\My Files\"\n\
-\t(quote folders with spaces, but don't end them with \\ before the closing quote)\n\
-  -h, -?\tShow this help\n\
-\n\
-Keep folders you use often as shortcuts in the Bookmarks folder next to\n\
-qoqdir.exe (shown at the top of the tree). Tabs aren't remembered by themselves:\n\
-Ctrl+S saves them in Bookmarks\\Tabs, and Ctrl+O opens them again.\n\
-\n\
-Examples:\n\
-  qoqdir .\n\
+// The line breaks are the text's own: a \ at a line end would also drop the next line's indent.
+const USAGE: &str = concat!("Version ", env!("CARGO_PKG_VERSION"), "
+
+Usage: qoqdir [switches] [folders...]
+
+  {folder}\tOpen the folder in a tab (relative paths work: qoqdir .)
+  -t{folder}\tThe same, as a switch: -tD:\\logs  -t\"C:\\My Files\"
+\t(quote folders with spaces, but don't end them with \\ before the closing quote)
+  -h, -?\tShow this help
+
+Keep folders you use often as shortcuts in the Bookmarks folder next to
+qoqdir.exe (shown at the top of the tree). Tabs aren't remembered by themselves:
+Ctrl+S saves them in Bookmarks\\Tabs, and Ctrl+O opens them again.
+
+Examples:
+  qoqdir .
   qoqdir -tD:\\projects -tD:\\logs");
 
 /// The app's name: window title, settings file, logs. (The exe name is set in Cargo.toml.)

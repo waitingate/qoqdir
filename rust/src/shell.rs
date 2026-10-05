@@ -430,7 +430,7 @@ pub fn copy_to_clipboard(owner: HWND, dir: &Location, items: &[Item], cut: bool)
                 u: STGMEDIUM_0 { hGlobal: h },
                 pUnkForRelease: ManuallyDrop::new(None),
             };
-            if obj.SetData(&fmt, &med, true).is_err() {
+            if p.is_null() || obj.SetData(&fmt, &med, true).is_err() {
                 ReleaseStgMedium(&mut med);
             }
         }
@@ -723,7 +723,9 @@ impl DropTarget {
 impl IDropTarget_Impl for DropTarget_Impl {
     fn DragEnter(&self, data: Ref<IDataObject>, keys: MODIFIERKEYS_FLAGS, pt: &POINTL, effect: *mut DROPEFFECT) -> Result<()> {
         *self.data.borrow_mut() = data.as_ref().cloned();
-        self.aim(keys, pt, effect);
+        if !self.aim(keys, pt, effect) {
+            unsafe { *effect = DROPEFFECT_NONE }; // still no folder (each drag starts with none)
+        }
         unsafe {
             if let Some(h) = &self.helper {
                 let _ = h.DragEnter(self.owner, data.as_ref(), &POINT { x: pt.x, y: pt.y }, *effect);

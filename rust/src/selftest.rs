@@ -136,6 +136,11 @@ fn noted() -> String {
     NOTE.with(|n| n.borrow().clone())
 }
 
+/// How long the current step has waited since its act.
+fn step_ms() -> u128 {
+    RUN.with_borrow(|run| run.as_ref().and_then(|t| t.started).map_or(0, |s| s.elapsed().as_millis()))
+}
+
 /// %TEMP%\qoqdir-rs-selftest, with long names: paths Windows hands back (shortcut targets) are never RUNNER~1.
 pub fn test_dir() -> PathBuf {
     static DIR: OnceLock<PathBuf> = OnceLock::new();
@@ -378,11 +383,6 @@ impl App {
             let _ = ClientToScreen(self.tab_bar, &mut pt);
         }
         POINTL { x: pt.x, y: pt.y }
-    }
-
-    /// How long the current step has waited since its act.
-    fn step_ms(&self) -> u128 {
-        RUN.with_borrow(|run| run.as_ref().and_then(|t| t.started).map_or(0, |s| s.elapsed().as_millis()))
     }
 
     fn tree_root(&self) -> isize {
@@ -1237,7 +1237,9 @@ impl App {
                 if let (Some(data), Some(target)) = (data, a.tab_drop.borrow().clone()) {
                     unsafe {
                         let _ = target.DragEnter(&data, MK_LBUTTON, cursor, &mut effect);
-                        let _ = target.DragOver(MK_LBUTTON, cursor, &mut effect);
+                        let mut over = DROPEFFECT_COPY;
+                        let _ = target.DragOver(MK_LBUTTON, cursor, &mut over);
+                        effect |= over; // refused as the drag enters, and as it moves
                         let _ = target.DragLeave();
                     }
                 }
@@ -1412,7 +1414,7 @@ impl App {
             },
             |a| {
                 // Both reads landed: no late "deep" under Bookmarks, and every node the tree counts is reachable.
-                if a.step_ms() < 400 || a.bookmark_nodes() != "one,two,sub" {
+                if step_ms() < 400 || a.bookmark_nodes() != "one,two,sub" {
                     return false;
                 }
                 let mut node = a.tree_child(a.tree_root());
@@ -1747,7 +1749,7 @@ impl App {
             }
             Next::Check(done, timeout) => {
                 let ok = done(self);
-                let elapsed = self.step_ms();
+                let elapsed = step_ms();
                 if !ok && elapsed < timeout {
                     return;
                 }

@@ -226,6 +226,8 @@ Back, Forward and Up are disabled when they can't do anything.
   - anything else runs as a command, the way the Windows Run box (Win+R) would:
     `cmd`, `notepad file.txt`, a web address. It runs in the current folder. If
     Windows can't run it, the status bar says `Can't find "<text>"` and it beeps.
+    One difference: text that starts with a full path is always a path, so
+    `"C:\Tools\app.exe" file.txt` doesn't run (`C:\Tools\app.exe` alone does).
   - A path that doesn't work stays selected in the box, so it can be fixed.
 - Folder names autocomplete as you type (Windows' own autocomplete).
 - Esc in the address bar puts the current path back and returns to the list.
@@ -540,6 +542,8 @@ Run on a copy of the exe in a temp folder:
 - No arguments: the home folder is shown.
 - `-h` shows the help and exits with code 0. `-x` shows the error with the help
   and exits with code 1.
+- With a damaged `qoqdir.ini` (a window position far off any screen) it starts
+  with the defaults.
 - From a folder it can't write to (as Program Files is for most users), it runs,
   closes with no error box and exit code 0, and writes nothing there.
 

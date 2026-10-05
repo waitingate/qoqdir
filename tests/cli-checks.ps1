@@ -41,6 +41,7 @@ function Check([bool]$ok, [string]$what) {
 function TitleAfterStart([string[]]$argList) {   # starts the copy, reads its window title, closes it
   $p = if ($argList) { Start-Process $copy -ArgumentList $argList -PassThru } else { Start-Process $copy -PassThru }
   Start-Sleep -Milliseconds 2000
+  if ($p.HasExited) { return '' }   # it stopped by itself (the crash log says why)
   $p.Refresh(); $title = $p.MainWindowTitle
   [void]$p.CloseMainWindow(); [void]$p.WaitForExit(5000)
   $title
@@ -66,6 +67,10 @@ $r = HelpExitCode '-h'
 Check ($r.Shown -and $r.Code -eq 0) "-h shows the help and exits with 0 (shown: $($r.Shown), exit code $($r.Code))"
 $r = HelpExitCode '-x'
 Check ($r.Shown -and $r.Code -eq 1) "-x shows the error with the help and exits with 1 (shown: $($r.Shown), exit code $($r.Code))"
+# A damaged qoqdir.ini: a number far off any screen gives the default (x + width must not overflow and stop it).
+Set-Content -Path $ini -Value "[Window]`r`nX=2147483000`r`nWidth=1000`r`nHeight=600"
+$title = TitleAfterStart @('-tC:\Users\Public')
+Check ($title -eq 'Public - Qoqdir') "a damaged qoqdir.ini (X=2147483000) falls back to the defaults: '$title'"
 
 # A folder it can't write to, as Program Files is for most users: only adding files and folders is denied
 # (to you, by your SID), so it can still start.

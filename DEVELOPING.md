@@ -61,8 +61,8 @@ test that fails, then fix it.
 - One UI thread owns all state. Folder reads, tree children and file icons run on
   short-lived worker threads that share nothing and post their result (`Listing`,
   `TreeBatch`, `IconBatch`) to the main window as `WM_APP_*` messages.
-  `FolderTree::fill()` asks Windows nothing itself: even Desktop and Documents
-  come from a worker, since one of them can live on a dead server.
+  `FolderTree::fill()` asks Windows nothing that can block: even Desktop and
+  Documents come from a worker, since one of them can live on a dead server.
 - The newest request wins. `open()` bumps `generation_` and older results are
   dropped; a replaced folder read stops within 256 entries. A tab's path, history
   and title change only in `onLoaded`. `refresh()` does nothing while a load is
@@ -108,8 +108,8 @@ test that fails, then fix it.
   the manifest). Windows looks for any other imported DLL next to the exe first:
   load it at run time from System32, as `useExplorerTheme` does with uxtheme.dll.
 - "Qoqdir" in titles and messages, lowercase `qoqdir` in file names.
-- Git stores every file with LF line endings (Git for Windows shows the C++ files
-  with CRLF in the working folder).
+- Git stores every file with LF line endings (Git for Windows shows them with CRLF
+  in the working folder).
 - 4-space indent, lines up to about 120 columns, members end in `_`. Comments
   say why, not what.
 - `rust/` is the same program in Rust, level with the C++ version since 5 October
