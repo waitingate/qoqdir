@@ -1147,6 +1147,22 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
         });
     add(L"(put that file back)", [=, this] { writeFile(path(L"big\\item 5000.dat")); refresh(); },
         [=, this] { return idle() && listed(L"item 5000.dat"); });
+    add(L"(scroll down, minimize the window, and let another program add a file)",
+        [=, this] {
+            list_.scrollToRow(5000);
+            top = list_.topRow();
+            ShowWindow(wnd_, SW_SHOWMINNOACTIVE);
+            writeFile(path(L"big\\zz minimized.dat"));   // the folder watch refreshes the list
+        },
+        [=, this] { return idle() && listed(L"zz minimized.dat"); });
+    add(L"a folder that changed while the window was minimized keeps its scroll position (4.5)",
+        [=, this] { ShowWindow(wnd_, SW_SHOWNOACTIVATE); },
+        [=, this] {
+            selfTest_->note = L"top row " + std::to_wstring(list_.topRow()) + L", was " + std::to_wstring(top);
+            return list_.topRow() == top;
+        });
+    add(L"(remove that file)", [=, this] { DeleteFileW(path(L"big\\zz minimized.dat").c_str()); refresh(); },
+        [=, this] { return idle() && !listed(L"zz minimized.dat"); });
 
     add(L"copies 10,000 selected files to the clipboard",
         [=, this] {

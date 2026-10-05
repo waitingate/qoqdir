@@ -40,7 +40,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
     GWLP_USERDATA, GetClientRect, GetCursorPos, GetParent, GetWindowLongPtrW, GetWindowPlacement, GetWindowRect,
     HMENU, HTCLIENT, IDC_ARROW, IDC_SIZEWE, IsChild, KillTimer, WPF_RESTORETOMAXIMIZED, LoadCursorW, MB_ICONQUESTION,
     MB_ICONWARNING, MB_OKCANCEL, MF_GRAYED, MF_SEPARATOR, MF_STRING, MINMAXINFO, MSG, MessageBoxW, MoveWindow,
-    NONCLIENTMETRICSW, PostMessageW, PostQuitMessage, RegisterClassExW, SPI_GETNONCLIENTMETRICS, SW_SHOWMAXIMIZED,
+    NONCLIENTMETRICSW, PostMessageW, PostQuitMessage, RegisterClassExW, SIZE_MINIMIZED, SPI_GETNONCLIENTMETRICS, SW_SHOWMAXIMIZED,
     SW_SHOWNOACTIVATE, SW_SHOWNORMAL, SWP_NOACTIVATE, SWP_NOZORDER, SetCursor, SetTimer,
     SetWindowLongPtrW, SetWindowPlacement, SetWindowPos, ShowWindow, TPM_RETURNCMD,
     TPM_RIGHTBUTTON, TrackPopupMenuEx, WINDOW_EX_STYLE, WINDOW_STYLE, WINDOWPLACEMENT, WM_ACTIVATE, WM_APP,
@@ -548,7 +548,10 @@ impl App {
         unsafe {
             match msg {
                 WM_SIZE => {
-                    self.layout();
+                    // Not while minimized: a list with no height loses its scroll position in a refresh (4.5).
+                    if wp.0 != SIZE_MINIMIZED as usize {
+                        self.layout();
+                    }
                     return LRESULT(0);
                 }
                 WM_GETMINMAXINFO => {

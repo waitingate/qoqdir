@@ -226,8 +226,8 @@ void App::layout() {
 
 LRESULT App::onMessage(UINT msg, WPARAM wp, LPARAM lp) {
     switch (msg) {
-    case WM_SIZE:
-        layout();
+    case WM_SIZE:   // not while minimized: a list with no height loses its scroll position in a refresh (4.5)
+        if (wp != SIZE_MINIMIZED) layout();
         return 0;
     case WM_GETMINMAXINFO: {
         auto* mmi = reinterpret_cast<MINMAXINFO*>(lp);

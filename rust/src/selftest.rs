@@ -40,8 +40,9 @@ use windows::Win32::UI::Shell::{
     SHGFI_SYSICONINDEX, SHGetFileInfoW, SHGetKnownFolderIDList, StrCmpLogicalW,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    GWLP_USERDATA, GetWindowLongPtrW, GetWindowTextLengthW, KillTimer, PostMessageW, SetTimer, WM_CHAR, WM_CLOSE,
-    WM_DEVICECHANGE, WM_KEYDOWN, WM_MBUTTONUP, WM_SYSKEYDOWN, WM_TIMER,
+    GWLP_USERDATA, GetWindowLongPtrW, GetWindowTextLengthW, KillTimer, PostMessageW, SW_SHOWMINNOACTIVE,
+    SW_SHOWNOACTIVATE, SetTimer, ShowWindow, WM_CHAR, WM_CLOSE, WM_DEVICECHANGE, WM_KEYDOWN, WM_MBUTTONUP,
+    WM_SYSKEYDOWN, WM_TIMER,
 };
 
 use crate::app::{App, Key, Nav, TIMER_LOADING, TIMER_REFRESH, ViewState};
@@ -1678,6 +1679,36 @@ impl App {
                 a.refresh(ViewState::default());
             },
             |a| a.idle() && a.listed("item 5000.dat"),
+        );
+        s.add(
+            "(scroll down, minimize the window, and let another program add a file)",
+            |a| {
+                a.list.scroll_to_row(5000);
+                TOP.set(a.list.top_row());
+                unsafe {
+                    let _ = ShowWindow(a.wnd, SW_SHOWMINNOACTIVE);
+                }
+                write_file(&p("big\\zz minimized.dat")); // the folder watch refreshes the list
+            },
+            |a| a.idle() && a.listed("zz minimized.dat"),
+        );
+        s.add(
+            "a folder that changed while the window was minimized keeps its scroll position (4.5)",
+            |a| unsafe {
+                let _ = ShowWindow(a.wnd, SW_SHOWNOACTIVATE);
+            },
+            |a| {
+                note(format!("top row {}, was {}", a.list.top_row(), TOP.get()));
+                a.list.top_row() == TOP.get()
+            },
+        );
+        s.add(
+            "(remove that file)",
+            |a| {
+                let _ = std::fs::remove_file(p("big\\zz minimized.dat"));
+                a.refresh(ViewState::default());
+            },
+            |a| a.idle() && !a.listed("zz minimized.dat"),
         );
 
         s.add(

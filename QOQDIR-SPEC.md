@@ -542,6 +542,9 @@ result:
 42. With a second tab (`sub`) right of the current one, Ctrl+Shift+PgDn twice
     moves the current tab to the end, and it stays the current tab; Ctrl+Shift+PgUp
     twice moves it back to the start.
+43. In the 10,000-file folder, scrolled down: a file added while the window is
+    minimized is listed, and after the window comes back the list is scrolled
+    where it was.
 
 ### 7.3 Command-line checks
 Run on a copy of the exe in a temp folder:
