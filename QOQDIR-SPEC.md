@@ -540,6 +540,8 @@ Run on a copy of the exe in a temp folder:
 - No arguments: the home folder is shown.
 - `-h` shows the help and exits with code 0. `-x` shows the error with the help
   and exits with code 1.
+- From a folder it can't write to (as Program Files is for most users), it runs,
+  closes with no error box and exit code 0, and writes nothing there.
 
 ### 7.4 Watching for popups
 While the self-test runs, a script lists every new visible window from any

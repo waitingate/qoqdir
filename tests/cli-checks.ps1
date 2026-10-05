@@ -67,5 +67,21 @@ Check ($r.Shown -and $r.Code -eq 0) "-h shows the help and exits with 0 (shown: 
 $r = HelpExitCode '-x'
 Check ($r.Shown -and $r.Code -eq 1) "-x shows the error with the help and exits with 1 (shown: $($r.Shown), exit code $($r.Code))"
 
+# A folder it can't write to, as Program Files is for most users: only adding files and folders is denied
+# (to you, by your SID), so it can still start.
+$ro = Join-Path $dir 'read-only'
+New-Item -ItemType Directory $ro | Out-Null
+Copy-Item $Exe $ro
+$sid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+[void](icacls $ro /deny "*${sid}:(OI)(CI)(WD,AD)")
+$p = Start-Process (Join-Path $ro (Split-Path $Exe -Leaf)) -ArgumentList '-tC:\Users\Public' -PassThru
+Start-Sleep -Milliseconds 2000
+$p.Refresh(); $title = $p.MainWindowTitle; $box = [QoqdirHelp]::Dialog([uint32]$p.Id)
+[void]$p.CloseMainWindow(); [void]$p.WaitForExit(5000)
+$written = @(Get-ChildItem -LiteralPath $ro -Force | Where-Object { $_.Name -ne (Split-Path $Exe -Leaf) }).Count
+[void](icacls $ro /remove:d "*$sid")
+Check ($title -eq 'Public - Qoqdir' -and $box -eq [IntPtr]::Zero -and $p.ExitCode -eq 0 -and $written -eq 0) `
+  "from a folder it can't write to, it runs and closes with no error box and writes nothing there ('$title', exit code $($p.ExitCode), files written: $written)"
+
 Remove-Item -LiteralPath $dir -Recurse -Force
 if ($failures) { "$failures check(s) failed"; exit 1 } else { 'all checks passed' }
