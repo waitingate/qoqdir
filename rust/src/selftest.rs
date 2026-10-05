@@ -41,8 +41,8 @@ use windows::Win32::UI::Shell::{
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     GWLP_USERDATA, GetWindowLongPtrW, GetWindowTextLengthW, KillTimer, PostMessageW, SW_SHOWMINNOACTIVE,
-    SW_SHOWNOACTIVATE, SetTimer, ShowWindow, WM_CHAR, WM_CLOSE, WM_DEVICECHANGE, WM_KEYDOWN, WM_MBUTTONUP,
-    WM_SYSKEYDOWN, WM_TIMER,
+    SW_SHOWNOACTIVATE, SetTimer, ShowWindow, WM_CHAR, WM_CLOSE, WM_DEVICECHANGE, WM_KEYDOWN, WM_LBUTTONDOWN,
+    WM_LBUTTONUP, WM_MBUTTONUP, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_SYSKEYDOWN, WM_TIMER,
 };
 
 use crate::app::{App, Key, Nav, TIMER_LOADING, TIMER_REFRESH, ViewState};
@@ -260,6 +260,33 @@ fn volume_change(a: &App, event: usize) {
 }
 const DBT_DEVICEARRIVAL: usize = 0x8000;
 const DBT_DEVICEREMOVECOMPLETE: usize = 0x8004;
+
+/// A point as mouse messages carry it.
+fn packed(x: i32, y: i32) -> isize {
+    x as u16 as isize | ((y as u16 as isize) << 16)
+}
+
+fn tab_rect(a: &App, index: usize) -> RECT {
+    let mut r = RECT::default();
+    send(a.tab_bar, TCM_GETITEMRECT, index, &mut r as *mut _ as isize);
+    r
+}
+
+/// A mouse drag of tab `from` to `x`, as the tab bar gets it.
+fn drag_along_bar(a: &App, from: usize, x: i32) {
+    let r = tab_rect(a, from);
+    let y = (r.top + r.bottom) / 2;
+    let button = MK_LBUTTON.0 as usize;
+    send(a.tab_bar, WM_LBUTTONDOWN, button, packed((r.left + r.right) / 2, y));
+    send(a.tab_bar, WM_MOUSEMOVE, button, packed(x, y));
+    send(a.tab_bar, WM_LBUTTONUP, 0, packed(x, y));
+}
+
+/// The mouse wheel turned with the cursor over the tab bar.
+fn wheel(a: &App, delta: i16) {
+    let pt = a.tab_point(0);
+    send(a.tab_bar, WM_MOUSEWHEEL, (delta as u16 as usize) << 16, packed(pt.x, pt.y));
+}
 
 /// Files that exist only in the list, all selected: a copy that asked the disk about each one would find nothing.
 fn show_ghosts(a: &App) {
@@ -744,6 +771,62 @@ impl App {
             },
         );
         s.add("(close that tab)", |a| a.close_tab(1), move |a| a.idle() && a.tabs() == 1 && a.at(&dir()));
+        s.add(
+            "pressing a tab makes it current at once, and dragging it along the bar moves it past the others",
+            |a| {
+                a.new_tab(Location::dir(p("sub")), false);
+                a.new_tab(Location::ThisPc, false); // tabs: the test folder, sub, This PC
+                drag_along_bar(a, 1, tab_rect(a, 2).right - 1);
+            },
+            move |a| {
+                a.tabs() == 3
+                    && a.tab_path(0).same(&Location::dir(dir()))
+                    && matches!(a.tab_path(1), Location::ThisPc)
+                    && a.active() == 2
+                    && send(a.tab_bar, TCM_GETCURSEL, 0, 0) == 2
+                    && a.at(&p("sub"))
+            },
+        );
+        s.add(
+            "dragging it back to the start puts it first",
+            |a| drag_along_bar(a, 2, tab_rect(a, 0).left + 1),
+            move |a| {
+                a.tab_path(1).same(&Location::dir(dir()))
+                    && matches!(a.tab_path(2), Location::ThisPc)
+                    && a.active() == 0
+                    && send(a.tab_bar, TCM_GETCURSEL, 0, 0) == 0
+                    && a.at(&p("sub"))
+            },
+        );
+        s.add(
+            "the mouse wheel over the tabs shows the next tab (a touchpad's small steps add up) and stops at the last",
+            |a| {
+                for _ in 0..4 {
+                    wheel(a, -30); // four small steps make one
+                }
+                wheel(a, -120);
+                wheel(a, -120); // past the last tab: nothing
+            },
+            |a| a.idle() && a.active() == 2 && a.at_pc(),
+        );
+        s.add(
+            "turning the wheel the other way goes back to the first tab, and stops there",
+            |a| {
+                for _ in 0..3 {
+                    wheel(a, 120);
+                }
+            },
+            |a| a.idle() && a.active() == 0 && a.at(&p("sub")),
+        );
+        s.add("a new tab goes at the end, so the newest is the last one", |a| a.press(letter(b'T'), CTRL), move |a| {
+            a.tabs() == 4
+                && a.tab_path(1).same(&Location::dir(dir()))
+                && matches!(a.tab_path(2), Location::ThisPc)
+                && a.active() == 3
+                && a.at(&p("sub"))
+        });
+        // Keeps the test folder's own tab.
+        s.add("(close the other tabs)", |a| a.close_other_tabs(1), move |a| a.idle() && a.tabs() == 1 && a.at(&dir()));
         s.add(
             "switching tabs shows the new tab at once; nothing acts on the old one meanwhile",
             |a| {
@@ -1484,8 +1567,8 @@ impl App {
                 let _ = std::fs::create_dir(p("Bookmarks\\Tabs"));
                 make_shortcut(&p("Bookmarks\\Tabs\\old.lnk"), p("sub")); // an earlier save: replaced
                 write_file(&p("Bookmarks\\Tabs\\keep.txt")); // not a shortcut: kept
-                a.new_tab(Location::ThisPc, false);
-                a.new_tab(Location::dir(p("sub")), false); // tabs: the test folder, sub, This PC
+                a.new_tab(Location::dir(p("sub")), false);
+                a.new_tab(Location::ThisPc, false); // tabs: the test folder, sub, This PC
                 a.press(letter(b'S'), CTRL);
             },
             |a| {

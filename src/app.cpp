@@ -15,7 +15,7 @@ namespace {
 enum : int { ID_BACK = 100, ID_FORWARD, ID_UP, ID_ADDRESS, ID_FILTER, ID_TABS, ID_PLUS, ID_TREE, ID_LIST, ID_STATUS };
 enum : UINT {
     WM_APP_LOADED = WM_APP + 1, WM_APP_CHANGED, WM_APP_CLOSETAB, WM_APP_RENAME, WM_APP_ICONS, WM_APP_TREE,
-    WM_APP_MIDDLECLICK, WM_APP_TABS_SAVED, WM_APP_TABS_READ
+    WM_APP_MIDDLECLICK, WM_APP_TABS_SAVED, WM_APP_TABS_READ, WM_APP_PRESSTAB, WM_APP_DRAGTAB
 };
 
 constexpr size_t kMaxHistory = 100;
@@ -56,13 +56,29 @@ bool opensInTab(const std::optional<std::wstring>& target) {
     return target && (target->empty() || isAbsolutePath(*target));
 }
 
-// Middle-click closes a tab.
+// The tab bar. A press makes a tab current at once, and it can then be dragged along the bar to move it (left to
+// itself, the control switches only when the button comes up, as a push button does). A middle-click closes it.
 LRESULT CALLBACK tabBarProc(HWND h, UINT msg, WPARAM wp, LPARAM lp, UINT_PTR, DWORD_PTR) {
-    if (msg == WM_MBUTTONUP) {
-        TCHITTESTINFO hit{};
-        hit.pt = {GET_X_LPARAM(lp), GET_Y_LPARAM(lp)};
-        int index = TabCtrl_HitTest(h, &hit);
-        if (index >= 0) PostMessageW(GetParent(h), WM_APP_CLOSETAB, WPARAM(index), 0);
+    TCHITTESTINFO hit{};
+    hit.pt = {GET_X_LPARAM(lp), GET_Y_LPARAM(lp)};
+    switch (msg) {
+    case WM_LBUTTONDOWN:
+    case WM_LBUTTONDBLCLK:
+        if (int index = TabCtrl_HitTest(h, &hit); index >= 0) {
+            SendMessageW(GetParent(h), WM_APP_PRESSTAB, WPARAM(index), 0);
+            SetCapture(h);   // the drag lasts until the button comes up, even outside the bar
+        }
+        return 0;
+    case WM_MOUSEMOVE:
+        if (int over = TabCtrl_HitTest(h, &hit); over >= 0 && GetCapture() == h && (wp & MK_LBUTTON))
+            SendMessageW(GetParent(h), WM_APP_DRAGTAB, WPARAM(over), lp);
+        break;
+    case WM_LBUTTONUP:
+        if (GetCapture() == h) ReleaseCapture();
+        return 0;
+    case WM_MBUTTONUP:
+        if (int index = TabCtrl_HitTest(h, &hit); index >= 0)
+            PostMessageW(GetParent(h), WM_APP_CLOSETAB, WPARAM(index), 0);
         return 0;
     }
     return DefSubclassProc(h, msg, wp, lp);
@@ -318,6 +334,22 @@ LRESULT App::onMessage(UINT msg, WPARAM wp, LPARAM lp) {
     case WM_APP_CLOSETAB:
         closeTab(int(wp));
         return 0;
+    case WM_APP_PRESSTAB:
+        switchTab(int(wp));
+        return 0;
+    case WM_APP_DRAGTAB:
+        dragTab(int(wp), GET_X_LPARAM(lp));
+        return 0;
+    case WM_MOUSEWHEEL: {   // over the tab bar: switches tabs, up to the left (a touchpad's small steps add up)
+        RECT bar{};
+        GetWindowRect(tabBar_, &bar);
+        if (!PtInRect(&bar, {GET_X_LPARAM(lp), GET_Y_LPARAM(lp)})) break;
+        wheel_ += GET_WHEEL_DELTA_WPARAM(wp);
+        int steps = wheel_ / WHEEL_DELTA;
+        wheel_ %= WHEEL_DELTA;
+        if (steps) switchTab(std::clamp(active_ - steps, 0, int(tabs_.size()) - 1));
+        return 0;
+    }
     case WM_APP_RENAME: {
         Rename r = std::exchange(rename_, {});
         if (!r.path.empty() && SUCCEEDED(renameItem(wnd_, r.path, r.name))) {
@@ -547,18 +579,14 @@ void App::onTabMenu() {
     AppendMenuW(menu.get(), MF_STRING, 2, L"Close tab\tCtrl+W");
     AppendMenuW(menu.get(), MF_STRING | (tabs_.size() > 1 ? 0 : MF_GRAYED), 3, L"Close other tabs");
     AppendMenuW(menu.get(), MF_SEPARATOR, 0, nullptr);
-    AppendMenuW(menu.get(), MF_STRING | (index > 0 ? 0 : MF_GRAYED), 4, L"Move left\tCtrl+Shift+PgUp");
-    AppendMenuW(menu.get(), MF_STRING | (index + 1 < int(tabs_.size()) ? 0 : MF_GRAYED), 5, L"Move right\tCtrl+Shift+PgDn");
-    AppendMenuW(menu.get(), MF_SEPARATOR, 0, nullptr);
-    AppendMenuW(menu.get(), MF_STRING, 6, L"Save tabs\tCtrl+S");
-    AppendMenuW(menu.get(), MF_STRING, 7, L"Open saved tabs\tCtrl+O");
+    AppendMenuW(menu.get(), MF_STRING, 4, L"Save tabs\tCtrl+S");
+    AppendMenuW(menu.get(), MF_STRING, 5, L"Open saved tabs\tCtrl+O");
     int cmd = TrackPopupMenuEx(menu.get(), TPM_RETURNCMD | TPM_RIGHTBUTTON, screen.x, screen.y, wnd_, nullptr);
     if (cmd == 1) newTab(tabs_[size_t(index)].path, true);
     if (cmd == 2) closeTab(index);
     if (cmd == 3) closeOtherTabs(index);
-    if (cmd == 4 || cmd == 5) moveTab(index, cmd == 4 ? -1 : 1);
-    if (cmd == 6) saveTabs();
-    if (cmd == 7) openSavedTabs();
+    if (cmd == 4) saveTabs();
+    if (cmd == 5) openSavedTabs();
 }
 
 // ---------------------------------------------------------------- keyboard
@@ -599,7 +627,7 @@ bool App::onKey(const Key& key) {
     if (ctrl && k == 'O') { openSavedTabs(); return true; }
     if (ctrl && k == VK_TAB) { switchTab((active_ + (shift ? tabCount - 1 : 1)) % tabCount); return true; }
     if (ctrl && k >= '1' && k <= '9') { switchTab(k == '9' ? tabCount - 1 : std::min(int(k - '1'), tabCount - 1)); return true; }
-    if (ctrl && shift && (k == VK_PRIOR || k == VK_NEXT)) { moveTab(active_, k == VK_NEXT ? 1 : -1); return true; }
+    if (ctrl && shift && (k == VK_PRIOR || k == VK_NEXT)) { moveTab(active_ + (k == VK_NEXT ? 1 : -1)); return true; }
     if ((ctrl && k == 'L') || (alt && k == 'D') || (k == VK_F4 && !alt)) { focusEdit(address_); return true; }
     if ((ctrl && k == 'F') || k == VK_F3) { focusEdit(filter_); return true; }
     if (k == VK_F5 || (ctrl && k == 'R')) { refresh(); return true; }
@@ -988,12 +1016,12 @@ Tab App::makeTab(const std::wstring& path) {
     return t;
 }
 
+// New tabs go at the end, so the newest is always the last one.
 void App::newTab(std::wstring path, bool switchTo) {
-    int at = active_ + 1;
-    tabs_.insert(tabs_.begin() + at, makeTab(path));
+    tabs_.push_back(makeTab(path));
     if (switchTo) {
         rememberView();
-        active_ = at;
+        active_ = int(tabs_.size()) - 1;
         open(path, Nav::Switch);
     }
     showTabs();
@@ -1031,15 +1059,25 @@ void App::switchTab(int index) {
     open(tab().path, Nav::Switch, tab().view);
 }
 
-// Swaps a tab with its neighbor. The current tab stays current, and each tab takes its folder, history and view
+// Moves the current tab to another place, the others closing up. Each tab takes its folder, history and view
 // along: nothing is reloaded.
-void App::moveTab(int index, int by) {
-    int to = index + by;
-    if (std::min(index, to) < 0 || std::max(index, to) >= int(tabs_.size())) return;
-    std::swap(tabs_[size_t(index)], tabs_[size_t(to)]);
-    if (active_ == index) active_ = to;
-    else if (active_ == to) active_ = index;
+void App::moveTab(int to) {
+    if (to == active_ || to < 0 || to >= int(tabs_.size())) return;
+    Tab moved = std::move(tab());
+    tabs_.erase(tabs_.begin() + active_);
+    tabs_.insert(tabs_.begin() + to, std::move(moved));
+    active_ = to;
     showTabs();
+}
+
+// The current tab is dragged along the bar, the cursor (x) over tab 'over': it moves there once it would land
+// under the cursor. Any sooner, tabs of different widths would swap back and forth.
+void App::dragTab(int over, int x) {
+    RECT from{}, to{};
+    if (over == active_ || !TabCtrl_GetItemRect(tabBar_, active_, &from) || !TabCtrl_GetItemRect(tabBar_, over, &to))
+        return;
+    int width = from.right - from.left;
+    if (over > active_ ? x >= to.right - width : x < to.left + width) moveTab(over);
 }
 
 // ---------------------------------------------------------------- saved tabs (Bookmarks\Tabs)

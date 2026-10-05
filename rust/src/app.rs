@@ -13,24 +13,25 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use windows::Win32::Foundation::{COLORREF, ERROR_OPERATION_ABORTED, HINSTANCE, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
 use windows::Win32::Graphics::Gdi::{
     ClientToScreen, CreateFontIndirectW, CreateSolidBrush, InvalidateRect, GetDC, GetTextMetricsW, MONITOR_DEFAULTTONULL,
-    MonitorFromRect, ReleaseDC, ScreenToClient, SelectObject, TEXTMETRICW,
+    MonitorFromRect, PtInRect, ReleaseDC, ScreenToClient, SelectObject, TEXTMETRICW,
 };
 use windows::Win32::Storage::FileSystem::CreateDirectoryW;
 use windows::Win32::System::Diagnostics::Debug::MessageBeep;
 use windows::Win32::System::Com::{COINIT_APARTMENTTHREADED, COINIT_DISABLE_OLE1DDE, CoInitializeEx, CoUninitialize};
 use windows::Win32::System::LibraryLoader::GetModuleFileNameW;
 use windows::Win32::System::Ole::{IDropTarget, RegisterDragDrop, RevokeDragDrop};
+use windows::Win32::System::SystemServices::MK_LBUTTON;
 use windows::Win32::System::WindowsProgramming::{GetPrivateProfileStringW, WritePrivateProfileStringW};
 use windows::Win32::UI::Controls::{
     EM_GETSEL, EM_REPLACESEL, EM_SETCUEBANNER, EM_SETSEL, LVIR_LABEL, LVIS_SELECTED, LVITEMW, LVM_CANCELEDITLABEL,
     LVHITTESTINFO, LVM_GETITEMRECT, LVM_HITTEST, LVM_SETITEMSTATE, LVN_BEGINDRAG, LVN_BEGINRDRAG, LVN_ENDLABELEDITW, LVN_ITEMACTIVATE,
     LVM_SETBKCOLOR, LVM_SETTEXTBKCOLOR, TVM_SETBKCOLOR, LVN_ITEMCHANGED, LVN_ODSTATECHANGED, NM_RCLICK, NMHDR, NMLVDISPINFOW, SB_SETPARTS, SB_SETTEXTW,
-    TCHITTESTINFO, TCIF_TEXT, TCITEMW, TCM_DELETEALLITEMS, TCM_GETCURSEL, TCM_HITTEST, TCM_INSERTITEMW,
+    TCHITTESTINFO, TCIF_TEXT, TCITEMW, TCM_DELETEALLITEMS, TCM_GETCURSEL, TCM_GETITEMRECT, TCM_HITTEST, TCM_INSERTITEMW,
     TCM_HIGHLIGHTITEM, TCM_SETCURSEL, TCN_SELCHANGE,
 };
 use windows::Win32::UI::HiDpi::{GetDpiForSystem, GetDpiForWindow, SystemParametersInfoForDpi};
 use windows::Win32::UI::Input::KeyboardAndMouse::{
-    EnableWindow, GetFocus, ReleaseCapture, SetCapture, VIRTUAL_KEY, VK_BACK, VK_CONTROL, VK_DELETE,
+    EnableWindow, GetCapture, GetFocus, ReleaseCapture, SetCapture, VIRTUAL_KEY, VK_BACK, VK_CONTROL, VK_DELETE,
     VK_DOWN, VK_ESCAPE, VK_F2, VK_F3, VK_F4, VK_F5, VK_LEFT, VK_MENU, VK_NEXT, VK_PRIOR, VK_RETURN, VK_RIGHT, VK_SHIFT,
     VK_TAB, VK_UP,
 };
@@ -45,8 +46,8 @@ use windows::Win32::UI::WindowsAndMessaging::{
     SetWindowLongPtrW, SetWindowPlacement, SetWindowPos, ShowWindow, TPM_RETURNCMD,
     TPM_RIGHTBUTTON, TrackPopupMenuEx, WINDOW_EX_STYLE, WINDOW_STYLE, WINDOWPLACEMENT, WM_ACTIVATE, WM_APP,
     WM_APPCOMMAND, WM_CAPTURECHANGED, WM_CHAR, WM_CLOSE, WM_COMMAND, WM_CONTEXTMENU, WM_DESTROY, WM_DEVICECHANGE,
-    WM_DPICHANGED, WM_DRAWITEM, WM_ENDSESSION, WM_GETMINMAXINFO, WM_INITMENUPOPUP, WM_KEYDOWN, WM_LBUTTONDOWN, WM_LBUTTONUP,
-    WM_MBUTTONUP, WM_MEASUREITEM, WM_MENUCHAR, WM_MOUSEMOVE, WM_NOTIFY, WM_SETCURSOR, WM_SETFONT, WM_SIZE,
+    WM_DPICHANGED, WM_DRAWITEM, WM_ENDSESSION, WM_GETMINMAXINFO, WM_INITMENUPOPUP, WM_KEYDOWN, WM_LBUTTONDBLCLK,
+    WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONUP, WM_MEASUREITEM, WM_MENUCHAR, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_NOTIFY, WM_SETCURSOR, WM_SETFONT, WM_SIZE,
     WM_SYSKEYDOWN, WM_TIMER, WNDCLASSEXW, WS_CHILD, WS_CLIPCHILDREN, WS_EX_CLIENTEDGE, WS_OVERLAPPEDWINDOW,
     WS_TABSTOP, WS_VISIBLE,
 };
@@ -86,6 +87,8 @@ const WM_APP_TREE: u32 = WM_APP + 6;
 const WM_APP_MIDDLECLICK: u32 = WM_APP + 7;
 const WM_APP_TABS_SAVED: u32 = WM_APP + 8;
 const WM_APP_TABS_READ: u32 = WM_APP + 9;
+const WM_APP_PRESSTAB: u32 = WM_APP + 10;
+const WM_APP_DRAGTAB: u32 = WM_APP + 11;
 
 pub const TIMER_REFRESH: usize = 1;
 const TIMER_STATUS: usize = 2;
@@ -194,6 +197,7 @@ pub struct App {
     pub tree: FolderTree,
     pub tab_drop: RefCell<Option<IDropTarget>>, // files dropped on a tab go to its folder
     pub drop_tab: Cell<Option<usize>>,          // tab highlighted during a drag
+    wheel: Cell<i32>,                           // mouse wheel turned over the tab bar, not yet a whole step (120)
     font: RefCell<Option<Font>>,
     dpi: Cell<u32>,
     row_height: Cell<i32>,
@@ -253,19 +257,41 @@ fn opens_in_tab(target: &Location) -> bool {
     target.path().is_none_or(|p| p.is_absolute())
 }
 
-/// Middle-click closes a tab.
+/// The tab bar. A press makes a tab current at once, and it can then be dragged along the bar to move it (left to
+/// itself, the control switches only when the button comes up, as a push button does). A middle-click closes it.
 unsafe extern "system" fn tab_bar_proc(h: HWND, msg: u32, wp: WPARAM, lp: LPARAM, _: usize, _: usize) -> LRESULT {
-    if msg == WM_MBUTTONUP {
-        let mut hit = TCHITTESTINFO { pt: point_from(lp), ..Default::default() };
-        let index = send(h, TCM_HITTEST, 0, &mut hit as *mut _ as isize);
-        if index >= 0 {
-            unsafe {
-                if let Ok(parent) = GetParent(h) {
-                    let _ = PostMessageW(Some(parent), WM_APP_CLOSETAB, WPARAM(index as usize), LPARAM(0));
-                }
+    let mut hit = TCHITTESTINFO { pt: point_from(lp), ..Default::default() };
+    let mut tab_at_point = || usize::try_from(send(h, TCM_HITTEST, 0, &mut hit as *mut _ as isize)).ok();
+    let parent = unsafe { GetParent(h) }.unwrap_or_default();
+    let captured = || unsafe { GetCapture() } == h;
+    match msg {
+        WM_LBUTTONDOWN | WM_LBUTTONDBLCLK => {
+            if let Some(index) = tab_at_point() {
+                send(parent, WM_APP_PRESSTAB, index, 0);
+                unsafe { SetCapture(h) }; // the drag lasts until the button comes up, even outside the bar
+            }
+            return LRESULT(0);
+        }
+        WM_MOUSEMOVE => {
+            if let Some(over) = tab_at_point().filter(|_| captured() && (wp.0 & MK_LBUTTON.0 as usize) != 0) {
+                send(parent, WM_APP_DRAGTAB, over, lp.0);
             }
         }
-        return LRESULT(0);
+        WM_LBUTTONUP => {
+            if captured() {
+                let _ = unsafe { ReleaseCapture() };
+            }
+            return LRESULT(0);
+        }
+        WM_MBUTTONUP => {
+            if let Some(index) = tab_at_point() {
+                unsafe {
+                    let _ = PostMessageW(Some(parent), WM_APP_CLOSETAB, WPARAM(index), LPARAM(0));
+                }
+            }
+            return LRESULT(0);
+        }
+        _ => {}
     }
     unsafe { DefSubclassProc(h, msg, wp, lp) }
 }
@@ -381,6 +407,7 @@ impl App {
                 tree,
                 tab_drop: RefCell::new(None),
                 drop_tab: Cell::new(None),
+                wheel: Cell::new(0),
                 font: RefCell::new(None),
                 dpi: Cell::new(GetDpiForWindow(wnd)),
                 row_height: Cell::new(0),
@@ -653,6 +680,32 @@ impl App {
                 WM_APP_CLOSETAB => {
                     self.close_tab(wp.0);
                     return LRESULT(0);
+                }
+                WM_APP_PRESSTAB => {
+                    self.switch_tab(wp.0);
+                    return LRESULT(0);
+                }
+                WM_APP_DRAGTAB => {
+                    self.drag_tab(wp.0, point_from(lp).x);
+                    return LRESULT(0);
+                }
+                WM_MOUSEWHEEL => {
+                    // Over the tab bar it switches tabs, up to the left (a touchpad's small steps add up).
+                    let mut bar = RECT::default();
+                    let _ = GetWindowRect(self.tab_bar, &mut bar);
+                    if PtInRect(&bar, point_from(lp)).as_bool() {
+                        let wheel = self.wheel.get() + i32::from(hiword(wp.0) as u16 as i16);
+                        self.wheel.set(wheel % 120);
+                        let steps = wheel / 120;
+                        if steps != 0 {
+                            let (count, active) = {
+                                let st = self.st.borrow();
+                                (st.tabs.len() as i32, st.active as i32)
+                            };
+                            self.switch_tab((active - steps).clamp(0, count - 1) as usize);
+                        }
+                        return LRESULT(0);
+                    }
                 }
                 WM_APP_RENAME => {
                     let rename = self.st.borrow_mut().rename.take();
@@ -970,16 +1023,13 @@ impl App {
         let cmd = unsafe {
             let Ok(menu) = CreatePopupMenu() else { return };
             let menu = OwnedMenu(menu);
-            let state = |on: bool| if on { MF_STRING } else { MF_STRING | MF_GRAYED };
             let _ = AppendMenuW(menu.0, MF_STRING, 1, w!("Duplicate tab"));
             let _ = AppendMenuW(menu.0, MF_STRING, 2, w!("Close tab\tCtrl+W"));
-            let _ = AppendMenuW(menu.0, state(tab_count > 1), 3, w!("Close other tabs"));
+            let grayed = if tab_count > 1 { MF_STRING } else { MF_STRING | MF_GRAYED };
+            let _ = AppendMenuW(menu.0, grayed, 3, w!("Close other tabs"));
             let _ = AppendMenuW(menu.0, MF_SEPARATOR, 0, PCWSTR::null());
-            let _ = AppendMenuW(menu.0, state(index > 0), 4, w!("Move left\tCtrl+Shift+PgUp"));
-            let _ = AppendMenuW(menu.0, state(index + 1 < tab_count), 5, w!("Move right\tCtrl+Shift+PgDn"));
-            let _ = AppendMenuW(menu.0, MF_SEPARATOR, 0, PCWSTR::null());
-            let _ = AppendMenuW(menu.0, MF_STRING, 6, w!("Save tabs\tCtrl+S"));
-            let _ = AppendMenuW(menu.0, MF_STRING, 7, w!("Open saved tabs\tCtrl+O"));
+            let _ = AppendMenuW(menu.0, MF_STRING, 4, w!("Save tabs\tCtrl+S"));
+            let _ = AppendMenuW(menu.0, MF_STRING, 5, w!("Open saved tabs\tCtrl+O"));
             TrackPopupMenuEx(menu.0, (TPM_RETURNCMD | TPM_RIGHTBUTTON).0, screen.x, screen.y, self.wnd, None).0
         };
         match cmd {
@@ -991,10 +1041,8 @@ impl App {
             }
             2 => self.close_tab(index),
             3 => self.close_other_tabs(index),
-            4 => self.move_tab(index, -1),
-            5 => self.move_tab(index, 1),
-            6 => self.save_tabs(),
-            7 => self.open_saved_tabs(),
+            4 => self.save_tabs(),
+            5 => self.open_saved_tabs(),
             _ => {}
         }
     }
@@ -1075,7 +1123,7 @@ impl App {
             return true;
         }
         if ctrl && shift && (is(VK_PRIOR) || is(VK_NEXT)) {
-            self.move_tab(active, if is(VK_NEXT) { 1 } else { -1 });
+            self.move_tab(if is(VK_NEXT) { active + 1 } else { active.wrapping_sub(1) }); // past either end: nothing
             return true;
         }
         if (ctrl && letter(b'L')) || (alt && letter(b'D')) || (is(VK_F4) && !alt) {
@@ -1657,17 +1705,17 @@ impl App {
         Tab { id, location, back: Vec::new(), forward: Vec::new(), view: ViewState::default(), unavailable: true }
     }
 
+    /// New tabs go at the end, so the newest is always the last one.
     pub fn new_tab(&self, location: Location, switch_to: bool) {
         if switch_to {
             self.remember_view();
         }
         {
             let mut st = self.st.borrow_mut();
-            let at = st.active + 1;
             let tab = Self::make_tab(&mut st, location.clone());
-            st.tabs.insert(at, tab);
+            st.tabs.push(tab);
             if switch_to {
-                st.active = at;
+                st.active = st.tabs.len() - 1;
             }
         }
         if switch_to {
@@ -1697,7 +1745,7 @@ impl App {
         }
     }
 
-    fn close_other_tabs(&self, index: usize) {
+    pub fn close_other_tabs(&self, index: usize) {
         let reopen = {
             let mut st = self.st.borrow_mut();
             if index >= st.tabs.len() {
@@ -1735,20 +1783,36 @@ impl App {
         self.open(location, Nav::Switch, view);
     }
 
-    /// Ctrl+Shift+PgUp / PgDn (`by`: -1 left, 1 right): swaps a tab with its neighbor. The current tab stays
-    /// current, and each tab takes its folder, history and view along: nothing is reloaded.
-    fn move_tab(&self, index: usize, by: isize) {
+    /// Moves the current tab to another place (Ctrl+Shift+PgUp / PgDn, or a drag), the others closing up. Each tab
+    /// takes its folder, history and view along: nothing is reloaded.
+    fn move_tab(&self, to: usize) {
         {
             let mut st = self.st.borrow_mut();
-            let Some(to) = index.checked_add_signed(by).filter(|&to| index.max(to) < st.tabs.len()) else { return };
-            st.tabs.swap(index, to);
-            if st.active == index {
-                st.active = to;
-            } else if st.active == to {
-                st.active = index;
+            let active = st.active;
+            if to == active || to >= st.tabs.len() {
+                return;
             }
+            let tab = st.tabs.remove(active);
+            st.tabs.insert(to, tab);
+            st.active = to;
         }
         self.show_tabs();
+    }
+
+    /// The current tab is dragged along the bar, the cursor (`x`) over tab `over`: it moves there once it would land
+    /// under the cursor. Any sooner, tabs of different widths would swap back and forth.
+    fn drag_tab(&self, over: usize, x: i32) {
+        let active = self.st.borrow().active;
+        let rect = |index: usize| {
+            let mut r = RECT::default();
+            (send(self.tab_bar, TCM_GETITEMRECT, index, &mut r as *mut _ as isize) != 0).then_some(r)
+        };
+        let (Some(from), Some(to)) = (rect(active), rect(over)) else { return };
+        let width = from.right - from.left;
+        let lands = if over > active { x >= to.right - width } else { x < to.left + width };
+        if over != active && lands {
+            self.move_tab(over);
+        }
     }
 
     // ------------------------------------------------------------ saved tabs (Bookmarks\Tabs)

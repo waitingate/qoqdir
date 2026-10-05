@@ -99,11 +99,12 @@ private:
     // Tabs
     Tab& tab() { return tabs_[size_t(active_)]; }
     Tab makeTab(const std::wstring& path);
-    void newTab(std::wstring path, bool switchTo);   // by value: inserting the tab can move the one 'path' is in
+    void newTab(std::wstring path, bool switchTo);   // by value: adding the tab can move the one 'path' is in
     void closeTab(int index);
     void closeOtherTabs(int index);
     void switchTab(int index);
-    void moveTab(int index, int by);   // Ctrl+Shift+PgUp / PgDn: by -1 (left) or 1 (right)
+    void moveTab(int to);   // the current tab: Ctrl+Shift+PgUp / PgDn, or dragged along the bar
+    void dragTab(int over, int x);
     void showTabs();
     void saveTabs();       // Ctrl+S: a shortcut per tab in Bookmarks\Tabs
     void openSavedTabs();  // Ctrl+O: their folders as tabs after the open ones
@@ -130,6 +131,7 @@ private:
     FolderTree tree_;
     Com<IDropTarget> tabDrop_;      // files dropped on a tab go to its folder
     int dropTab_ = -1;              // tab highlighted during a drag
+    int wheel_ = 0;                 // mouse wheel turned over the tab bar, not yet a whole step (WHEEL_DELTA)
     Font font_;
     UINT dpi_ = 96;
     int rowHeight_ = 0, tabHeight_ = 0;

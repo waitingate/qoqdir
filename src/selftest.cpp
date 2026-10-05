@@ -369,6 +369,55 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
                    TabCtrl_GetCurSel(tabBar_) == 0 && at(dir);
         });
     add(L"(close that tab)", [=, this] { closeTab(1); }, [=, this] { return idle() && tabs_.size() == 1 && at(dir); });
+    auto dragAlongBar = [this](int from, int x) {   // a mouse drag of tab 'from' to x, as the tab bar gets it
+        RECT r{};
+        TabCtrl_GetItemRect(tabBar_, from, &r);
+        int y = (r.top + r.bottom) / 2;
+        SendMessageW(tabBar_, WM_LBUTTONDOWN, MK_LBUTTON, MAKELPARAM((r.left + r.right) / 2, y));
+        SendMessageW(tabBar_, WM_MOUSEMOVE, MK_LBUTTON, MAKELPARAM(x, y));
+        SendMessageW(tabBar_, WM_LBUTTONUP, 0, MAKELPARAM(x, y));
+    };
+    auto tabEdge = [this](int index, bool right) {   // a tab's left or right edge, just inside it
+        RECT r{};
+        TabCtrl_GetItemRect(tabBar_, index, &r);
+        return right ? r.right - 1 : r.left + 1;
+    };
+    auto wheel = [this, tabPoint](int delta) {   // the mouse wheel turned with the cursor over the tab bar
+        POINTL pt = tabPoint(0);
+        SendMessageW(tabBar_, WM_MOUSEWHEEL, MAKEWPARAM(0, delta), MAKELPARAM(pt.x, pt.y));
+    };
+    add(L"pressing a tab makes it current at once, and dragging it along the bar moves it past the others",
+        [=, this] {
+            newTab(path(L"sub"), false);
+            newTab(L"", false);   // tabs: the test folder, sub, This PC
+            dragAlongBar(1, tabEdge(2, true));
+        },
+        [=, this] {
+            return tabs_.size() == 3 && samePath(tabs_[0].path, dir) && tabs_[1].path.empty() && active_ == 2 &&
+                   TabCtrl_GetCurSel(tabBar_) == 2 && at(path(L"sub"));
+        });
+    add(L"dragging it back to the start puts it first", [=, this] { dragAlongBar(2, tabEdge(0, false)); },
+        [=, this] {
+            return samePath(tabs_[1].path, dir) && tabs_[2].path.empty() && active_ == 0 &&
+                   TabCtrl_GetCurSel(tabBar_) == 0 && at(path(L"sub"));
+        });
+    add(L"the mouse wheel over the tabs shows the next tab (a touchpad's small steps add up) and stops at the last",
+        [=, this] {
+            for (int i = 0; i < 4; ++i) wheel(-30);   // four small steps make one
+            wheel(-120);
+            wheel(-120);   // past the last tab: nothing
+        },
+        [=, this] { return idle() && active_ == 2 && at(L""); });
+    add(L"turning the wheel the other way goes back to the first tab, and stops there",
+        [=, this] { for (int i = 0; i < 3; ++i) wheel(120); },
+        [=, this] { return idle() && active_ == 0 && at(path(L"sub")); });
+    add(L"a new tab goes at the end, so the newest is the last one", [=, this] { selfTestKey('T', true); },
+        [=, this] {
+            return tabs_.size() == 4 && samePath(tabs_[1].path, dir) && tabs_[2].path.empty() && active_ == 3 &&
+                   at(path(L"sub"));
+        });
+    add(L"(close the other tabs)", [=, this] { closeOtherTabs(1); },   // keeps the test folder's own tab
+        [=, this] { return idle() && tabs_.size() == 1 && at(dir); });
     add(L"switching tabs shows the new tab at once; nothing acts on the old one meanwhile",
         [=, this] {
             newTab(path(L"sub"), false);
@@ -980,8 +1029,8 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
             CreateDirectoryW(path(L"Bookmarks\\Tabs").c_str(), nullptr);
             makeShortcut(path(L"Bookmarks\\Tabs\\old.lnk"), path(L"sub"));   // an earlier save: replaced
             writeFile(path(L"Bookmarks\\Tabs\\keep.txt"));                   // not a shortcut: kept
-            newTab(L"", false);
-            newTab(path(L"sub"), false);   // tabs: the test folder, sub, This PC
+            newTab(path(L"sub"), false);
+            newTab(L"", false);   // tabs: the test folder, sub, This PC
             selfTestKey('S', true);
         },
         [=, this] {

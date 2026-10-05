@@ -49,7 +49,7 @@ rename that folder.
 | Ctrl+T / Ctrl+W | new tab / close tab |
 | Ctrl+S / Ctrl+O | save the tabs / open the saved tabs |
 | Ctrl+Tab, Ctrl+1 to 9 | switch tab |
-| Ctrl+Shift+PgUp / PgDn | move the tab left / right (also on its right-click menu) |
+| Ctrl+Shift+PgUp / PgDn | move the tab left / right |
 | Ctrl+L, Alt+D, F4 | address bar |
 | Ctrl+F, F3 | filter box (or just start typing in the list) |
 | F5, Ctrl+R | refresh |
@@ -64,8 +64,10 @@ rename that folder.
 | Alt+Enter | properties |
 | Esc | clear the filter |
 
-Middle-click a folder to open it in a background tab. Drop files on a tab to
-move or copy them into that tab's folder, as Explorer would.
+Middle-click a folder to open it in a background tab. New tabs always go at the
+end. Drag a tab along the bar to move it, and turn the mouse wheel over the tabs
+to switch between them. Drop files on a tab to move or copy them into that tab's
+folder, as Explorer would.
 
 ## Files it writes
 

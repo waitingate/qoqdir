@@ -301,18 +301,21 @@ Back, Forward and Up are disabled when they can't do anything.
 - Any number of tabs. Each has its own folder, Back/Forward history and
   remembered view (selection, focus, scroll).
 - New tab (Ctrl+T or "+") opens the current folder and switches to it.
+- Every new tab (Ctrl+T, "+", a middle-click, Ctrl+Enter, "Duplicate tab") goes
+  at the end of the tab bar, so the newest is always the last one.
 - Close a tab with Ctrl+W, a middle-click on it, or its context menu. The last
   tab can't be closed.
 - Tab context menu: "Duplicate tab", "Close tab   Ctrl+W", "Close other tabs"
-  (disabled when there is only one), then "Move left   Ctrl+Shift+PgUp" and
-  "Move right   Ctrl+Shift+PgDn" (disabled at that end), then
-  "Save tabs   Ctrl+S" and "Open saved tabs   Ctrl+O".
-- Switch with a click, Ctrl+Tab and Ctrl+Shift+Tab (they wrap around), Ctrl+1 to
-  Ctrl+8 (that tab, or the last), Ctrl+9 (the last tab).
-- Move a tab one place left or right with its context menu, or the current tab
-  with Ctrl+Shift+PgUp / Ctrl+Shift+PgDn. It keeps its folder, history and view
-  (nothing reloads), and the current tab stays current. The order is the one
-  Ctrl+S saves.
+  (disabled when there is only one), then "Save tabs   Ctrl+S" and "Open saved
+  tabs   Ctrl+O".
+- Switch with a click (a tab becomes current as the button goes down), the mouse
+  wheel over the tabs (up: the tab to the left; it stops at either end), Ctrl+Tab
+  and Ctrl+Shift+Tab (they wrap around), Ctrl+1 to Ctrl+8 (that tab, or the
+  last), Ctrl+9 (the last tab).
+- Move a tab by dragging it along the bar: it moves into place as it passes the
+  other tabs. Ctrl+Shift+PgUp / Ctrl+Shift+PgDn move the current tab one place.
+  A moved tab keeps its folder, history and view (nothing reloads) and stays the
+  current tab. The order is the one Ctrl+S saves.
 - Drop onto a tab: dragging files over a tab highlights it, and dropping copies or
   moves them into that tab's folder exactly as dropping on that folder in Explorer
   would (Shift, Ctrl and Alt work as usual). Not onto This PC, not onto a tab
@@ -545,6 +548,13 @@ result:
 43. In the 10,000-file folder, scrolled down: a file added while the window is
     minimized is listed, and after the window comes back the list is scrolled
     where it was.
+44. With three tabs (the test folder, `sub`, This PC), pressing `sub` makes it
+    current at once, and dragging it to the end of the bar moves it there; dragging
+    it to the start puts it first. Mouse messages go straight to the tab bar.
+45. The mouse wheel over the tabs, turned down (first in four small touchpad steps),
+    shows the next tab each time and stops at the last; turned up, it goes back and
+    stops at the first.
+46. Ctrl+T from the first tab adds the new tab at the end, after all the others.
 
 ### 7.3 Command-line checks
 Run on a copy of the exe in a temp folder:
