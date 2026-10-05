@@ -797,10 +797,12 @@ impl App {
         );
         s.add("(close that tab)", |a| a.close_tab(1), move |a| a.idle() && a.tabs() == 1 && a.at(&dir()));
         s.add(
-            "pressing a tab makes it current at once, and dragging it along the bar moves it past the others",
+            "pressing a tab makes it current at once, and dragging it along the bar moves it past the others \
+             (a slip just into the next tab moves nothing)",
             |a| {
                 a.new_tab(Location::dir(p("sub")), false);
                 a.new_tab(Location::ThisPc, false); // tabs: the test folder, sub, This PC
+                drag_along_bar(a, 0, tab_rect(a, 1).left + 1); // a slip during a click, short of the next tab's middle
                 drag_along_bar(a, 1, tab_rect(a, 2).right - 1);
             },
             move |a| {

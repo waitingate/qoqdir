@@ -60,7 +60,7 @@ pub struct FolderTree {
     reads: Cell<u32>,                         // numbers every read started
     paths: RefCell<HashMap<isize, Location>>, // each node's folder (or shortcut); a node leaves it when deleted
     reading: RefCell<HashMap<isize, u32>>,    // nodes whose subfolders are being read, by read number
-    hover_since: Cell<u64>,                   // when a drag came over the node it lights up
+    open_at: Cell<u64>,                       // when the node a drag lights up opens (0: done)
     drop_folder: RefCell<Option<Location>>,   // and where a drop on that node goes
 }
 
@@ -170,7 +170,7 @@ impl FolderTree {
             reads: Cell::new(0),
             paths: RefCell::new(HashMap::new()),
             reading: RefCell::new(HashMap::new()),
-            hover_since: Cell::new(0),
+            open_at: Cell::new(0),
             drop_folder: RefCell::new(None),
         }
     }
@@ -368,11 +368,12 @@ impl FolderTree {
         let now = unsafe { GetTickCount64() };
         if node != send(self.hwnd, TVM_GETNEXTITEM, TVGN_DROPHILITE as usize, 0) {
             send(self.hwnd, TVM_SELECTITEM, TVGN_DROPHILITE as usize, node);
-            self.hover_since.set(now);
+            self.open_at.set(now + 700);
             let folder = if node == 0 { None } else { local_folder(self.location_of(HTREEITEM(node))) };
             *self.drop_folder.borrow_mut() = folder;
-        } else if node != 0 && now - self.hover_since.get() >= 700 {
-            send(self.hwnd, TVM_EXPAND, TVE_EXPAND.0 as usize, node); // nothing once it is open
+        } else if node != 0 && self.open_at.get() != 0 && now >= self.open_at.get() {
+            send(self.hwnd, TVM_EXPAND, TVE_EXPAND.0 as usize, node);
+            self.open_at.set(0); // once: a folder that can't be read would be read again and again
         }
         self.drop_folder.borrow().clone()
     }

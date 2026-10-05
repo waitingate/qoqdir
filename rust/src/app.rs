@@ -268,7 +268,9 @@ unsafe extern "system" fn tab_bar_proc(h: HWND, msg: u32, wp: WPARAM, lp: LPARAM
     match msg {
         WM_LBUTTONDOWN | WM_LBUTTONDBLCLK => {
             if let Some(index) = tab_at_point() {
-                send(parent, WM_APP_PRESSTAB, index, 0);
+                if send(h, TCM_GETCURSEL, 0, 0) != index as isize {
+                    send(parent, WM_APP_PRESSTAB, index, 0);
+                }
                 unsafe { SetCapture(h) }; // the drag lasts until the button comes up, even outside the bar
             }
             return LRESULT(0);
@@ -1814,8 +1816,9 @@ impl App {
         self.show_tabs();
     }
 
-    /// The current tab is dragged along the bar, the cursor (`x`) over tab `over`: it moves there once it would land
-    /// under the cursor. Any sooner, tabs of different widths would swap back and forth.
+    /// The current tab is dragged along the bar, the cursor (`x`) over tab `over`: it moves there once the cursor is
+    /// past that tab's middle, so a slip during a click moves nothing, and once it would land under the cursor: any
+    /// sooner, tabs of different widths would swap back and forth.
     fn drag_tab(&self, over: usize, x: i32) {
         let active = self.st.borrow().active;
         let rect = |index: usize| {
@@ -1823,8 +1826,8 @@ impl App {
             (send(self.tab_bar, TCM_GETITEMRECT, index, &mut r as *mut _ as isize) != 0).then_some(r)
         };
         let (Some(from), Some(to)) = (rect(active), rect(over)) else { return };
-        let width = from.right - from.left;
-        let lands = if over > active { x >= to.right - width } else { x < to.left + width };
+        let (width, middle) = (from.right - from.left, (to.left + to.right) / 2);
+        let lands = if over > active { x >= (to.right - width).max(middle) } else { x < (to.left + width).min(middle) };
         if over != active && lands {
             self.move_tab(over);
         }

@@ -320,8 +320,9 @@ Back, Forward and Up are disabled when they can't do anything.
   wheel over the tabs (up: the tab to the left; it stops at either end), Ctrl+Tab
   and Ctrl+Shift+Tab (they wrap around), Ctrl+1 to Ctrl+8 (that tab, or the
   last), Ctrl+9 (the last tab).
-- Move a tab by dragging it along the bar: it moves into place as it passes the
-  other tabs. Ctrl+Shift+PgUp / Ctrl+Shift+PgDn move the current tab one place.
+- Move a tab by dragging it along the bar: it moves past another tab once the
+  pointer is beyond that tab's middle, so a slip during a click moves nothing.
+  Ctrl+Shift+PgUp / Ctrl+Shift+PgDn move the current tab one place.
   A moved tab keeps its folder, history and view (nothing reloads) and stays the
   current tab. The order is the one Ctrl+S saves.
 - Drop onto a tab: dragging files over a tab highlights it, and dropping copies or
@@ -560,7 +561,8 @@ result:
 43. In the 10,000-file folder, scrolled down: a file added while the window is
     minimized is listed, and after the window comes back the list is scrolled
     where it was.
-44. With three tabs (the test folder, `sub`, This PC), pressing `sub` makes it
+44. With three tabs (the test folder, `sub`, This PC), a press on the first tab
+    that slips just into the next one moves nothing; pressing `sub` makes it
     current at once, and dragging it to the end of the bar moves it there; dragging
     it to the start puts it first. Mouse messages go straight to the tab bar.
 45. The mouse wheel over the tabs, turned down (first in four small touchpad steps),

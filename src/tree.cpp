@@ -229,10 +229,11 @@ std::optional<std::wstring> FolderTree::dropTarget(const POINT* screenPt) {
     }
     if (node != TreeView_GetDropHilight(tv_)) {
         TreeView_SelectDropTarget(tv_, node);
-        hoverSince_ = GetTickCount64();
+        openAt_ = GetTickCount64() + 700;
         dropFolder_ = node ? localFolder(pathOf(node)) : std::nullopt;
-    } else if (node && GetTickCount64() - hoverSince_ >= 700) {
-        TreeView_Expand(tv_, node, TVE_EXPAND);   // nothing once it is open
+    } else if (node && openAt_ && GetTickCount64() >= openAt_) {
+        TreeView_Expand(tv_, node, TVE_EXPAND);
+        openAt_ = 0;   // once: a folder that can't be read would be read again and again
     }
     return dropFolder_;
 }

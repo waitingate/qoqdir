@@ -53,6 +53,6 @@ private:
     unsigned reads_ = 0;                      // numbers every read started
     std::map<HTREEITEM, std::wstring> paths_;   // each node's folder (or shortcut); a node leaves it when deleted
     std::map<HTREEITEM, unsigned> reading_;   // nodes whose subfolders are being read, by read number
-    ULONGLONG hoverSince_ = 0;                // when a drag came over the node it lights up
+    ULONGLONG openAt_ = 0;                    // when the node a drag lights up opens (0: done)
     std::optional<std::wstring> dropFolder_;  // and where a drop on that node goes
 };

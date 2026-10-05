@@ -65,7 +65,7 @@ LRESULT CALLBACK tabBarProc(HWND h, UINT msg, WPARAM wp, LPARAM lp, UINT_PTR, DW
     case WM_LBUTTONDOWN:
     case WM_LBUTTONDBLCLK:
         if (int index = TabCtrl_HitTest(h, &hit); index >= 0) {
-            SendMessageW(GetParent(h), WM_APP_PRESSTAB, WPARAM(index), 0);
+            if (index != TabCtrl_GetCurSel(h)) SendMessageW(GetParent(h), WM_APP_PRESSTAB, WPARAM(index), 0);
             SetCapture(h);   // the drag lasts until the button comes up, even outside the bar
         }
         return 0;
@@ -1078,14 +1078,15 @@ void App::moveTab(int to) {
     showTabs();
 }
 
-// The current tab is dragged along the bar, the cursor (x) over tab 'over': it moves there once it would land
-// under the cursor. Any sooner, tabs of different widths would swap back and forth.
+// The current tab is dragged along the bar, the cursor (x) over tab 'over': it moves there once the cursor is past
+// that tab's middle, so a slip during a click moves nothing, and once it would land under the cursor: any sooner,
+// tabs of different widths would swap back and forth.
 void App::dragTab(int over, int x) {
     RECT from{}, to{};
     if (over == active_ || !TabCtrl_GetItemRect(tabBar_, active_, &from) || !TabCtrl_GetItemRect(tabBar_, over, &to))
         return;
-    int width = from.right - from.left;
-    if (over > active_ ? x >= to.right - width : x < to.left + width) moveTab(over);
+    LONG width = from.right - from.left, middle = (to.left + to.right) / 2;
+    if (over > active_ ? x >= std::max(to.right - width, middle) : x < std::min(to.left + width, middle)) moveTab(over);
 }
 
 // ---------------------------------------------------------------- saved tabs (Bookmarks\Tabs)

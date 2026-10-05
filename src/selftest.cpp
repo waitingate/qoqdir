@@ -386,10 +386,12 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
         POINTL pt = tabPoint(0);
         SendMessageW(tabBar_, WM_MOUSEWHEEL, MAKEWPARAM(0, delta), MAKELPARAM(pt.x, pt.y));
     };
-    add(L"pressing a tab makes it current at once, and dragging it along the bar moves it past the others",
+    add(L"pressing a tab makes it current at once, and dragging it along the bar moves it past the others "
+        L"(a slip just into the next tab moves nothing)",
         [=, this] {
             newTab(path(L"sub"), false);
             newTab(L"", false);   // tabs: the test folder, sub, This PC
+            dragAlongBar(0, tabEdge(1, false));   // a slip during a click, short of the next tab's middle
             dragAlongBar(1, tabEdge(2, true));
         },
         [=, this] {
