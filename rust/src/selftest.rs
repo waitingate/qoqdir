@@ -25,14 +25,15 @@ use windows::Win32::System::SystemInformation::GetSystemDirectoryW;
 use windows::Win32::System::SystemServices::MK_LBUTTON;
 use windows::Win32::UI::Controls::{
     EM_GETSEL, EM_REPLACESEL, HTREEITEM, LVIF_IMAGE, LVIR_LABEL, LVITEMW, LVM_CANCELEDITLABEL, LVM_GETCOUNTPERPAGE,
-    LVM_GETITEMRECT, LVM_GETITEMW, SB_GETTEXTLENGTHW, SB_GETTEXTW, TCIF_TEXT, TCITEMW, TCM_GETITEMRECT, TCM_GETITEMW,
+    LVM_GETITEMRECT, LVM_GETITEMW, SB_GETTEXTLENGTHW, SB_GETTEXTW, TCIF_TEXT, TCITEMW, TCM_GETCURSEL, TCM_GETITEMRECT,
+    TCM_GETITEMW,
     TVE_EXPAND, TVGN_CARET, TVGN_CHILD, TVGN_NEXT, TVGN_ROOT, TVHITTESTINFO, TVHT_ONITEMBUTTON, TVIF_CHILDREN, TVIF_IMAGE,
     TVIF_TEXT, TVIS_EXPANDED, TVITEMW, TVM_EXPAND, TVM_GETCOUNT, TVM_GETINDENT, TVM_GETITEMRECT, TVM_GETITEMSTATE,
     TVM_GETITEMW, TVM_GETNEXTITEM, TVM_HITTEST, TVM_SELECTITEM,
 };
 use windows::Win32::UI::Input::KeyboardAndMouse::{
-    GetFocus, VIRTUAL_KEY, VK_BACK, VK_DELETE, VK_DOWN, VK_ESCAPE, VK_F2, VK_F5, VK_LEFT, VK_RETURN, VK_RIGHT,
-    VK_TAB,
+    GetFocus, VIRTUAL_KEY, VK_BACK, VK_DELETE, VK_DOWN, VK_ESCAPE, VK_F2, VK_F5, VK_LEFT, VK_NEXT, VK_PRIOR, VK_RETURN,
+    VK_RIGHT, VK_TAB,
 };
 use windows::Win32::UI::Shell::{
     DragQueryFileW, FOLDERID_ComputerFolder, FOLDERID_Desktop, HDROP, SHFILEINFOW, SHGFI_DISPLAYNAME, SHGFI_SMALLICON,
@@ -712,6 +713,36 @@ impl App {
         s.add("Ctrl+W on the last tab keeps it (the last tab cannot be closed)", |a| a.press(letter(b'W'), CTRL), move |a| {
             a.idle() && a.tabs() == 1 && a.at(&dir())
         });
+        s.add(
+            "Ctrl+Shift+PgDn moves the tab one place right, and no further; it stays the current tab",
+            |a| {
+                a.new_tab(Location::dir(p("sub")), false); // a second tab, right of this one
+                a.press(VK_NEXT, CTRL | SHIFT);
+                a.press(VK_NEXT, CTRL | SHIFT);
+            },
+            move |a| {
+                a.tabs() == 2
+                    && a.tab_path(0).same(&Location::dir(p("sub")))
+                    && a.active() == 1
+                    && send(a.tab_bar, TCM_GETCURSEL, 0, 0) == 1
+                    && a.at(&dir())
+            },
+        );
+        s.add(
+            "Ctrl+Shift+PgUp moves it back, and no further",
+            |a| {
+                a.press(VK_PRIOR, CTRL | SHIFT);
+                a.press(VK_PRIOR, CTRL | SHIFT);
+            },
+            move |a| {
+                a.tabs() == 2
+                    && a.tab_path(1).same(&Location::dir(p("sub")))
+                    && a.active() == 0
+                    && send(a.tab_bar, TCM_GETCURSEL, 0, 0) == 0
+                    && a.at(&dir())
+            },
+        );
+        s.add("(close that tab)", |a| a.close_tab(1), move |a| a.idle() && a.tabs() == 1 && a.at(&dir()));
         s.add(
             "switching tabs shows the new tab at once; nothing acts on the old one meanwhile",
             |a| {

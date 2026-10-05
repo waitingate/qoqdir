@@ -31,7 +31,8 @@ use windows::Win32::UI::Controls::{
 use windows::Win32::UI::HiDpi::{GetDpiForSystem, GetDpiForWindow, SystemParametersInfoForDpi};
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     EnableWindow, GetFocus, ReleaseCapture, SetCapture, VIRTUAL_KEY, VK_BACK, VK_CONTROL, VK_DELETE,
-    VK_DOWN, VK_ESCAPE, VK_F2, VK_F3, VK_F4, VK_F5, VK_LEFT, VK_MENU, VK_RETURN, VK_RIGHT, VK_SHIFT, VK_TAB, VK_UP,
+    VK_DOWN, VK_ESCAPE, VK_F2, VK_F3, VK_F4, VK_F5, VK_LEFT, VK_MENU, VK_NEXT, VK_PRIOR, VK_RETURN, VK_RIGHT, VK_SHIFT,
+    VK_TAB, VK_UP,
 };
 use windows::Win32::UI::Shell::{DefSubclassProc, FOLDERID_Profile, SHACF_FILESYS_DIRS, SHAutoComplete, SetWindowSubclass};
 use windows::Win32::UI::WindowsAndMessaging::{
@@ -966,13 +967,16 @@ impl App {
         let cmd = unsafe {
             let Ok(menu) = CreatePopupMenu() else { return };
             let menu = OwnedMenu(menu);
+            let state = |on: bool| if on { MF_STRING } else { MF_STRING | MF_GRAYED };
             let _ = AppendMenuW(menu.0, MF_STRING, 1, w!("Duplicate tab"));
             let _ = AppendMenuW(menu.0, MF_STRING, 2, w!("Close tab\tCtrl+W"));
-            let grayed = if tab_count > 1 { MF_STRING } else { MF_STRING | MF_GRAYED };
-            let _ = AppendMenuW(menu.0, grayed, 3, w!("Close other tabs"));
+            let _ = AppendMenuW(menu.0, state(tab_count > 1), 3, w!("Close other tabs"));
             let _ = AppendMenuW(menu.0, MF_SEPARATOR, 0, PCWSTR::null());
-            let _ = AppendMenuW(menu.0, MF_STRING, 4, w!("Save tabs\tCtrl+S"));
-            let _ = AppendMenuW(menu.0, MF_STRING, 5, w!("Open saved tabs\tCtrl+O"));
+            let _ = AppendMenuW(menu.0, state(index > 0), 4, w!("Move left\tCtrl+Shift+PgUp"));
+            let _ = AppendMenuW(menu.0, state(index + 1 < tab_count), 5, w!("Move right\tCtrl+Shift+PgDn"));
+            let _ = AppendMenuW(menu.0, MF_SEPARATOR, 0, PCWSTR::null());
+            let _ = AppendMenuW(menu.0, MF_STRING, 6, w!("Save tabs\tCtrl+S"));
+            let _ = AppendMenuW(menu.0, MF_STRING, 7, w!("Open saved tabs\tCtrl+O"));
             TrackPopupMenuEx(menu.0, (TPM_RETURNCMD | TPM_RIGHTBUTTON).0, screen.x, screen.y, self.wnd, None).0
         };
         match cmd {
@@ -984,8 +988,10 @@ impl App {
             }
             2 => self.close_tab(index),
             3 => self.close_other_tabs(index),
-            4 => self.save_tabs(),
-            5 => self.open_saved_tabs(),
+            4 => self.move_tab(index, -1),
+            5 => self.move_tab(index, 1),
+            6 => self.save_tabs(),
+            7 => self.open_saved_tabs(),
             _ => {}
         }
     }
@@ -1063,6 +1069,10 @@ impl App {
         if ctrl && (b'1' as u16..=b'9' as u16).contains(&k) {
             let index = if letter(b'9') { tab_count - 1 } else { ((k - b'1' as u16) as usize).min(tab_count - 1) };
             self.switch_tab(index);
+            return true;
+        }
+        if ctrl && shift && (is(VK_PRIOR) || is(VK_NEXT)) {
+            self.move_tab(active, if is(VK_NEXT) { 1 } else { -1 });
             return true;
         }
         if (ctrl && letter(b'L')) || (alt && letter(b'D')) || (is(VK_F4) && !alt) {
@@ -1720,6 +1730,22 @@ impl App {
         };
         self.show_tabs();
         self.open(location, Nav::Switch, view);
+    }
+
+    /// Ctrl+Shift+PgUp / PgDn (`by`: -1 left, 1 right): swaps a tab with its neighbor. The current tab stays
+    /// current, and each tab takes its folder, history and view along: nothing is reloaded.
+    fn move_tab(&self, index: usize, by: isize) {
+        {
+            let mut st = self.st.borrow_mut();
+            let Some(to) = index.checked_add_signed(by).filter(|&to| index.max(to) < st.tabs.len()) else { return };
+            st.tabs.swap(index, to);
+            if st.active == index {
+                st.active = to;
+            } else if st.active == to {
+                st.active = index;
+            }
+        }
+        self.show_tabs();
     }
 
     // ------------------------------------------------------------ saved tabs (Bookmarks\Tabs)

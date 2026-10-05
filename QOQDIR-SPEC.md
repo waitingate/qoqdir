@@ -304,10 +304,15 @@ Back, Forward and Up are disabled when they can't do anything.
 - Close a tab with Ctrl+W, a middle-click on it, or its context menu. The last
   tab can't be closed.
 - Tab context menu: "Duplicate tab", "Close tab   Ctrl+W", "Close other tabs"
-  (disabled when there is only one), then "Save tabs   Ctrl+S" and "Open saved
-  tabs   Ctrl+O".
+  (disabled when there is only one), then "Move left   Ctrl+Shift+PgUp" and
+  "Move right   Ctrl+Shift+PgDn" (disabled at that end), then
+  "Save tabs   Ctrl+S" and "Open saved tabs   Ctrl+O".
 - Switch with a click, Ctrl+Tab and Ctrl+Shift+Tab (they wrap around), Ctrl+1 to
   Ctrl+8 (that tab, or the last), Ctrl+9 (the last tab).
+- Move a tab one place left or right with its context menu, or the current tab
+  with Ctrl+Shift+PgUp / Ctrl+Shift+PgDn. It keeps its folder, history and view
+  (nothing reloads), and the current tab stays current. The order is the one
+  Ctrl+S saves.
 - Drop onto a tab: dragging files over a tab highlights it, and dropping copies or
   moves them into that tab's folder exactly as dropping on that folder in Explorer
   would (Shift, Ctrl and Alt work as usual). Not onto This PC, not onto a tab
@@ -351,6 +356,7 @@ Anywhere in the window:
 | Ctrl+T / Ctrl+W | new tab / close tab |
 | Ctrl+S / Ctrl+O | save the tabs / open the saved tabs |
 | Ctrl+Tab, Ctrl+Shift+Tab, Ctrl+1 to 9 | switch tab |
+| Ctrl+Shift+PgUp / Ctrl+Shift+PgDn | move the tab left / right |
 | Ctrl+L, Alt+D, F4 | address bar (text selected) |
 | Ctrl+F, F3 | filter box |
 | F5, Ctrl+R | refresh |
@@ -533,6 +539,9 @@ result:
     per tab in `Bookmarks\Tabs`, in tab order: an old shortcut there is gone and a
     text file there stays. After closing two tabs, Ctrl+O opens `sub` and This PC
     after the test folder (which is open already) and shows `sub`.
+42. With a second tab (`sub`) right of the current one, Ctrl+Shift+PgDn twice
+    moves the current tab to the end, and it stays the current tab; Ctrl+Shift+PgUp
+    twice moves it back to the start.
 
 ### 7.3 Command-line checks
 Run on a copy of the exe in a temp folder:

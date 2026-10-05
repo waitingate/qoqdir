@@ -103,6 +103,7 @@ private:
     void closeTab(int index);
     void closeOtherTabs(int index);
     void switchTab(int index);
+    void moveTab(int index, int by);   // Ctrl+Shift+PgUp / PgDn: by -1 (left) or 1 (right)
     void showTabs();
     void saveTabs();       // Ctrl+S: a shortcut per tab in Bookmarks\Tabs
     void openSavedTabs();  // Ctrl+O: their folders as tabs after the open ones

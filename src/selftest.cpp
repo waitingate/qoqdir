@@ -349,6 +349,26 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
     add(L"Ctrl+W closes it", [=, this] { selfTestKey('W', true); }, [=, this] { return idle() && tabs_.size() == 1 && at(dir); });
     add(L"Ctrl+W on the last tab keeps it (the last tab cannot be closed)", [=, this] { selfTestKey('W', true); },
         [=, this] { return idle() && tabs_.size() == 1 && at(dir); });
+    add(L"Ctrl+Shift+PgDn moves the tab one place right, and no further; it stays the current tab",
+        [=, this] {
+            newTab(path(L"sub"), false);   // a second tab, right of this one
+            selfTestKey(VK_NEXT, true, true);
+            selfTestKey(VK_NEXT, true, true);
+        },
+        [=, this] {
+            return tabs_.size() == 2 && samePath(tabs_[0].path, path(L"sub")) && active_ == 1 &&
+                   TabCtrl_GetCurSel(tabBar_) == 1 && at(dir);
+        });
+    add(L"Ctrl+Shift+PgUp moves it back, and no further",
+        [=, this] {
+            selfTestKey(VK_PRIOR, true, true);
+            selfTestKey(VK_PRIOR, true, true);
+        },
+        [=, this] {
+            return tabs_.size() == 2 && samePath(tabs_[1].path, path(L"sub")) && active_ == 0 &&
+                   TabCtrl_GetCurSel(tabBar_) == 0 && at(dir);
+        });
+    add(L"(close that tab)", [=, this] { closeTab(1); }, [=, this] { return idle() && tabs_.size() == 1 && at(dir); });
     add(L"switching tabs shows the new tab at once; nothing acts on the old one meanwhile",
         [=, this] {
             newTab(path(L"sub"), false);

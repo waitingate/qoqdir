@@ -49,6 +49,7 @@ rename that folder.
 | Ctrl+T / Ctrl+W | new tab / close tab |
 | Ctrl+S / Ctrl+O | save the tabs / open the saved tabs |
 | Ctrl+Tab, Ctrl+1 to 9 | switch tab |
+| Ctrl+Shift+PgUp / PgDn | move the tab left / right (also on its right-click menu) |
 | Ctrl+L, Alt+D, F4 | address bar |
 | Ctrl+F, F3 | filter box (or just start typing in the list) |
 | F5, Ctrl+R | refresh |

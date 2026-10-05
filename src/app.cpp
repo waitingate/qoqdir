@@ -547,14 +547,18 @@ void App::onTabMenu() {
     AppendMenuW(menu.get(), MF_STRING, 2, L"Close tab\tCtrl+W");
     AppendMenuW(menu.get(), MF_STRING | (tabs_.size() > 1 ? 0 : MF_GRAYED), 3, L"Close other tabs");
     AppendMenuW(menu.get(), MF_SEPARATOR, 0, nullptr);
-    AppendMenuW(menu.get(), MF_STRING, 4, L"Save tabs\tCtrl+S");
-    AppendMenuW(menu.get(), MF_STRING, 5, L"Open saved tabs\tCtrl+O");
+    AppendMenuW(menu.get(), MF_STRING | (index > 0 ? 0 : MF_GRAYED), 4, L"Move left\tCtrl+Shift+PgUp");
+    AppendMenuW(menu.get(), MF_STRING | (index + 1 < int(tabs_.size()) ? 0 : MF_GRAYED), 5, L"Move right\tCtrl+Shift+PgDn");
+    AppendMenuW(menu.get(), MF_SEPARATOR, 0, nullptr);
+    AppendMenuW(menu.get(), MF_STRING, 6, L"Save tabs\tCtrl+S");
+    AppendMenuW(menu.get(), MF_STRING, 7, L"Open saved tabs\tCtrl+O");
     int cmd = TrackPopupMenuEx(menu.get(), TPM_RETURNCMD | TPM_RIGHTBUTTON, screen.x, screen.y, wnd_, nullptr);
     if (cmd == 1) newTab(tabs_[size_t(index)].path, true);
     if (cmd == 2) closeTab(index);
     if (cmd == 3) closeOtherTabs(index);
-    if (cmd == 4) saveTabs();
-    if (cmd == 5) openSavedTabs();
+    if (cmd == 4 || cmd == 5) moveTab(index, cmd == 4 ? -1 : 1);
+    if (cmd == 6) saveTabs();
+    if (cmd == 7) openSavedTabs();
 }
 
 // ---------------------------------------------------------------- keyboard
@@ -595,6 +599,7 @@ bool App::onKey(const Key& key) {
     if (ctrl && k == 'O') { openSavedTabs(); return true; }
     if (ctrl && k == VK_TAB) { switchTab((active_ + (shift ? tabCount - 1 : 1)) % tabCount); return true; }
     if (ctrl && k >= '1' && k <= '9') { switchTab(k == '9' ? tabCount - 1 : std::min(int(k - '1'), tabCount - 1)); return true; }
+    if (ctrl && shift && (k == VK_PRIOR || k == VK_NEXT)) { moveTab(active_, k == VK_NEXT ? 1 : -1); return true; }
     if ((ctrl && k == 'L') || (alt && k == 'D') || (k == VK_F4 && !alt)) { focusEdit(address_); return true; }
     if ((ctrl && k == 'F') || k == VK_F3) { focusEdit(filter_); return true; }
     if (k == VK_F5 || (ctrl && k == 'R')) { refresh(); return true; }
@@ -1024,6 +1029,17 @@ void App::switchTab(int index) {
     active_ = index;
     showTabs();
     open(tab().path, Nav::Switch, tab().view);
+}
+
+// Swaps a tab with its neighbor. The current tab stays current, and each tab takes its folder, history and view
+// along: nothing is reloaded.
+void App::moveTab(int index, int by) {
+    int to = index + by;
+    if (std::min(index, to) < 0 || std::max(index, to) >= int(tabs_.size())) return;
+    std::swap(tabs_[size_t(index)], tabs_[size_t(to)]);
+    if (active_ == index) active_ = to;
+    else if (active_ == to) active_ = index;
+    showTabs();
 }
 
 // ---------------------------------------------------------------- saved tabs (Bookmarks\Tabs)
