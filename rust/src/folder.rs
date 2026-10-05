@@ -90,7 +90,15 @@ impl Location {
     pub fn display_name(&self) -> OsString {
         match self {
             Location::ThisPc => "This PC".into(),
-            Location::Dir(p) => p.file_name().map(OsStr::to_os_string).unwrap_or_else(|| p.clone().into_os_string()),
+            Location::Dir(p) => match (p.file_name(), p.components().next()) {
+                (Some(name), _) => name.to_os_string(),
+                // A share root is named after its share, as in the C++ version; a drive root keeps "C:\".
+                (None, Some(Component::Prefix(prefix))) => match prefix.kind() {
+                    Prefix::UNC(_, share) | Prefix::VerbatimUNC(_, share) => share.to_os_string(),
+                    _ => p.clone().into_os_string(),
+                },
+                _ => p.clone().into_os_string(),
+            },
         }
     }
 
@@ -559,6 +567,7 @@ mod tests {
         assert_eq!(Location::ThisPc.join(OsStr::new("D:\\")), PathBuf::from("D:\\"));
         assert_eq!(dir("C:\\a\\b").display_name(), "b");
         assert_eq!(dir("C:\\").display_name(), "C:\\");
+        assert_eq!(dir("\\\\server\\share").display_name(), "share");
         assert_eq!(Location::ThisPc.display_name(), "This PC");
         assert_eq!(text(&dir("C:\\a\\\\")), "C:\\a");
     }

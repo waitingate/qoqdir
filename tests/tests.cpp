@@ -60,6 +60,7 @@ int main() {
     CHECK_EQ(joinPath(L"", L"D:\\"), L"D:\\");
     CHECK_EQ(leafName(L"C:\\a\\b"), L"b");
     CHECK_EQ(leafName(L"C:\\"), L"C:\\");
+    CHECK_EQ(leafName(L"\\\\server\\share"), L"share");
     CHECK_EQ(displayName(L""), L"This PC");
 
     // normalizePath
