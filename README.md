@@ -69,6 +69,10 @@ end. Drag a tab along the bar to move it, and turn the mouse wheel over the tabs
 to switch between them. Drop files on a tab to move or copy them into that tab's
 folder, as Explorer would.
 
+Qoqdir has no undo of its own: Windows keeps one undo list for all programs. To
+take back a rename, move, copy or delete done in Qoqdir, click the desktop (or an
+Explorer window) and press Ctrl+Z. A Shift+Delete can't be undone.
+
 ## Files it writes
 
 Next to `qoqdir.exe`: `qoqdir.ini` (window size, tree and column widths, sort

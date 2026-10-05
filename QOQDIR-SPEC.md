@@ -350,6 +350,10 @@ Back, Forward and Up are disabled when they can't do anything.
 - Drag and drop: drag files out of the list to any program or folder (copy, move,
   link), and drop files from anywhere onto the list (the current folder) or onto a
   tab. A right-drag gives Windows' drop menu.
+- Undo is Windows' own: Ctrl+Z on the desktop or in an Explorer window takes
+  back Qoqdir's last rename, move, copy or delete too, since Windows keeps one
+  undo list for the session. Windows lets no other program trigger it, so Qoqdir
+  has no undo of its own.
 
 ### 5.9 Keys and mouse
 Anywhere in the window:
