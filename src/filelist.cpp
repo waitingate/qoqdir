@@ -2,8 +2,6 @@
 
 #include "shell.h"
 
-#include <uxtheme.h>
-
 #include <algorithm>
 #include <unordered_set>
 
@@ -18,7 +16,7 @@ void FileList::create(HWND parent, int id) {
                               LVS_EDITLABELS | LVS_SHAREIMAGELISTS,
                           0, 0, 0, 0, parent, reinterpret_cast<HMENU>(INT_PTR(id)), GetModuleHandleW(nullptr), nullptr);
     ListView_SetExtendedListViewStyle(lv_, LVS_EX_FULLROWSELECT | LVS_EX_DOUBLEBUFFER);
-    SetWindowTheme(lv_, L"Explorer", nullptr);
+    useExplorerTheme(lv_);
     ListView_SetImageList(lv_, systemImageList(), LVSIL_SMALL);
     for (int i = 0; i < kColumnCount; ++i) {
         LVCOLUMNW col{};

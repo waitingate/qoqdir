@@ -24,6 +24,9 @@ const wchar_t kUsage[] =
 }  // namespace
 
 int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int) {
+    // DLLs that Windows loads by name come from System32 only, never from the exe's folder: a planted
+    // propsys.dll next to qoqdir.exe (in Downloads, say) would run inside the app.
+    SetDefaultDllDirectories(LOAD_LIBRARY_SEARCH_SYSTEM32);
     installCrashLog();
     SetErrorMode(SEM_FAILCRITICALERRORS);   // a drive without a disk fails quietly, not with Windows' "No Disk" box
     std::vector<std::wstring> args;

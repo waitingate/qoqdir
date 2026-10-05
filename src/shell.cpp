@@ -140,6 +140,15 @@ HIMAGELIST systemImageList() {
         SHGFI_USEFILEATTRIBUTES | SHGFI_SYSICONINDEX | SHGFI_SMALLICON));
 }
 
+// uxtheme.dll is loaded here, not imported: Windows looks for an imported DLL next to the exe first, before
+// main() can restrict the search.
+void useExplorerTheme(HWND control) {
+    HMODULE ux = LoadLibraryExW(L"uxtheme.dll", nullptr, LOAD_LIBRARY_SEARCH_SYSTEM32);
+    auto set = reinterpret_cast<HRESULT(WINAPI*)(HWND, LPCWSTR, LPCWSTR)>(
+        reinterpret_cast<void (*)()>(ux ? GetProcAddress(ux, "SetWindowTheme") : nullptr));
+    if (set) set(control, L"Explorer", nullptr);
+}
+
 namespace {
 struct TypeInfo {
     int icon = 0;

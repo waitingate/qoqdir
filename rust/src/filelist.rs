@@ -19,7 +19,7 @@ use windows::Win32::UI::Controls::{
     LVM_SETITEMSTATE, LVM_SETSELECTIONMARK, LVN_BEGINLABELEDITW, LVN_COLUMNCLICK, LVN_GETDISPINFOW,
     LVN_ODFINDITEMW, LVNI_FOCUSED, LVNI_SELECTED, LVS_EDITLABELS, LVS_EX_DOUBLEBUFFER, LVS_EX_FULLROWSELECT,
     LVS_OWNERDATA, LVS_REPORT, LVS_SHAREIMAGELISTS, LVS_SHOWSELALWAYS, LVSIL_SMALL, NMHDR, NMLISTVIEW,
-    NMLVDISPINFOW, SetWindowTheme, EM_SETSEL, HEADER_CONTROL_FORMAT_FLAGS,
+    NMLVDISPINFOW, EM_SETSEL, HEADER_CONTROL_FORMAT_FLAGS,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, HMENU, PostMessageW, WINDOW_EX_STYLE, WINDOW_STYLE, WS_CHILD,
@@ -29,7 +29,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
 use windows::core::w;
 
 use crate::folder::{Item, Listing, Location, SortKey, equal_no_case, matches_filter, sort_items, to_lower, format_size, format_time};
-use crate::shell::{icon_for, system_image_list, type_name};
+use crate::shell::{icon_for, system_image_list, type_name, use_explorer_theme};
 use crate::util::{copy_to, focus, send, wide};
 
 const COLUMNS: [&str; 4] = ["Name", "Date modified", "Type", "Size"];
@@ -75,9 +75,7 @@ impl FileList {
         .unwrap_or_default();
         let ex = (LVS_EX_FULLROWSELECT | LVS_EX_DOUBLEBUFFER) as isize;
         send(hwnd, LVM_SETEXTENDEDLISTVIEWSTYLE, ex as usize, ex);
-        unsafe {
-            let _ = SetWindowTheme(hwnd, w!("Explorer"), None);
-        }
+        use_explorer_theme(hwnd);
         send(hwnd, LVM_SETIMAGELIST, LVSIL_SMALL as usize, system_image_list().0);
         for (i, name) in COLUMNS.iter().enumerate() {
             let text = wide(name);

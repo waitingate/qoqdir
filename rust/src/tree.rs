@@ -8,7 +8,7 @@ use windows::Win32::Foundation::{HWND, LPARAM, POINT, WPARAM};
 use windows::Win32::Graphics::Gdi::ScreenToClient;
 use windows::Win32::System::Com::{COINIT_APARTMENTTHREADED, COINIT_DISABLE_OLE1DDE, CoInitializeEx, CoUninitialize};
 use windows::Win32::UI::Controls::{
-    HTREEITEM, NM_CLICK, NMHDR, NMTREEVIEWW, SetWindowTheme, TVE_COLLAPSE, TVE_COLLAPSERESET, TVE_EXPAND, TVGN_CARET,
+    HTREEITEM, NM_CLICK, NMHDR, NMTREEVIEWW, TVE_COLLAPSE, TVE_COLLAPSERESET, TVE_EXPAND, TVGN_CARET,
     TVGN_CHILD, TVGN_NEXT, TVGN_ROOT, TVHITTESTINFO, TVHT_ONITEM, TVHT_ONITEMRIGHT, TVI_LAST, TVI_ROOT, TVIF_CHILDREN,
     TVIF_IMAGE, TVIF_SELECTEDIMAGE, TVIF_TEXT, TVINSERTSTRUCTW, TVINSERTSTRUCTW_0, TVIS_EXPANDED, TVITEMEXW,
     TVITEMEXW_CHILDREN, TVITEMW, TVM_DELETEITEM, TVM_EXPAND, TVM_GETITEMSTATE, TVM_GETNEXTITEM, TVM_HITTEST,
@@ -26,7 +26,9 @@ use windows::Win32::UI::WindowsAndMessaging::{
 use windows::core::{PWSTR, w};
 
 use crate::folder::{Location, SortKey, is_shortcut, list_folder, sort_items};
-use crate::shell::{IconBatch, describe, describe_shortcut, folder_icon, known_folder, read_own_icons, system_image_list};
+use crate::shell::{
+    IconBatch, describe, describe_shortcut, folder_icon, known_folder, read_own_icons, system_image_list, use_explorer_theme,
+};
 use crate::util::{send, wide};
 
 /// Subfolders of one node, read on a worker thread and posted to the tree's parent window.
@@ -130,9 +132,7 @@ impl FolderTree {
         .unwrap_or_default();
         let ex = (TVS_EX_DOUBLEBUFFER | TVS_EX_FADEINOUTEXPANDOS) as isize;
         send(hwnd, TVM_SETEXTENDEDSTYLE, ex as usize, ex);
-        unsafe {
-            let _ = SetWindowTheme(hwnd, w!("Explorer"), None);
-        }
+        use_explorer_theme(hwnd);
         send(hwnd, TVM_SETIMAGELIST, TVSIL_NORMAL as usize, system_image_list().0);
         FolderTree {
             hwnd,

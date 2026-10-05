@@ -11,7 +11,7 @@ mod tree;
 mod util;
 
 use windows::Win32::System::Diagnostics::Debug::{SEM_FAILCRITICALERRORS, SetErrorMode};
-use windows::Win32::System::LibraryLoader::GetModuleHandleW;
+use windows::Win32::System::LibraryLoader::{GetModuleHandleW, LOAD_LIBRARY_SEARCH_SYSTEM32, SetDefaultDllDirectories};
 use windows::Win32::System::Ole::{OleFlushClipboard, OleInitialize, OleUninitialize};
 use windows::Win32::System::SystemInformation::GetSystemDirectoryW;
 use windows::Win32::UI::Controls::{
@@ -44,6 +44,11 @@ Examples:\n\
 pub const APP_NAME: &str = "Qoqdir";
 
 fn main() {
+    // DLLs that Windows loads by name come from System32 only, never from the exe's folder: a planted
+    // propsys.dll next to qoqdir.exe (in Downloads, say) would run inside the app.
+    unsafe {
+        let _ = SetDefaultDllDirectories(LOAD_LIBRARY_SEARCH_SYSTEM32);
+    }
     crashlog::install();
     unsafe {
         SetErrorMode(SEM_FAILCRITICALERRORS); // a drive without a disk fails quietly, not with Windows' "No Disk" box

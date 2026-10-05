@@ -20,7 +20,7 @@ add_compile_options(-fsanitize=signed-integer-overflow -fsanitize-undefined-trap
 # One self-contained exe: no MinGW DLLs to ship alongside it.
 add_link_options(-static $<$<CONFIG:Release>:-s>)
 
-set(WIN_LIBS ole32 oleaut32 shell32 shlwapi comctl32 uxtheme uuid)
+set(WIN_LIBS ole32 oleaut32 shell32 shlwapi comctl32 uuid)
 
 # Path and folder logic, shared by the app and the tests.
 add_library(core STATIC src/folder.cpp)

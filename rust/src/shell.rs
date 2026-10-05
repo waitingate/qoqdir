@@ -19,6 +19,7 @@ use windows::Win32::System::Com::{
     FORMATETC, IBindCtx, IDataObject, IPersistFile, STGM_CREATE, STGM_READ, STGMEDIUM, STGMEDIUM_0, TYMED_HGLOBAL,
 };
 use windows::Win32::System::DataExchange::{IsClipboardFormatAvailable, RegisterClipboardFormatW};
+use windows::Win32::System::LibraryLoader::{GetProcAddress, LOAD_LIBRARY_SEARCH_SYSTEM32, LoadLibraryExW};
 use windows::Win32::System::Memory::{GMEM_MOVEABLE, GlobalAlloc, GlobalLock, GlobalUnlock};
 use windows::Win32::System::Ole::{
     CF_HDROP, DROPEFFECT, DROPEFFECT_COPY, DROPEFFECT_LINK, DROPEFFECT_MOVE, DROPEFFECT_NONE, IDropSource, IDropTarget,
@@ -50,7 +51,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
     MsgWaitForMultipleObjects, PM_REMOVE, PeekMessageW, QS_ALLINPUT, SW_SHOWNORMAL, TPM_RETURNCMD, TPM_RIGHTBUTTON,
     TrackPopupMenuEx, TranslateMessage,
 };
-use windows::core::{GUID, IUnknown, Interface, PCSTR, PCWSTR, PSTR, Ref, Result, implement, w};
+use windows::core::{GUID, HRESULT, IUnknown, Interface, PCSTR, PCWSTR, PSTR, Ref, Result, implement, s, w};
 
 use crate::folder::{Item, Location, extension_of};
 use crate::util::{OwnedMenu, Pidl, from_wide, key_down, pcwstr, wide};
@@ -86,6 +87,18 @@ pub fn system_image_list() -> HIMAGELIST {
         )
     };
     HIMAGELIST(list as _)
+}
+
+/// Explorer's look for a list or tree. uxtheme.dll is loaded here, not imported: Windows looks for an imported
+/// DLL next to the exe first, before main() can restrict the search.
+pub fn use_explorer_theme(control: HWND) {
+    unsafe {
+        let Ok(ux) = LoadLibraryExW(w!("uxtheme.dll"), None, LOAD_LIBRARY_SEARCH_SYSTEM32) else { return };
+        if let Some(set) = GetProcAddress(ux, s!("SetWindowTheme")) {
+            let set: unsafe extern "system" fn(HWND, PCWSTR, PCWSTR) -> HRESULT = std::mem::transmute(set);
+            let _ = set(control, w!("Explorer"), PCWSTR::null());
+        }
+    }
 }
 
 /// Icon and type name depend only on the extension: one cached shell call each, with no disk access.

@@ -100,6 +100,9 @@ test that fails, then fix it.
 - Anything that can block (reading a folder, `SHGetFileInfoW` on a real path, any
   network path) runs on a worker thread.
 - No exceptions. `_GLIBCXX_ASSERTIONS` and the signed overflow trap stay on.
+- Link only DLLs that Windows protects (its KnownDLLs list, or comctl32 through
+  the manifest). Windows looks for any other imported DLL next to the exe first:
+  load it at run time from System32, as `useExplorerTheme` does with uxtheme.dll.
 - "Qoqdir" in titles and messages, lowercase `qoqdir` in file names.
 - Git stores every file with LF line endings (Git for Windows shows the C++ files
   with CRLF in the working folder).
