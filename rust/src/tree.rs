@@ -133,7 +133,7 @@ impl FolderTree {
         unsafe {
             let _ = SetWindowTheme(hwnd, w!("Explorer"), None);
         }
-        send(hwnd, TVM_SETIMAGELIST, TVSIL_NORMAL as usize, system_image_list().0 as isize);
+        send(hwnd, TVM_SETIMAGELIST, TVSIL_NORMAL as usize, system_image_list().0);
         FolderTree {
             hwnd,
             parent,

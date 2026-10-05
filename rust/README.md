@@ -12,7 +12,7 @@ Everything lives in `C:\rust`; nothing else on the system changes.
 New-Item -ItemType Directory -Force C:\rust
 Invoke-WebRequest https://static.rust-lang.org/rustup/dist/x86_64-pc-windows-gnu/rustup-init.exe -OutFile C:\rust\rustup-init.exe
 $env:RUSTUP_HOME = 'C:\rust\rustup'; $env:CARGO_HOME = 'C:\rust\cargo'
-C:\rust\rustup-init.exe -y --no-modify-path --profile minimal --default-host x86_64-pc-windows-gnu --default-toolchain stable
+C:\rust\rustup-init.exe -y --no-modify-path --profile minimal -c clippy --default-host x86_64-pc-windows-gnu --default-toolchain stable
 ```
 
 The `dlltool` that comes with Rust fails on this machine, so
@@ -39,6 +39,7 @@ deleting `C:\rust` removes it.
 ```powershell
 cargo build --release                  # target\release\qoqdir.exe
 cargo test
+cargo clippy                           # extra checks: fix what it reports before a commit
 target\release\qoqdir.exe --selftest   # log: %TEMP%\qoqdir-rs-selftest.log
 ```
 

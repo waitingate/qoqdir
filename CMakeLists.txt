@@ -10,7 +10,7 @@ if(NOT CMAKE_BUILD_TYPE)
 endif()
 
 add_compile_definitions(UNICODE _UNICODE NOMINMAX _WIN32_WINNT=0x0A00 WINVER=0x0A00)
-add_compile_options(-Wall -Wextra -Wshadow)
+add_compile_options(-Wall -Wextra -Wshadow -Wconversion -Wduplicated-cond -Wduplicated-branches -Wlogical-op)
 # A bad index (or other misuse of the standard library) stops the program with a message
 # instead of quietly reading the wrong memory.
 add_compile_definitions(_GLIBCXX_ASSERTIONS)

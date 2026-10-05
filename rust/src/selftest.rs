@@ -115,7 +115,7 @@ thread_local! {
     static COUNT: Cell<u32> = const { Cell::new(0) };   // a load count to compare with
     static LOADS: Cell<(u32, u32)> = const { Cell::new((0, 0)) };
     static FLAG: Cell<bool> = const { Cell::new(false) };
-    static NEXT: RefCell<OsString> = RefCell::new(OsString::new()); // the item after the one Delete removes
+    static NEXT: RefCell<OsString> = const { RefCell::new(OsString::new()) }; // the item after the one Delete removes
 }
 
 fn note(text: String) {
@@ -1277,7 +1277,7 @@ impl App {
             |a| {
                 let desktop = a.tree_next(a.tree_root()); // Desktop (after Bookmarks)
                 let mut r = RECT::default();
-                unsafe { *(&mut r as *mut RECT as *mut isize) = desktop }; // TVM_GETITEMRECT takes the item in the rect
+                unsafe { (&raw mut r).cast::<isize>().write_unaligned(desktop) }; // TVM_GETITEMRECT takes the item in the rect
                 send(a.tree.hwnd(), TVM_GETITEMRECT, 1, &mut r as *mut _ as isize);
                 let packed = ((r.left + r.right) / 2) as u16 as isize | ((((r.top + r.bottom) / 2) as u16 as isize) << 16);
                 send(a.tree.hwnd(), WM_MBUTTONUP, 0, packed);
@@ -1293,7 +1293,7 @@ impl App {
             // The arrow sits in the indent left of the icon; TVS_HASBUTTONS gives roots one only with TVS_LINESATROOT.
             let tree = a.tree.hwnd();
             let mut r = RECT::default();
-            unsafe { *(&mut r as *mut RECT as *mut isize) = a.tree_root() }; // the whole Bookmarks row
+            unsafe { (&raw mut r).cast::<isize>().write_unaligned(a.tree_root()) }; // the whole Bookmarks row
             send(tree, TVM_GETITEMRECT, 0, &mut r as *mut _ as isize);
             let indent = send(tree, TVM_GETINDENT, 0, 0) as i32;
             let mut hit = TVHITTESTINFO { pt: POINT { x: r.left + indent / 2, y: (r.top + r.bottom) / 2 }, ..Default::default() };

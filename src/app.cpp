@@ -354,7 +354,7 @@ LRESULT App::onMessage(UINT msg, WPARAM wp, LPARAM lp) {
     }
     case WM_MOUSEMOVE:
         if (dragging_) {
-            treeWidth_ = MulDiv(std::max(int(GET_X_LPARAM(lp)), 0), 96, int(dpi_));
+            treeWidth_ = MulDiv(std::max(GET_X_LPARAM(lp), 0), 96, int(dpi_));
             layout();
         }
         return 0;
@@ -539,7 +539,7 @@ void App::onTabMenu() {
     AppendMenuW(menu.get(), MF_STRING, 1, L"Duplicate tab");
     AppendMenuW(menu.get(), MF_STRING, 2, L"Close tab\tCtrl+W");
     AppendMenuW(menu.get(), MF_STRING | (tabs_.size() > 1 ? 0 : MF_GRAYED), 3, L"Close other tabs");
-    int cmd = int(TrackPopupMenuEx(menu.get(), TPM_RETURNCMD | TPM_RIGHTBUTTON, screen.x, screen.y, wnd_, nullptr));
+    int cmd = TrackPopupMenuEx(menu.get(), TPM_RETURNCMD | TPM_RIGHTBUTTON, screen.x, screen.y, wnd_, nullptr);
     if (cmd == 1) newTab(tabs_[size_t(index)].path, true);
     if (cmd == 2) closeTab(index);
     if (cmd == 3) closeOtherTabs(index);

@@ -78,7 +78,7 @@ impl FileList {
         unsafe {
             let _ = SetWindowTheme(hwnd, w!("Explorer"), None);
         }
-        send(hwnd, LVM_SETIMAGELIST, LVSIL_SMALL as usize, system_image_list().0 as isize);
+        send(hwnd, LVM_SETIMAGELIST, LVSIL_SMALL as usize, system_image_list().0);
         for (i, name) in COLUMNS.iter().enumerate() {
             let text = wide(name);
             let col = LVCOLUMNW {

@@ -641,10 +641,8 @@ impl App {
                 }
                 WM_APP_RENAME => {
                     let rename = self.st.borrow_mut().rename.take();
-                    if let Some((path, name)) = rename {
-                        if rename_item(self.wnd, &path, &name).is_ok() {
-                            self.refresh(ViewState::selecting(name));
-                        }
+                    if let Some((path, name)) = rename && rename_item(self.wnd, &path, &name).is_ok() {
+                        self.refresh(ViewState::selecting(name));
                     }
                     return LRESULT(0);
                 }
@@ -793,10 +791,8 @@ impl App {
             if let Some(location) = folder.and_then(|r| self.list.item_location(r)) {
                 self.new_tab(location, false);
             }
-        } else if from == self.tree.hwnd() {
-            if let Some(location) = self.tree.location_at(pt) {
-                self.open_node(location, true);
-            }
+        } else if from == self.tree.hwnd() && let Some(location) = self.tree.location_at(pt) {
+            self.open_node(location, true);
         }
     }
 
@@ -816,14 +812,12 @@ impl App {
                     let row = info.item.iItem as usize;
                     if !info.item.pszText.is_null() {
                         let name = from_wide(unsafe { info.item.pszText.as_wide() });
-                        if let (Some(it), Some(loc)) = (self.list.item(row), self.list.item_location(row)) {
-                            if name != it.name && !name.is_empty() {
-                                if let Location::Dir(path) = loc {
-                                    self.st.borrow_mut().rename = Some((path, name));
-                                    unsafe {
-                                        let _ = PostMessageW(Some(self.wnd), WM_APP_RENAME, WPARAM(0), LPARAM(0));
-                                    }
-                                }
+                        if let (Some(it), Some(Location::Dir(path))) = (self.list.item(row), self.list.item_location(row))
+                            && name != it.name && !name.is_empty()
+                        {
+                            self.st.borrow_mut().rename = Some((path, name));
+                            unsafe {
+                                let _ = PostMessageW(Some(self.wnd), WM_APP_RENAME, WPARAM(0), LPARAM(0));
                             }
                         }
                     }
@@ -1195,11 +1189,9 @@ impl App {
 
     pub fn focus_list(&self) {
         focus(self.list.hwnd());
-        if self.list.selection().is_empty() {
-            if let Some(row) = self.list.focused() {
-                let item = LVITEMW { state: LVIS_SELECTED, stateMask: LVIS_SELECTED, ..Default::default() };
-                send(self.list.hwnd(), LVM_SETITEMSTATE, row, &item as *const _ as isize);
-            }
+        if self.list.selection().is_empty() && let Some(row) = self.list.focused() {
+            let item = LVITEMW { state: LVIS_SELECTED, stateMask: LVIS_SELECTED, ..Default::default() };
+            send(self.list.hwnd(), LVM_SETITEMSTATE, row, &item as *const _ as isize);
         }
     }
 
@@ -1519,13 +1511,12 @@ impl App {
         if rows.is_empty() {
             rows.extend(self.list.focused());
         }
-        if let [row] = rows.as_slice() {
-            if let (Some(it), Some(Location::Dir(lnk))) = (self.list.item(*row), self.list.item_location(*row)) {
-                if !it.is_dir() && is_shortcut(&it.name) {
-                    self.open_shortcut(lnk, in_new_tab);
-                    return;
-                }
-            }
+        if let [row] = rows.as_slice()
+            && let (Some(it), Some(Location::Dir(lnk))) = (self.list.item(*row), self.list.item_location(*row))
+            && !it.is_dir() && is_shortcut(&it.name)
+        {
+            self.open_shortcut(lnk, in_new_tab);
+            return;
         }
         let (mut dirs, mut files) = (Vec::new(), Vec::new());
         for row in rows {

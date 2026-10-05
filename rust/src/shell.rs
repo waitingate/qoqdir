@@ -137,10 +137,8 @@ pub fn remember_icons(batch: &IconBatch) {
 
 /// UI thread. Never touches the disk.
 pub fn icon_for(path: &Path, it: &Item) -> i32 {
-    if has_own_icon(it) {
-        if let Some(icon) = OWN_ICONS.with(|cache| cache.borrow().get(path).copied()) {
-            return icon;
-        }
+    if has_own_icon(it) && let Some(icon) = OWN_ICONS.with(|cache| cache.borrow().get(path).copied()) {
+        return icon;
     }
     type_info(it).0
 }
@@ -445,9 +443,9 @@ fn file_operation(owner: HWND, flags: u32, add: impl FnOnce(&IFileOperation) -> 
 pub fn delete_items(owner: HWND, dir: &Location, items: &[Item], permanently: bool) -> bool {
     let Ok(obj) = ui_object_of::<IDataObject>(owner, dir, items) else { return false };
     // FOF_WANTNUKEWARNING always: Windows still asks before deleting what it cannot recycle (a share, a USB stick).
-    let mut flags = FOF_WANTNUKEWARNING.0 as u32;
+    let mut flags = FOF_WANTNUKEWARNING.0;
     if !permanently {
-        flags |= FOF_ALLOWUNDO.0 as u32 | FOFX_RECYCLEONDELETE.0 as u32 | FOF_NOCONFIRMATION.0 as u32;
+        flags |= FOF_ALLOWUNDO.0 | FOFX_RECYCLEONDELETE.0 | FOF_NOCONFIRMATION.0;
     }
     file_operation(owner, flags, |op| unsafe { op.DeleteItems(&obj) }).is_ok()
 }
@@ -456,7 +454,7 @@ pub fn rename_item(owner: HWND, path: &Path, new_name: &OsStr) -> Result<()> {
     unsafe {
         let item: IShellItem = SHCreateItemFromParsingName(pcwstr(&wide(path)), None::<&IBindCtx>)?;
         let name = wide(new_name);
-        file_operation(owner, FOF_ALLOWUNDO.0 as u32, |op| {
+        file_operation(owner, FOF_ALLOWUNDO.0, |op| {
             op.RenameItem(&item, pcwstr(&name), None::<&IFileOperationProgressSink>)
         })
     }

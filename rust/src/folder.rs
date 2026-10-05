@@ -347,7 +347,7 @@ pub fn list_folder(location: &Location, show_hidden: bool, stop: Option<&dyn Fn(
     let mut seen = 0usize;
     loop {
         seen += 1;
-        if seen % 256 == 0 && stop.is_some_and(|stop| stop()) {
+        if seen.is_multiple_of(256) && stop.is_some_and(|stop| stop()) {
             return Listing::failed(location, ERROR_OPERATION_ABORTED.to_hresult().into());
         }
         let name = from_wide(&fd.cFileName);
