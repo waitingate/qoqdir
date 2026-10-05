@@ -196,6 +196,7 @@ pub struct App {
     pub list: FileList,
     pub tree: FolderTree,
     pub tab_drop: RefCell<Option<IDropTarget>>, // files dropped on a tab go to its folder
+    pub tree_drop: RefCell<Option<IDropTarget>>, // and on a folder in the tree, to that folder
     pub drop_tab: Cell<Option<usize>>,          // tab highlighted during a drag
     wheel: Cell<i32>,                           // mouse wheel turned over the tab bar, not yet a whole step (120)
     font: RefCell<Option<Font>>,
@@ -406,6 +407,7 @@ impl App {
                 list,
                 tree,
                 tab_drop: RefCell::new(None),
+                tree_drop: RefCell::new(None),
                 drop_tab: Cell::new(None),
                 wheel: Cell::new(0),
                 font: RefCell::new(None),
@@ -458,6 +460,18 @@ impl App {
             let tab_drop = new_drop_target(wnd, Box::new(move |pt| weak.upgrade()?.tab_drop_target(pt)));
             let _ = RegisterDragDrop(app.tab_bar, &tab_drop);
             *app.tab_drop.borrow_mut() = Some(tab_drop);
+            // And on a folder in the tree, in that folder; not back where they come from.
+            let weak: Weak<App> = Rc::downgrade(&app);
+            let tree_drop = new_drop_target(
+                wnd,
+                Box::new(move |pt| {
+                    let app = weak.upgrade()?;
+                    let dir = app.tree.drop_target(pt)?;
+                    (!(app.dragging_files.get() && dir.same(&app.list.location()))).then_some(dir)
+                }),
+            );
+            let _ = RegisterDragDrop(app.tree.hwnd(), &tree_drop);
+            *app.tree_drop.borrow_mut() = Some(tree_drop);
 
             send(app.list.hwnd(), LVM_SETBKCOLOR, 0, BACKGROUND.0 as isize);
             send(app.list.hwnd(), LVM_SETTEXTBKCOLOR, 0, BACKGROUND.0 as isize);
@@ -789,6 +803,7 @@ impl App {
                     self.st.borrow_mut().watch = None;
                     let _ = RevokeDragDrop(self.list.hwnd());
                     let _ = RevokeDragDrop(self.tab_bar);
+                    let _ = RevokeDragDrop(self.tree.hwnd());
                     SetWindowLongPtrW(self.wnd, GWLP_USERDATA, 0);
                     PostQuitMessage(0);
                     return LRESULT(0);

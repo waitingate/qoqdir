@@ -130,6 +130,7 @@ private:
     FileList list_;
     FolderTree tree_;
     Com<IDropTarget> tabDrop_;      // files dropped on a tab go to its folder
+    Com<IDropTarget> treeDrop_;     // and on a folder in the tree, to that folder
     int dropTab_ = -1;              // tab highlighted during a drag
     int wheel_ = 0;                 // mouse wheel turned over the tab bar, not yet a whole step (WHEEL_DELTA)
     Font font_;

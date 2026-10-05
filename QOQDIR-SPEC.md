@@ -279,6 +279,12 @@ Back, Forward and Up are disabled when they can't do anything.
   tab.
 - Right-click gives Windows' context menu for that folder (Open opens here, Open
   in new tab or window opens a background tab).
+- Files dropped on a folder in the tree are copied or moved there, exactly as
+  dropping on that folder in Explorer would. The folder under the pointer lights
+  up, and a closed one opens after about 0.7 s, so the folders inside it can be
+  reached. Only folders on local drives take drops: not This PC, not a bookmark
+  shortcut, nothing on the network (a server that is off would freeze the drag),
+  and not the folder the files come from.
 - Backspace in the tree goes up.
 - The splitter sets the tree's width, which is remembered.
 
@@ -348,8 +354,8 @@ Back, Forward and Up are disabled when they can't do anything.
   (Send to, New, Open with, other programs' entries) must work.
 - Properties: Alt+Enter.
 - Drag and drop: drag files out of the list to any program or folder (copy, move,
-  link), and drop files from anywhere onto the list (the current folder) or onto a
-  tab. A right-drag gives Windows' drop menu.
+  link), and drop files from anywhere onto the list (the current folder), onto a
+  tab, or onto a folder in the tree (5.5). A right-drag gives Windows' drop menu.
 - Undo is Windows' own: Ctrl+Z on the desktop or in an Explorer window takes
   back Qoqdir's last rename, move, copy or delete too, since Windows keeps one
   undo list for the session. Windows lets no other program trigger it, so Qoqdir
@@ -559,6 +565,9 @@ result:
     shows the next tab each time and stops at the last; turned up, it goes back and
     stops at the first.
 46. Ctrl+T from the first tab adds the new tab at the end, after all the others.
+47. In the tree (a drag simulated inside the process): This PC refuses a file; a
+    closed folder in Bookmarks lights up, opens after a moment while the drag is
+    held over it, and a drop copies the file into it.
 
 ### 7.3 Command-line checks
 Run on a copy of the exe in a temp folder:

@@ -3,16 +3,20 @@
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::ffi::{OsStr, OsString};
+use std::os::windows::ffi::OsStrExt;
 
 use windows::Win32::Foundation::{HWND, LPARAM, POINT, WPARAM};
 use windows::Win32::Graphics::Gdi::ScreenToClient;
+use windows::Win32::Storage::FileSystem::GetDriveTypeW;
 use windows::Win32::System::Com::{COINIT_APARTMENTTHREADED, COINIT_DISABLE_OLE1DDE, CoInitializeEx, CoUninitialize};
+use windows::Win32::System::SystemInformation::GetTickCount64;
+use windows::Win32::System::WindowsProgramming::DRIVE_REMOTE;
 use windows::Win32::UI::Controls::{
     HTREEITEM, NM_CLICK, NMHDR, NMTREEVIEWW, TVE_COLLAPSE, TVE_COLLAPSERESET, TVE_EXPAND, TVGN_CARET,
-    TVGN_CHILD, TVGN_NEXT, TVGN_ROOT, TVHITTESTINFO, TVHT_ONITEM, TVHT_ONITEMRIGHT, TVI_LAST, TVI_ROOT, TVIF_CHILDREN,
-    TVIF_IMAGE, TVIF_SELECTEDIMAGE, TVIF_TEXT, TVINSERTSTRUCTW, TVINSERTSTRUCTW_0, TVIS_EXPANDED, TVITEMEXW,
+    TVGN_CHILD, TVGN_DROPHILITE, TVGN_NEXT, TVGN_ROOT, TVHITTESTINFO, TVHT_ONITEM, TVHT_ONITEMRIGHT, TVI_LAST, TVI_ROOT,
+    TVIF_CHILDREN, TVIF_IMAGE, TVIF_SELECTEDIMAGE, TVIF_TEXT, TVINSERTSTRUCTW, TVINSERTSTRUCTW_0, TVIS_EXPANDED, TVITEMEXW,
     TVITEMEXW_CHILDREN, TVITEMW, TVM_DELETEITEM, TVM_EXPAND, TVM_GETITEMSTATE, TVM_GETNEXTITEM, TVM_HITTEST,
-    TVM_INSERTITEMW, TVM_SETEXTENDEDSTYLE, TVM_SETIMAGELIST, TVM_SETITEMW, TVN_DELETEITEMW, TVN_ITEMEXPANDEDW,
+    TVM_INSERTITEMW, TVM_SELECTITEM, TVM_SETEXTENDEDSTYLE, TVM_SETIMAGELIST, TVM_SETITEMW, TVN_DELETEITEMW, TVN_ITEMEXPANDEDW,
     TVN_ITEMEXPANDINGW, TVN_SELCHANGEDW, TVS_EX_DOUBLEBUFFER, TVS_EX_FADEINOUTEXPANDOS, TVS_FULLROWSELECT,
     TVS_HASBUTTONS, TVS_LINESATROOT, TVS_NOHSCROLL, TVS_SHOWSELALWAYS, TVS_TRACKSELECT, TVSIL_NORMAL, TVC_BYKEYBOARD,
     TVC_BYMOUSE,
@@ -29,7 +33,7 @@ use crate::folder::{Location, SortKey, is_shortcut, list_folder, sort_items};
 use crate::shell::{
     IconBatch, describe, describe_shortcut, folder_icon, known_folder, read_own_icons, system_image_list, use_explorer_theme,
 };
-use crate::util::{send, wide};
+use crate::util::{pcwstr, send, wide};
 
 /// Subfolders of one node, read on a worker thread and posted to the tree's parent window.
 pub struct TreeBatch {
@@ -55,6 +59,7 @@ pub struct FolderTree {
     reads: Cell<u32>,                         // numbers every read started
     paths: RefCell<HashMap<isize, Location>>, // each node's folder (or shortcut); a node leaves it when deleted
     reading: RefCell<HashMap<isize, u32>>,    // nodes whose subfolders are being read, by read number
+    hover_since: Cell<u64>,                   // when a drag came over the node it lights up
 }
 
 /// Subfolders of a location (This PC: the drives), and its shortcuts if asked, into `batch`. Worker thread: may block.
@@ -143,6 +148,7 @@ impl FolderTree {
             reads: Cell::new(0),
             paths: RefCell::new(HashMap::new()),
             reading: RefCell::new(HashMap::new()),
+            hover_since: Cell::new(0),
         }
     }
 
@@ -322,6 +328,37 @@ impl FolderTree {
             send(self.hwnd, TVM_HITTEST, 0, &mut hit as *mut _ as isize)
         };
         (node != 0).then(|| self.location_of(HTREEITEM(node)))
+    }
+
+    /// During a drag: the folder under the cursor that may take the drop (`None` for `pt`: the drag left or ended).
+    /// The node lights up, and a closed one opens after 0.7 s (Windows asks again many times a second during a
+    /// drag), so the folders inside it can be reached. Only a local folder takes the drop: not This PC, not a
+    /// bookmark shortcut, and nothing on the network (a server that is off would freeze the drag).
+    pub fn drop_target(&self, pt: Option<POINT>) -> Option<Location> {
+        let node = pt.map_or(0, |pt| {
+            let mut hit = TVHITTESTINFO { pt, ..Default::default() };
+            unsafe {
+                let _ = ScreenToClient(self.hwnd, &mut hit.pt);
+            }
+            send(self.hwnd, TVM_HITTEST, 0, &mut hit as *mut _ as isize)
+        });
+        let now = unsafe { GetTickCount64() };
+        if node != send(self.hwnd, TVM_GETNEXTITEM, TVGN_DROPHILITE as usize, 0) {
+            send(self.hwnd, TVM_SELECTITEM, TVGN_DROPHILITE as usize, node);
+            self.hover_since.set(now);
+        } else if node != 0 && now - self.hover_since.get() >= 700 {
+            send(self.hwnd, TVM_EXPAND, TVE_EXPAND.0 as usize, node); // nothing once it is open
+        }
+        if node == 0 {
+            return None;
+        }
+        let location = self.location_of(HTREEITEM(node));
+        let path = location.path()?; // This PC
+        let w: Vec<u16> = path.as_os_str().encode_wide().collect();
+        let local = w.len() >= 3
+            && w[1] == u16::from(b':')
+            && unsafe { GetDriveTypeW(pcwstr(&[w[0], w[1], w[2], 0])) } != DRIVE_REMOTE;
+        (local && !is_shortcut(path.as_os_str())).then_some(location)
     }
 
     /// Returns the folder to open when the user chose one.

@@ -17,6 +17,7 @@ use windows::Win32::Storage::FileSystem::{
     FILE_ATTRIBUTE_ARCHIVE, FILE_ATTRIBUTE_HIDDEN, FILE_FLAGS_AND_ATTRIBUTES, GetFileAttributesW, GetLongPathNameW,
     SetFileAttributesW,
 };
+use windows::Win32::System::Com::IDataObject;
 use windows::Win32::System::DataExchange::{CloseClipboard, GetClipboardData, OpenClipboard};
 use windows::Win32::System::Diagnostics::Debug::{GetErrorMode, SEM_FAILCRITICALERRORS};
 use windows::Win32::System::Memory::{GlobalLock, GlobalUnlock};
@@ -27,7 +28,8 @@ use windows::Win32::UI::Controls::{
     EM_GETSEL, EM_REPLACESEL, HTREEITEM, LVIF_IMAGE, LVIR_LABEL, LVITEMW, LVM_CANCELEDITLABEL, LVM_GETCOUNTPERPAGE,
     LVM_GETITEMRECT, LVM_GETITEMW, SB_GETTEXTLENGTHW, SB_GETTEXTW, TCIF_TEXT, TCITEMW, TCM_GETCURSEL, TCM_GETITEMRECT,
     TCM_GETITEMW,
-    TVE_EXPAND, TVGN_CARET, TVGN_CHILD, TVGN_NEXT, TVGN_ROOT, TVHITTESTINFO, TVHT_ONITEMBUTTON, TVIF_CHILDREN, TVIF_IMAGE,
+    TVE_EXPAND, TVGN_CARET, TVGN_CHILD, TVGN_DROPHILITE, TVGN_NEXT, TVGN_ROOT, TVHITTESTINFO, TVHT_ONITEMBUTTON, TVIF_CHILDREN,
+    TVIF_IMAGE,
     TVIF_TEXT, TVIS_EXPANDED, TVITEMW, TVM_EXPAND, TVM_GETCOUNT, TVM_GETINDENT, TVM_GETITEMRECT, TVM_GETITEMSTATE,
     TVM_GETITEMW, TVM_GETNEXTITEM, TVM_HITTEST, TVM_SELECTITEM,
 };
@@ -115,6 +117,7 @@ thread_local! {
     static ROWS: Cell<usize> = const { Cell::new(0) };  // list rows before a refresh that must wait
     static TOP: Cell<usize> = const { Cell::new(0) };   // a scroll position to come back to
     static EFFECT: Cell<u32> = const { Cell::new(0) };  // what a simulated drag was allowed to do
+    static DRAGGED: RefCell<Option<IDataObject>> = const { RefCell::new(None) }; // what a simulated drag carries
     static COUNT: Cell<u32> = const { Cell::new(0) };   // a load count to compare with
     static LOADS: Cell<(u32, u32)> = const { Cell::new((0, 0)) };
     static FLAG: Cell<bool> = const { Cell::new(false) };
@@ -432,6 +435,28 @@ impl App {
             last = self.tree_next(last);
         }
         last
+    }
+
+    /// Bookmarks' folder "two".
+    fn tree_two(&self) -> isize {
+        self.tree_next(self.tree_child(self.tree_root()))
+    }
+
+    /// The middle of a tree node, in screen coordinates, where a drag is aimed.
+    fn node_point(&self, node: isize) -> POINTL {
+        let mut r = RECT::default();
+        unsafe { (&raw mut r).cast::<isize>().write_unaligned(node) }; // TVM_GETITEMRECT takes the item in the rect
+        send(self.tree.hwnd(), TVM_GETITEMRECT, 1, &mut r as *mut _ as isize);
+        let mut pt = POINT { x: (r.left + r.right) / 2, y: (r.top + r.bottom) / 2 };
+        unsafe {
+            let _ = ClientToScreen(self.tree.hwnd(), &mut pt);
+        }
+        POINTL { x: pt.x, y: pt.y }
+    }
+
+    /// The tree node lit up as a drop target (0: none).
+    fn drop_highlight(&self) -> isize {
+        send(self.tree.hwnd(), TVM_GETNEXTITEM, TVGN_DROPHILITE as usize, 0)
     }
 
     fn tree_select(&self, node: isize) {
@@ -1558,6 +1583,59 @@ impl App {
                 a.bookmark_nodes() == "one,two,sub" && one != 0 && a.tree_child(one) != 0 && expanded && a.tree_child(a.tree_last_root()) != 0
             },
         );
+        s.add(
+            "This PC in the tree takes no drop",
+            |a| {
+                let data = data_object_at(a.wnd, &Location::dir(p("file1.txt")));
+                let mut effect = DROPEFFECT_COPY;
+                if let (Some(data), Some(target)) = (data, a.tree_drop.borrow().clone()) {
+                    unsafe {
+                        let _ = target.DragEnter(&data, MK_LBUTTON, a.node_point(a.tree_last_root()), &mut effect);
+                        let _ = target.DragLeave();
+                    }
+                }
+                EFFECT.set(effect.0);
+            },
+            |a| EFFECT.get() == DROPEFFECT_NONE.0 && a.drop_highlight() == 0,
+        );
+        s.add(
+            "a drag over a folder in the tree lights it up, and the folder takes the file",
+            |a| {
+                let _ = std::fs::create_dir(p("Bookmarks\\two\\inner"));
+                let data = data_object_at(a.wnd, &Location::dir(p("file1.txt")));
+                let mut effect = DROPEFFECT_COPY;
+                if let (Some(data), Some(target)) = (data.clone(), a.tree_drop.borrow().clone()) {
+                    unsafe {
+                        let _ = target.DragEnter(&data, MK_LBUTTON, a.node_point(a.tree_two()), &mut effect);
+                    }
+                }
+                DRAGGED.set(data);
+                EFFECT.set(effect.0);
+            },
+            |a| EFFECT.get() == DROPEFFECT_COPY.0 && a.drop_highlight() == a.tree_two(),
+        );
+        s.check("held over the closed folder, the drag opens it after a moment", |a| {
+            let mut effect = DROPEFFECT_COPY; // Windows asks again many times a second while the drag is held there
+            if let Some(target) = a.tree_drop.borrow().clone() {
+                unsafe {
+                    let _ = target.DragOver(MK_LBUTTON, a.node_point(a.tree_two()), &mut effect);
+                }
+            }
+            a.tree_child(a.tree_two()) != 0 // "inner" is shown
+        });
+        s.add(
+            "dropping it there copies the file into that folder",
+            |a| {
+                let mut effect = DROPEFFECT_COPY;
+                if let (Some(data), Some(target)) = (DRAGGED.take(), a.tree_drop.borrow().clone()) {
+                    unsafe {
+                        let _ = target.Drop(&data, MK_LBUTTON, a.node_point(a.tree_two()), &mut effect);
+                    }
+                }
+            },
+            |a| exists(&p("Bookmarks\\two\\file1.txt")) && a.drop_highlight() == 0,
+        )
+        .wait(10000);
         s.home("(back to the test folder)");
 
         // Saved tabs: Ctrl+S writes a shortcut per tab in Bookmarks\Tabs, Ctrl+O opens their folders as tabs.

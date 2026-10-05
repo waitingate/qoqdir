@@ -152,6 +152,13 @@ bool App::create(HINSTANCE instance, const CommandLine& cmd, bool useSettings) {
     // Dropping on a tab puts the files in that tab's folder.
     *tabDrop_.put() = newDropTarget(wnd_, [this](const POINT* pt) { return tabDropTarget(pt); });
     RegisterDragDrop(tabBar_, tabDrop_.get());
+    // And on a folder in the tree, in that folder; not back where they come from.
+    *treeDrop_.put() = newDropTarget(wnd_, [this](const POINT* pt) -> std::optional<std::wstring> {
+        std::optional<std::wstring> dir = tree_.dropTarget(pt);
+        if (dir && draggingFiles_ && samePath(*dir, list_.dir())) return std::nullopt;
+        return dir;
+    });
+    RegisterDragDrop(tree_.hwnd(), treeDrop_.get());
 
     ListView_SetBkColor(list_.hwnd(), kBackground);
     ListView_SetTextBkColor(list_.hwnd(), kBackground);
@@ -417,6 +424,7 @@ LRESULT App::onMessage(UINT msg, WPARAM wp, LPARAM lp) {
         watch_ = {};
         RevokeDragDrop(list_.hwnd());
         RevokeDragDrop(tabBar_);
+        RevokeDragDrop(tree_.hwnd());
         PostQuitMessage(0);
         return 0;
     }

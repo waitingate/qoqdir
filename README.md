@@ -66,8 +66,9 @@ rename that folder.
 
 Middle-click a folder to open it in a background tab. New tabs always go at the
 end. Drag a tab along the bar to move it, and turn the mouse wheel over the tabs
-to switch between them. Drop files on a tab to move or copy them into that tab's
-folder, as Explorer would.
+to switch between them. Drop files on a tab, or on a folder in the tree, to move
+or copy them there, as Explorer would; a closed folder in the tree opens when you
+hold the drag over it. (The tree takes drops on local drives only.)
 
 Qoqdir has no undo of its own: Windows keeps one undo list for all programs. To
 take back a rename, move, copy or delete done in Qoqdir, click the desktop (or an

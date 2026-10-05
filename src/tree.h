@@ -33,6 +33,8 @@ public:
 
     // Path of the node under a screen point, or of the selected node when pt is (-1,-1).
     bool pathAt(POINT screenPt, std::wstring* path) const;
+    // During a drag: the folder under the cursor that may take the drop (nullptr: the drag left or ended).
+    std::optional<std::wstring> dropTarget(const POINT* screenPt);
     // Returns true and sets 'open' when the user chose a folder (or a bookmark shortcut).
     bool onNotify(NMHDR* nm, std::wstring* open);
 
@@ -50,4 +52,5 @@ private:
     unsigned reads_ = 0;                      // numbers every read started
     std::map<HTREEITEM, std::wstring> paths_;   // each node's folder (or shortcut); a node leaves it when deleted
     std::map<HTREEITEM, unsigned> reading_;   // nodes whose subfolders are being read, by read number
+    ULONGLONG hoverSince_ = 0;                // when a drag came over the node it lights up
 };

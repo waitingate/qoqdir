@@ -1021,6 +1021,50 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
             return bookmarkNodes() == L"one,two,sub" && one && TreeView_GetChild(tv, one) &&
                    (TreeView_GetItemState(tv, one, TVIS_EXPANDED) & TVIS_EXPANDED) && TreeView_GetChild(tv, last);
         });
+    auto nodePoint = [this](HTREEITEM node) {   // the middle of a tree node, in screen coordinates
+        RECT r{};
+        TreeView_GetItemRect(tree_.hwnd(), node, &r, TRUE);
+        POINT pt{(r.left + r.right) / 2, (r.top + r.bottom) / 2};
+        ClientToScreen(tree_.hwnd(), &pt);
+        return POINTL{pt.x, pt.y};
+    };
+    auto two = [this] {   // Bookmarks' folder "two", closed
+        HWND tv = tree_.hwnd();
+        return TreeView_GetNextSibling(tv, TreeView_GetChild(tv, TreeView_GetRoot(tv)));
+    };
+    auto dragged = std::make_shared<Com<IDataObject>>();
+    add(L"This PC in the tree takes no drop",
+        [=, this] {
+            HWND tv = tree_.hwnd();
+            HTREEITEM pc = TreeView_GetRoot(tv);
+            for (HTREEITEM n = pc; n; n = TreeView_GetNextSibling(tv, n)) pc = n;   // the last root
+            Com<IDataObject> data = dataObject(wnd_, path(L"file1.txt"));
+            dragEffect = DROPEFFECT_COPY;
+            treeDrop_->DragEnter(data.get(), MK_LBUTTON, nodePoint(pc), &dragEffect);
+            treeDrop_->DragLeave();
+        },
+        [=, this] { return dragEffect == DROPEFFECT_NONE && !TreeView_GetDropHilight(tree_.hwnd()); });
+    add(L"a drag over a folder in the tree lights it up, and the folder takes the file",
+        [=, this] {
+            CreateDirectoryW(path(L"Bookmarks\\two\\inner").c_str(), nullptr);
+            *dragged = dataObject(wnd_, path(L"file1.txt"));
+            dragEffect = DROPEFFECT_COPY;
+            treeDrop_->DragEnter(dragged->get(), MK_LBUTTON, nodePoint(two()), &dragEffect);
+        },
+        [=, this] { return dragEffect == DROPEFFECT_COPY && TreeView_GetDropHilight(tree_.hwnd()) == two(); });
+    add(L"held over the closed folder, the drag opens it after a moment", nullptr, [=, this] {
+        DWORD effect = DROPEFFECT_COPY;   // Windows asks again many times a second while the drag is held there
+        treeDrop_->DragOver(MK_LBUTTON, nodePoint(two()), &effect);
+        return TreeView_GetChild(tree_.hwnd(), two()) != nullptr;   // "inner" is shown
+    });
+    add(L"dropping it there copies the file into that folder",
+        [=, this] {
+            DWORD effect = DROPEFFECT_COPY;
+            treeDrop_->Drop(dragged->get(), MK_LBUTTON, nodePoint(two()), &effect);
+            dragged->reset();
+        },
+        [=, this] { return exists(path(L"Bookmarks\\two\\file1.txt")) && !TreeView_GetDropHilight(tree_.hwnd()); },
+        10000);
     backHome(L"(back to the test folder)");
 
     // Saved tabs: Ctrl+S writes a shortcut per tab in Bookmarks\Tabs, Ctrl+O opens their folders as tabs.

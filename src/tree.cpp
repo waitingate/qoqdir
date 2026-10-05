@@ -206,6 +206,30 @@ bool FolderTree::pathAt(POINT pt, std::wstring* path) const {
     return true;
 }
 
+// The node under the cursor lights up, and a closed one opens after 0.7 s (Windows asks again many times a second
+// during a drag), so the folders inside it can be reached. Only a local folder takes the drop: not This PC, not a
+// bookmark shortcut, and nothing on the network (a server that is off would freeze the drag).
+std::optional<std::wstring> FolderTree::dropTarget(const POINT* screenPt) {
+    HTREEITEM node = nullptr;
+    if (screenPt) {
+        TVHITTESTINFO hit{};
+        hit.pt = *screenPt;
+        ScreenToClient(tv_, &hit.pt);
+        node = TreeView_HitTest(tv_, &hit);
+    }
+    if (node != TreeView_GetDropHilight(tv_)) {
+        TreeView_SelectDropTarget(tv_, node);
+        hoverSince_ = GetTickCount64();
+    } else if (node && GetTickCount64() - hoverSince_ >= 700) {
+        TreeView_Expand(tv_, node, TVE_EXPAND);   // nothing once it is open
+    }
+    if (!node) return std::nullopt;
+    const std::wstring& path = pathOf(node);
+    bool local = path.size() >= 3 && path[1] == L':' && GetDriveTypeW(path.substr(0, 3).c_str()) != DRIVE_REMOTE;
+    if (!local || isShortcut(path)) return std::nullopt;
+    return path;
+}
+
 bool FolderTree::onNotify(NMHDR* nm, std::wstring* open) {
     switch (nm->code) {
     case TVN_ITEMEXPANDINGW: {
