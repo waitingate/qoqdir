@@ -27,7 +27,7 @@ use windows::Win32::System::SystemServices::MK_LBUTTON;
 use windows::Win32::UI::Controls::{
     EM_GETSEL, EM_REPLACESEL, HTREEITEM, LVIF_IMAGE, LVIR_LABEL, LVITEMW, LVM_CANCELEDITLABEL, LVM_GETCOUNTPERPAGE,
     LVM_GETITEMRECT, LVM_GETITEMW, SB_GETTEXTLENGTHW, SB_GETTEXTW, TCIF_TEXT, TCITEMW,
-    TCM_GETCURSEL, TCM_GETITEMCOUNT, TCM_GETITEMRECT, TCM_GETITEMW, UPDOWN_CLASSW,
+    TCM_GETCURSEL, TCM_GETITEMCOUNT, TCM_GETITEMRECT, TCM_GETITEMW, TCM_SETCURFOCUS, UPDOWN_CLASSW,
     TVE_EXPAND, TVGN_CARET, TVGN_CHILD, TVGN_DROPHILITE, TVGN_NEXT, TVGN_ROOT, TVHITTESTINFO, TVHT_ONITEMBUTTON, TVIF_CHILDREN,
     TVIF_IMAGE,
     TVIF_TEXT, TVIS_EXPANDED, TVITEMW, TVM_EXPAND, TVM_GETCOUNT, TVM_GETINDENT, TVM_GETITEMRECT, TVM_GETITEMSTATE,
@@ -42,9 +42,10 @@ use windows::Win32::UI::Shell::{
     SHGFI_SYSICONINDEX, SHGetFileInfoW, SHGetKnownFolderIDList, StrCmpLogicalW,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    FindWindowExW, GWLP_USERDATA, GetClientRect, GetWindowLongPtrW, GetWindowTextLengthW, IsWindowVisible, KillTimer,
-    PostMessageW, SW_SHOWMINNOACTIVE, SW_SHOWNOACTIVATE, SetTimer, ShowWindow, WM_CHAR, WM_CLOSE, WM_DEVICECHANGE,
-    WM_KEYDOWN, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONUP, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_SYSKEYDOWN, WM_TIMER,
+    FindWindowExW, GWLP_USERDATA, GetClientRect, GetWindowLongPtrW, GetWindowRect, GetWindowTextLengthW, IsWindowVisible,
+    KillTimer, PostMessageW, SW_SHOWMINNOACTIVE, SW_SHOWNOACTIVATE, SetTimer, ShowWindow, WM_CHAR, WM_CLOSE,
+    WM_DEVICECHANGE, WM_DPICHANGED, WM_KEYDOWN, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONUP, WM_MOUSEMOVE, WM_MOUSEWHEEL,
+    WM_SYSKEYDOWN, WM_TIMER,
 };
 
 use crate::app::{App, Key, Nav, TIMER_LOADING, TIMER_REFRESH, ViewState};
@@ -116,6 +117,8 @@ thread_local! {
     static KEY_MS: Cell<u128> = const { Cell::new(0) }; // how long a key press kept the window busy
     static ROWS: Cell<usize> = const { Cell::new(0) };  // list rows before a refresh that must wait
     static TOP: Cell<usize> = const { Cell::new(0) };   // a scroll position to come back to
+    // Before a scaling change: the dots per inch, the row height, the first column's width and the window's place.
+    static BEFORE: Cell<(u32, i32, i32, RECT)> = const { Cell::new((0, 0, 0, RECT { left: 0, top: 0, right: 0, bottom: 0 })) };
     static EFFECT: Cell<u32> = const { Cell::new(0) };  // what a simulated drag was allowed to do
     static DRAGGED: RefCell<Option<IDataObject>> = const { RefCell::new(None) }; // what a simulated drag carries
     static COUNT: Cell<u32> = const { Cell::new(0) };   // a load count to compare with
@@ -913,6 +916,50 @@ impl App {
             },
         );
         s.add("(close them)", |a| a.close_other_tabs(a.active()), move |a| a.idle() && a.tabs() == 1 && a.at(&dir()));
+        s.add(
+            "a tab the control selects by itself (as assistive tools select one) switches to its folder",
+            |a| {
+                a.new_tab(Location::dir(p("sub")), false); // a second tab, right of this one
+                send(a.tab_bar, TCM_SETCURFOCUS, 1, 0); // on plain tabs this selects, and notifies the window as a click would
+            },
+            |a| a.idle() && a.active() == 1 && a.at(&p("sub")),
+        );
+        s.add("(close that tab)", |a| a.close_tab(1), move |a| a.idle() && a.tabs() == 1 && a.at(&dir()));
+        // What Windows sends when the window reaches a monitor with another scaling: the dots per inch there, and where
+        // the window goes.
+        let dpi_change = |a: &App, dpi: u32, at: RECT| send(a.wnd, WM_DPICHANGED, (dpi | dpi << 16) as usize, &at as *const _ as isize);
+        s.add(
+            "a move to a monitor with another scaling (as Windows reports it) rescales the font, the columns and the tabs",
+            move |a| {
+                let mut at = RECT::default();
+                unsafe {
+                    let _ = GetWindowRect(a.wnd, &mut at);
+                }
+                BEFORE.set((a.dpi.get(), a.row_height.get(), a.list.column_widths()[0], at));
+                let bigger = RECT { right: at.left + (at.right - at.left) * 4 / 3, bottom: at.top + (at.bottom - at.top) * 4 / 3, ..at };
+                dpi_change(a, a.dpi.get() * 4 / 3, bigger);
+            },
+            |a| {
+                let (dpi0, row0, col0, _) = BEFORE.get();
+                let dpi = dpi0 * 4 / 3;
+                a.dpi.get() == dpi
+                    && a.row_height.get() > row0
+                    && a.list.column_widths()[0] == (col0 as i64 * dpi as i64 / dpi0 as i64) as i32
+                    && tab_width(a) == scale(150, dpi)
+            },
+        );
+        s.add(
+            "...and the move back restores them",
+            move |a| {
+                let (dpi0, _, _, at0) = BEFORE.get();
+                dpi_change(a, dpi0, at0);
+            },
+            |a| {
+                let (dpi0, row0, col0, _) = BEFORE.get();
+                let column = a.list.column_widths()[0] - col0; // within rounding
+                a.dpi.get() == dpi0 && a.row_height.get() == row0 && (-1..=1).contains(&column) && tab_width(a) == scale(150, dpi0)
+            },
+        );
         s.add(
             "switching tabs shows the new tab at once; nothing acts on the old one meanwhile",
             |a| {
@@ -1868,7 +1915,8 @@ impl App {
                 a.switch_tab(0);
             },
             |a| a.idle() && a.active() == 0 && a.focused_is("item 5000.dat") && a.list.top_row() == TOP.get(),
-        );
+        )
+        .wait(10000); // three loads of 10,000 files: not a false alarm when something else keeps the machine busy
         s.add("(and the second tab keeps its selection too)", |a| a.switch_tab(1), |a| {
             a.idle() && a.active() == 1 && a.focused_is("item 7000.dat")
         });

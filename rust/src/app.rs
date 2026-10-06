@@ -201,7 +201,7 @@ pub struct App {
     wheel: Cell<i32>,                           // mouse wheel turned over the tab bar, not yet a whole step (120)
     font: RefCell<Option<Font>>,
     pub dpi: Cell<u32>,
-    row_height: Cell<i32>,
+    pub row_height: Cell<i32>,
     tab_height: Cell<i32>,
     tree_width: Cell<i32>, // in 96-DPI units
     splitter_x: Cell<i32>,

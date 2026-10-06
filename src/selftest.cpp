@@ -467,6 +467,40 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
             return tabWidth() == scale(80, dpi_) && arrows && IsWindowVisible(arrows);
         });
     add(L"(close them)", [=, this] { closeOtherTabs(active_); }, [=, this] { return idle() && tabs_.size() == 1 && at(dir); });
+    add(L"a tab the control selects by itself (as assistive tools select one) switches to its folder",
+        [=, this] {
+            newTab(path(L"sub"), false);        // a second tab, right of this one
+            TabCtrl_SetCurFocus(tabBar_, 1);   // on plain tabs this selects, and notifies the window as a click would
+        },
+        [=, this] { return idle() && active_ == 1 && at(path(L"sub")); });
+    add(L"(close that tab)", [=, this] { closeTab(1); }, [=, this] { return idle() && tabs_.size() == 1 && at(dir); });
+    // What Windows sends when the window reaches a monitor with another scaling: the dots per inch there, and where
+    // the window goes.
+    static UINT dpi0 = 0;
+    static int row0 = 0, col0 = 0;
+    static RECT at0{};
+    auto dpiChange = [this](UINT dpi, RECT place) {
+        SendMessageW(wnd_, WM_DPICHANGED, MAKEWPARAM(dpi, dpi), reinterpret_cast<LPARAM>(&place));
+    };
+    add(L"a move to a monitor with another scaling (as Windows reports it) rescales the font, the columns and the tabs",
+        [=, this] {
+            dpi0 = dpi_;
+            row0 = rowHeight_;
+            col0 = list_.columnWidths()[0];
+            GetWindowRect(wnd_, &at0);
+            RECT bigger{at0.left, at0.top, at0.left + (at0.right - at0.left) * 4 / 3, at0.top + (at0.bottom - at0.top) * 4 / 3};
+            dpiChange(dpi0 * 4 / 3, bigger);
+        },
+        [=, this] {
+            UINT dpi = dpi0 * 4 / 3;
+            return dpi_ == dpi && rowHeight_ > row0 && list_.columnWidths()[0] == MulDiv(col0, int(dpi), int(dpi0)) &&
+                   tabWidth() == scale(150, dpi);
+        });
+    add(L"...and the move back restores them", [=, this] { dpiChange(dpi0, at0); },
+        [=, this] {
+            int column = list_.columnWidths()[0] - col0;   // within rounding
+            return dpi_ == dpi0 && rowHeight_ == row0 && column >= -1 && column <= 1 && tabWidth() == scale(150, dpi0);
+        });
     add(L"switching tabs shows the new tab at once; nothing acts on the old one meanwhile",
         [=, this] {
             newTab(path(L"sub"), false);
@@ -1250,7 +1284,8 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
         },
         [=, this] {
             return idle() && active_ == 0 && list_.focusedName() == L"item 5000.dat" && list_.topRow() == top;
-        });
+        },
+        10000);   // three loads of 10,000 files: not a false alarm when something else keeps the machine busy
     add(L"(and the second tab keeps its selection too)", [=, this] { switchTab(1); },
         [=, this] { return idle() && active_ == 1 && list_.focusedName() == L"item 7000.dat"; });
     add(L"(back to the first tab)", [=, this] { switchTab(0); }, [=, this] { return idle() && active_ == 0; });

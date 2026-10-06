@@ -583,6 +583,11 @@ result:
     wide (at 100% scaling). With more tabs than fit that wide (some with long
     names), all are one narrower width and the last ends inside the bar; with more
     than fit at 80, all are 80 wide and the bar shows its scroll arrows.
+50. A tab the control selects by itself (as assistive tools do) switches to its
+    folder, like a click.
+51. The message Windows sends for a monitor with another scaling (4/3 of the
+    current, with the window's new place) rescales the font, the columns and the
+    tabs; the message for the old scaling restores them.
 
 ### 7.3 Command-line checks
 Run on a copy of the exe in a temp folder:
