@@ -117,7 +117,7 @@ instead of corrupting data, and the crash log says where.
 - No exceptions. `_GLIBCXX_ASSERTIONS` and the signed overflow trap stay on.
 - Link only DLLs that Windows protects (its KnownDLLs list, or comctl32 through
   the manifest). Windows looks for any other imported DLL next to the exe first:
-  load it at run time from System32, as `useExplorerTheme` does with uxtheme.dll.
+  load it at run time from System32, as `setTheme` does with uxtheme.dll.
 - "Qoqdir" in titles and messages, lowercase `qoqdir` in file names.
 - Git stores every file with LF line endings (Git for Windows shows them with CRLF
   in the working folder).

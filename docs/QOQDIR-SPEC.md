@@ -216,7 +216,9 @@ Back, Forward and Up are disabled when they can't do anything.
 - Tab captions are folder names, left-aligned; long ones are cut short with "…".
 - List and tree use Explorer's visual style and the system font at the current
   DPI, and everything scales right when the window moves to a monitor with a
-  different DPI (fonts, row heights, column widths).
+  different DPI (fonts, row heights, column widths). The list's column header is
+  Windows' plain flat one, a light gray that goes with the list (the themed one is
+  white).
 
 ### 5.3 Places and paths
 - A location is a folder path (local, `D:\`, or UNC `\\server\share\...`) or

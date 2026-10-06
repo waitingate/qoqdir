@@ -81,7 +81,7 @@ void FolderTree::create(HWND parent, int id, UINT batchMsg, UINT iconMsg, const 
                           0, 0, 0, 0, parent, reinterpret_cast<HMENU>(INT_PTR(id)), GetModuleHandleW(nullptr), nullptr);
     TreeView_SetExtendedStyle(tv_, TVS_EX_DOUBLEBUFFER | TVS_EX_FADEINOUTEXPANDOS,
                               TVS_EX_DOUBLEBUFFER | TVS_EX_FADEINOUTEXPANDOS);
-    useExplorerTheme(tv_);
+    setTheme(tv_, L"Explorer");
     TreeView_SetImageList(tv_, systemImageList(), TVSIL_NORMAL);
 }
 

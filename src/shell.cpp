@@ -149,11 +149,11 @@ HIMAGELIST systemImageList() {
 
 // uxtheme.dll is loaded here, not imported: Windows looks for an imported DLL next to the exe first, before
 // main() can restrict the search.
-void useExplorerTheme(HWND control) {
+void setTheme(HWND control, const wchar_t* name) {
     HMODULE ux = LoadLibraryExW(L"uxtheme.dll", nullptr, LOAD_LIBRARY_SEARCH_SYSTEM32);
     auto set = reinterpret_cast<HRESULT(WINAPI*)(HWND, LPCWSTR, LPCWSTR)>(
         reinterpret_cast<void (*)()>(ux ? GetProcAddress(ux, "SetWindowTheme") : nullptr));
-    if (set) set(control, L"Explorer", nullptr);
+    if (set) set(control, name, *name ? nullptr : L"");   // "" for both: Windows' plain look
 }
 
 namespace {

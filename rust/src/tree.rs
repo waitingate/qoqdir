@@ -31,8 +31,8 @@ use windows::core::{PWSTR, w};
 
 use crate::folder::{Location, SortKey, is_shortcut, list_folder, normalize, sort_items};
 use crate::shell::{
-    IconBatch, describe, describe_shortcut, folder_icon, known_folder, read_own_icons, shortcut_target, system_image_list,
-    use_explorer_theme,
+    IconBatch, describe, describe_shortcut, folder_icon, known_folder, read_own_icons, set_theme, shortcut_target,
+    system_image_list,
 };
 use crate::util::{pcwstr, send, wide};
 
@@ -159,7 +159,7 @@ impl FolderTree {
         .unwrap_or_default();
         let ex = (TVS_EX_DOUBLEBUFFER | TVS_EX_FADEINOUTEXPANDOS) as isize;
         send(hwnd, TVM_SETEXTENDEDSTYLE, ex as usize, ex);
-        use_explorer_theme(hwnd);
+        set_theme(hwnd, "Explorer");
         send(hwnd, TVM_SETIMAGELIST, TVSIL_NORMAL as usize, system_image_list().0);
         FolderTree {
             hwnd,

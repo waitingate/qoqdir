@@ -8,7 +8,7 @@
 #include <optional>
 
 HIMAGELIST systemImageList();                          // small icons, shared by the whole process
-void useExplorerTheme(HWND control);                   // Explorer's look for a list or tree
+void setTheme(HWND control, const wchar_t* name);     // "Explorer": Explorer's look for a list or tree; "": plain
 int iconFor(const std::wstring& path, const Item& it); // UI thread only; never touches the disk
 
 // .exe, .lnk and the like have their own icon, read on a worker thread (it may need the network).

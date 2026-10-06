@@ -16,7 +16,11 @@ void FileList::create(HWND parent, int id) {
                               LVS_EDITLABELS | LVS_SHAREIMAGELISTS,
                           0, 0, 0, 0, parent, reinterpret_cast<HMENU>(INT_PTR(id)), GetModuleHandleW(nullptr), nullptr);
     ListView_SetExtendedListViewStyle(lv_, LVS_EX_FULLROWSELECT | LVS_EX_DOUBLEBUFFER);
-    useExplorerTheme(lv_);
+    setTheme(lv_, L"Explorer");
+    // The column header in Windows' plain flat look: a light gray that goes with the list's (the themed one is white).
+    HWND header = ListView_GetHeader(lv_);
+    setTheme(header, L"");
+    SetWindowLongPtrW(header, GWL_STYLE, GetWindowLongPtrW(header, GWL_STYLE) | HDS_FLAT);
     ListView_SetImageList(lv_, systemImageList(), LVSIL_SMALL);
     for (int i = 0; i < kColumnCount; ++i) {
         LVCOLUMNW col{};

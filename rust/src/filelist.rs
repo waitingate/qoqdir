@@ -11,7 +11,7 @@ use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
 use windows::Win32::Graphics::Gdi::InvalidateRect;
 use windows::Win32::Storage::FileSystem::FILE_ATTRIBUTE_HIDDEN;
 use windows::Win32::UI::Controls::{
-    HDI_FORMAT, HDITEMW, HDF_SORTDOWN, HDF_SORTUP, HDM_GETITEMW, HDM_SETITEMW, LIST_VIEW_ITEM_STATE_FLAGS,
+    HDI_FORMAT, HDITEMW, HDS_FLAT, HDF_SORTDOWN, HDF_SORTUP, HDM_GETITEMW, HDM_SETITEMW, LIST_VIEW_ITEM_STATE_FLAGS,
     LVCF_FMT, LVCF_TEXT, LVCF_WIDTH, LVCFMT_LEFT, LVCFMT_RIGHT, LVCOLUMNW, LVIF_IMAGE, LVIF_TEXT, LVIR_BOUNDS,
     LVIS_FOCUSED, LVIS_SELECTED, LVITEMW, LVM_CANCELEDITLABEL, LVM_EDITLABELW, LVM_ENSUREVISIBLE, LVM_GETCOLUMNWIDTH,
     LVM_GETEDITCONTROL, LVM_GETHEADER, LVM_GETITEMRECT, LVM_GETNEXTITEM, LVM_GETTOPINDEX, LVM_INSERTCOLUMNW,
@@ -22,14 +22,14 @@ use windows::Win32::UI::Controls::{
     NMLVDISPINFOW, EM_SETSEL, HEADER_CONTROL_FORMAT_FLAGS,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    CreateWindowExW, HMENU, PostMessageW, WINDOW_EX_STYLE, WINDOW_STYLE, WS_CHILD,
-    WS_TABSTOP, WS_VISIBLE,
+    CreateWindowExW, GWL_STYLE, GetWindowLongPtrW, HMENU, PostMessageW, SetWindowLongPtrW, WINDOW_EX_STYLE, WINDOW_STYLE,
+    WS_CHILD, WS_TABSTOP, WS_VISIBLE,
 };
 
 use windows::core::w;
 
 use crate::folder::{Item, Listing, Location, SortKey, equal_no_case, matches_filter, sort_items, to_lower, format_size, format_time};
-use crate::shell::{icon_for, system_image_list, type_name, use_explorer_theme};
+use crate::shell::{icon_for, set_theme, system_image_list, type_name};
 use crate::util::{copy_to, focus, send, wide};
 
 const COLUMNS: [&str; 4] = ["Name", "Date modified", "Type", "Size"];
@@ -74,7 +74,11 @@ impl FileList {
         .unwrap_or_default();
         let ex = (LVS_EX_FULLROWSELECT | LVS_EX_DOUBLEBUFFER) as isize;
         send(hwnd, LVM_SETEXTENDEDLISTVIEWSTYLE, ex as usize, ex);
-        use_explorer_theme(hwnd);
+        set_theme(hwnd, "Explorer");
+        // The column header in Windows' plain flat look: a light gray that goes with the list's (the themed one is white).
+        let header = HWND(send(hwnd, LVM_GETHEADER, 0, 0) as _);
+        set_theme(header, "");
+        unsafe { SetWindowLongPtrW(header, GWL_STYLE, GetWindowLongPtrW(header, GWL_STYLE) | HDS_FLAT as isize) };
         send(hwnd, LVM_SETIMAGELIST, LVSIL_SMALL as usize, system_image_list().0);
         for (i, name) in COLUMNS.iter().enumerate() {
             let text = wide(name);

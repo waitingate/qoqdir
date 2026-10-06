@@ -89,14 +89,15 @@ pub fn system_image_list() -> HIMAGELIST {
     HIMAGELIST(list as _)
 }
 
-/// Explorer's look for a list or tree. uxtheme.dll is loaded here, not imported: Windows looks for an imported
-/// DLL next to the exe first, before main() can restrict the search.
-pub fn use_explorer_theme(control: HWND) {
+/// "Explorer": Explorer's look for a list or tree; "": Windows' plain look. uxtheme.dll is loaded here, not
+/// imported: Windows looks for an imported DLL next to the exe first, before main() can restrict the search.
+pub fn set_theme(control: HWND, name: &str) {
     unsafe {
         let Ok(ux) = LoadLibraryExW(w!("uxtheme.dll"), None, LOAD_LIBRARY_SEARCH_SYSTEM32) else { return };
         if let Some(set) = GetProcAddress(ux, s!("SetWindowTheme")) {
             let set: unsafe extern "system" fn(HWND, PCWSTR, PCWSTR) -> HRESULT = std::mem::transmute(set);
-            let _ = set(control, w!("Explorer"), PCWSTR::null());
+            let ids = if name.is_empty() { w!("") } else { PCWSTR::null() }; // "" for both: Windows' plain look
+            let _ = set(control, pcwstr(&wide(name)), ids);
         }
     }
 }
