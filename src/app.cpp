@@ -33,6 +33,18 @@ std::wstring windowText(HWND h) {
     return s;
 }
 
+// The text cut to fit 'width' pixels on 'dc', ending in "…" if it was longer. Windows counts the two halves of an
+// emoji as one character, so the cut never splits one.
+std::wstring fitText(HDC dc, const std::wstring& text, int width) {
+    int fit = 0;
+    SIZE size{};
+    GetTextExtentExPointW(dc, text.c_str(), int(text.size()), width, &fit, nullptr, &size);
+    if (fit >= int(text.size())) return text;
+    GetTextExtentPoint32W(dc, L"…", 1, &size);
+    GetTextExtentExPointW(dc, text.c_str(), int(text.size()), width - size.cx, &fit, nullptr, &size);
+    return text.substr(0, size_t(fit)) + L"…";
+}
+
 void focusEdit(HWND edit) {   // with its text selected, ready to be typed over or corrected
     SetFocus(edit);
     SendMessageW(edit, EM_SETSEL, 0, -1);
@@ -125,8 +137,8 @@ bool App::create(HINSTANCE instance, const CommandLine& cmd, bool useSettings) {
     up_ = make(L"BUTTON", L"↑", BS_PUSHBUTTON, 0, ID_UP);
     address_ = make(WC_EDITW, L"", ES_AUTOHSCROLL | WS_TABSTOP, WS_EX_CLIENTEDGE, ID_ADDRESS);
     filter_ = make(WC_EDITW, L"", ES_AUTOHSCROLL | WS_TABSTOP, WS_EX_CLIENTEDGE, ID_FILTER);
-    // Flat button-style tabs: Windows outlines the selected one, which reads clearly on gray.
-    tabBar_ = make(WC_TABCONTROLW, L"", TCS_FOCUSNEVER | TCS_BUTTONS | TCS_FLATBUTTONS, 0, ID_TABS);
+    // Windows' plain tabs, as in its dialogs (the current one white and taller), all one width (showTabs).
+    tabBar_ = make(WC_TABCONTROLW, L"", TCS_FOCUSNEVER, 0, ID_TABS);
     plus_ = make(L"BUTTON", L"+", BS_PUSHBUTTON, 0, ID_PLUS);
     // Bookmarks are shortcuts in a folder next to the exe (in a self-test: in the test folder).
     std::wstring exe(32768, L'\0');   // not MAX_PATH: the app may live in a deep folder
@@ -242,7 +254,10 @@ void App::layout() {
     place(tree_.hwnd(), 0, y, treeW, bodyH);
     place(list_.hwnd(), treeW + splitW, y, w - treeW - splitW, bodyH);
     splitterX_ = treeW;
+    RECT bar{};
+    GetClientRect(tabBar_, &bar);
     if (d) EndDeferWindowPos(d);
+    if (bar.right != std::max(w - btn - pad, 0)) showTabs();   // the tabs share a bar of a new width
 }
 
 // ---------------------------------------------------------------- messages
@@ -267,6 +282,7 @@ LRESULT App::onMessage(UINT msg, WPARAM wp, LPARAM lp) {
         const RECT* r = reinterpret_cast<RECT*>(lp);
         SetWindowPos(wnd_, nullptr, r->left, r->top, r->right - r->left, r->bottom - r->top, SWP_NOZORDER | SWP_NOACTIVATE);
         layout();   // the size may not have changed, but the font and row heights did
+        showTabs();   // and the tabs' width and names
         return 0;
     }
     case WM_ACTIVATE:
@@ -1122,7 +1138,8 @@ void App::addSavedTabs(const std::vector<std::wstring>& folders) {
     else setMessage(folders.empty() ? L"No saved tabs in Bookmarks\\Tabs" : L"The saved tabs are open already");
 }
 
-// The folder of the tab under the cursor, for a drop. That tab lights up while hovered.
+// The folder of the tab under the cursor, for a drop. That tab shows as the current one while hovered (plain tabs
+// take no highlight); the current tab's name keeps its bullet.
 std::optional<std::wstring> App::tabDropTarget(const POINT* screenPt) {
     int hover = -1;
     if (screenPt) {
@@ -1132,8 +1149,7 @@ std::optional<std::wstring> App::tabDropTarget(const POINT* screenPt) {
         hover = TabCtrl_HitTest(tabBar_, &hit);
     }
     if (hover != dropTab_) {
-        if (dropTab_ >= 0) TabCtrl_HighlightItem(tabBar_, dropTab_, FALSE);
-        if (hover >= 0) TabCtrl_HighlightItem(tabBar_, hover, TRUE);
+        TabCtrl_SetCurSel(tabBar_, hover >= 0 ? hover : active_);
         dropTab_ = hover;
     }
     if (hover < 0 || hover >= int(tabs_.size())) return std::nullopt;
@@ -1143,20 +1159,29 @@ std::optional<std::wstring> App::tabDropTarget(const POINT* screenPt) {
     return t.path;
 }
 
+// Every tab is as wide as the others: 150 (96-DPI units), all narrower when that many don't fit, down to 80, and
+// then the bar scrolls. The tabs sit side by side after 2 pixels of margin. Each name is cut to fit inside the tab's
+// padding (6 a side), so no tab grows past the minimum width set here. The current tab's name starts with a bullet,
+// as Windows' menus mark the chosen option: Windows draws that tab white and taller, which alone is easy to miss.
 void App::showTabs() {
-    dropTab_ = -1;   // the tabs are rebuilt, so no highlight is left
+    dropTab_ = -1;   // the tabs are rebuilt, with the current one shown
     TabCtrl_DeleteAllItems(tabBar_);
+    RECT bar{};
+    GetClientRect(tabBar_, &bar);
+    int share = (int(bar.right) - 2) / std::max(int(tabs_.size()), 1);
+    int width = std::clamp(share, scale(80, dpi_), scale(150, dpi_));
+    TabCtrl_SetMinTabWidth(tabBar_, width);
+    HDC dc = GetDC(tabBar_);
+    HGDIOBJ old = SelectObject(dc, font_.get());
     for (size_t i = 0; i < tabs_.size(); ++i) {
-        std::wstring text = displayName(tabs_[i].path);
-        if (text.size() > 28) {
-            size_t cut = IS_HIGH_SURROGATE(text[26]) ? 26 : 27;   // never between the two halves of an emoji
-            text = text.substr(0, cut) + L"…";
-        }
+        std::wstring text = fitText(dc, (int(i) == active_ ? L"• " : L"") + displayName(tabs_[i].path), width - scale(12, dpi_));
         TCITEMW item{};
         item.mask = TCIF_TEXT;
         item.pszText = text.data();
         TabCtrl_InsertItem(tabBar_, int(i), &item);
     }
+    SelectObject(dc, old);
+    ReleaseDC(tabBar_, dc);
     TabCtrl_SetCurSel(tabBar_, active_);
 }
 

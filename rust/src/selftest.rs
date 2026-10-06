@@ -26,8 +26,8 @@ use windows::Win32::System::SystemInformation::GetSystemDirectoryW;
 use windows::Win32::System::SystemServices::MK_LBUTTON;
 use windows::Win32::UI::Controls::{
     EM_GETSEL, EM_REPLACESEL, HTREEITEM, LVIF_IMAGE, LVIR_LABEL, LVITEMW, LVM_CANCELEDITLABEL, LVM_GETCOUNTPERPAGE,
-    LVM_GETITEMRECT, LVM_GETITEMW, SB_GETTEXTLENGTHW, SB_GETTEXTW, TCIF_TEXT, TCITEMW, TCM_GETCURSEL, TCM_GETITEMRECT,
-    TCM_GETITEMW,
+    LVM_GETITEMRECT, LVM_GETITEMW, SB_GETTEXTLENGTHW, SB_GETTEXTW, TCIF_TEXT, TCITEMW,
+    TCM_GETCURSEL, TCM_GETITEMCOUNT, TCM_GETITEMRECT, TCM_GETITEMW, UPDOWN_CLASSW,
     TVE_EXPAND, TVGN_CARET, TVGN_CHILD, TVGN_DROPHILITE, TVGN_NEXT, TVGN_ROOT, TVHITTESTINFO, TVHT_ONITEMBUTTON, TVIF_CHILDREN,
     TVIF_IMAGE,
     TVIF_TEXT, TVIS_EXPANDED, TVITEMW, TVM_EXPAND, TVM_GETCOUNT, TVM_GETINDENT, TVM_GETITEMRECT, TVM_GETITEMSTATE,
@@ -42,9 +42,9 @@ use windows::Win32::UI::Shell::{
     SHGFI_SYSICONINDEX, SHGetFileInfoW, SHGetKnownFolderIDList, StrCmpLogicalW,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    GWLP_USERDATA, GetWindowLongPtrW, GetWindowTextLengthW, KillTimer, PostMessageW, SW_SHOWMINNOACTIVE,
-    SW_SHOWNOACTIVATE, SetTimer, ShowWindow, WM_CHAR, WM_CLOSE, WM_DEVICECHANGE, WM_KEYDOWN, WM_LBUTTONDOWN,
-    WM_LBUTTONUP, WM_MBUTTONUP, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_SYSKEYDOWN, WM_TIMER,
+    FindWindowExW, GWLP_USERDATA, GetClientRect, GetWindowLongPtrW, GetWindowTextLengthW, IsWindowVisible, KillTimer,
+    PostMessageW, SW_SHOWMINNOACTIVE, SW_SHOWNOACTIVATE, SetTimer, ShowWindow, WM_CHAR, WM_CLOSE, WM_DEVICECHANGE,
+    WM_KEYDOWN, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONUP, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_SYSKEYDOWN, WM_TIMER,
 };
 
 use crate::app::{App, Key, Nav, TIMER_LOADING, TIMER_REFRESH, ViewState};
@@ -52,7 +52,7 @@ use crate::folder::{Item, Listing, Location, SortKey, exists, is_directory, is_s
 use crate::shell::{
     copy_to_clipboard, data_object_at, item_menu_at, known_folder, paste_into, shortcut_target, type_name,
 };
-use crate::util::{Pidl, focus, from_wide, pcwstr, send, set_text, wide, window_text};
+use crate::util::{Pidl, focus, from_wide, pcwstr, scale, send, set_text, wide, window_text};
 
 type Act = Rc<dyn Fn(&App)>;
 type Check = Rc<dyn Fn(&App) -> bool>;
@@ -289,6 +289,34 @@ fn drag_along_bar(a: &App, from: usize, x: i32) {
 fn wheel(a: &App, delta: i16) {
     let pt = a.tab_point(0);
     send(a.tab_bar, WM_MOUSEWHEEL, (delta as u16 as usize) << 16, packed(pt.x, pt.y));
+}
+
+/// A tab's name as the tab bar shows it.
+fn caption(a: &App, index: usize) -> Vec<u16> {
+    let mut text = [0u16; 128];
+    let mut item = TCITEMW { mask: TCIF_TEXT, pszText: windows::core::PWSTR(text.as_mut_ptr()), cchTextMax: 128, ..Default::default() };
+    send(a.tab_bar, TCM_GETITEMW, index, &mut item as *mut _ as isize);
+    from_wide(&text).encode_wide().collect()
+}
+
+/// The width every tab has (0: they differ).
+fn tab_width(a: &App) -> i32 {
+    let widths: Vec<i32> = (0..send(a.tab_bar, TCM_GETITEMCOUNT, 0, 0) as usize)
+        .map(|i| {
+            let r = tab_rect(a, i);
+            r.right - r.left
+        })
+        .collect();
+    if widths.windows(2).all(|w| w[0] == w[1]) { widths.last().copied().unwrap_or(0) } else { 0 }
+}
+
+/// The tab bar's width.
+fn bar_width(a: &App) -> i32 {
+    let mut bar = RECT::default();
+    unsafe {
+        let _ = GetClientRect(a.tab_bar, &mut bar);
+    }
+    bar.right
 }
 
 /// Files that exist only in the list, all selected: a copy that asked the disk about each one would find nothing.
@@ -845,6 +873,9 @@ impl App {
             },
             |a| a.idle() && a.active() == 0 && a.at(&p("sub")),
         );
+        s.check("the current tab's name, and only its, starts with a bullet", |a| {
+            (0..a.tabs()).all(|i| caption(a, i).starts_with(&[0x2022, 0x20]) == (i == a.active()))
+        });
         s.add("a new tab goes at the end, so the newest is the last one", |a| a.press(letter(b'T'), CTRL), move |a| {
             a.tabs() == 4
                 && a.tab_path(1).same(&Location::dir(dir()))
@@ -854,6 +885,34 @@ impl App {
         });
         // Keeps the test folder's own tab.
         s.add("(close the other tabs)", |a| a.close_other_tabs(1), move |a| a.idle() && a.tabs() == 1 && a.at(&dir()));
+        s.check("a lone tab is 150 wide at 100% scaling", |a| tab_width(a) == scale(150, a.dpi.get()));
+        let long_name = || Location::dir(p("a folder with a name too long for its tab")); // never opened: only its caption
+        s.add(
+            "when more tabs are open than fit that wide, all get narrower alike, and all still show",
+            move |a| {
+                while a.tabs() as i32 <= bar_width(a) / scale(150, a.dpi.get()) {
+                    a.new_tab(long_name(), false);
+                }
+            },
+            |a| {
+                let (width, dpi) = (tab_width(a), a.dpi.get());
+                note(format!("{} tabs {width} wide", a.tabs()));
+                width >= scale(80, dpi) && width < scale(150, dpi) && tab_rect(a, a.tabs() - 1).right <= bar_width(a)
+            },
+        );
+        s.add(
+            "...but no narrower than 80; with more, the bar scrolls",
+            move |a| {
+                while a.tabs() as i32 <= bar_width(a) / scale(80, a.dpi.get()) {
+                    a.new_tab(long_name(), false);
+                }
+            },
+            |a| {
+                let arrows = unsafe { FindWindowExW(Some(a.tab_bar), None, UPDOWN_CLASSW, windows::core::PCWSTR::null()) };
+                tab_width(a) == scale(80, a.dpi.get()) && arrows.is_ok_and(|h| unsafe { IsWindowVisible(h) }.as_bool())
+            },
+        );
+        s.add("(close them)", |a| a.close_other_tabs(a.active()), move |a| a.idle() && a.tabs() == 1 && a.at(&dir()));
         s.add(
             "switching tabs shows the new tab at once; nothing acts on the old one meanwhile",
             |a| {
@@ -963,26 +1022,22 @@ impl App {
         s.add("typing ..\\ goes up", |a| a.go_to("..\\"), move |a| a.at(&dir()));
         s.add("typing .\\sub opens it here (not in Explorer)", |a| a.go_to(".\\sub"), |a| a.at(&p("sub")));
         s.add(
-            "a long folder name with an emoji where the caption is cut gives no broken character",
+            "a long folder name of emojis is cut to fit its tab, ending in an ellipsis, with no broken character",
             |a| {
-                // The emoji is two UTF-16 units; the caption's cut lands between them.
-                let name = format!("{}\u{1F600}bcd", "a".repeat(26));
+                let name = "\u{1F600}".repeat(40); // each is two UTF-16 units; the cut lands among them
                 let _ = std::fs::create_dir(p(&name));
                 a.open(Location::dir(p(&name)), Nav::New, ViewState::default());
             },
             |a| {
-                if !a.idle() || a.tab_location().display_name().encode_wide().count() != 31 {
+                if !a.idle() || a.tab_location().display_name().encode_wide().count() != 80 {
                     return false;
                 }
-                let mut text = [0u16; 64];
-                let mut item = TCITEMW { mask: TCIF_TEXT, pszText: windows::core::PWSTR(text.as_mut_ptr()), cchTextMax: 64, ..Default::default() };
-                send(a.tab_bar, TCM_GETITEMW, a.active(), &mut item as *mut _ as isize);
-                let caption: Vec<u16> = from_wide(&text).encode_wide().collect();
+                let caption = caption(a, a.active());
                 // Every high surrogate must be followed by its low one.
                 let whole = caption.iter().enumerate().all(|(i, &c)| {
                     !(0xD800..0xDC00).contains(&c) || caption.get(i + 1).is_some_and(|n| (0xDC00..0xE000).contains(n))
                 });
-                whole && caption.len() <= 28
+                whole && caption.len() < 80 && caption.last() == Some(&0x2026)
             },
         );
         s.home("(back up to the test folder)");
@@ -1394,7 +1449,8 @@ impl App {
         s.add("(show that tab once)", |a| a.switch_tab(a.active() + 1), |a| a.at(&p("made")));
         s.add("(and come back)", |a| a.switch_tab(a.active() - 1), move |a| a.at(&dir()));
         s.add(
-            "dropping a file on a tab puts it in that tab's folder",
+            "dropping a file on a tab puts it in that tab's folder; while the file is over it, that tab shows as the \
+             current one, and afterwards the real one does again",
             |a| {
                 let cursor = a.tab_point(a.active() + 1);
                 let data = data_object_at(a.wnd, &Location::dir(p("file1.txt"))); // what a drag carries
@@ -1404,11 +1460,18 @@ impl App {
                     let _ = target.DragEnter(&data, MK_LBUTTON, cursor, &mut effect);
                     effect = DROPEFFECT_COPY;
                     let _ = target.DragOver(MK_LBUTTON, cursor, &mut effect);
+                    let shown = send(a.tab_bar, TCM_GETCURSEL, 0, 0) == a.active() as isize + 1;
+                    note(if shown { "shown while over it" } else { "not shown while over it" }.into());
                     effect = DROPEFFECT_COPY;
                     let _ = target.Drop(&data, MK_LBUTTON, cursor, &mut effect);
                 }
             },
-            |a| exists(&p("made\\file1.txt")) && a.drop_tab.get().is_none(),
+            |a| {
+                exists(&p("made\\file1.txt"))
+                    && a.drop_tab.get().is_none()
+                    && noted() == "shown while over it"
+                    && send(a.tab_bar, TCM_GETCURSEL, 0, 0) == a.active() as isize
+            },
         )
         .wait(10000);
         s.add("(close the extra tab)", |a| a.close_tab(a.active() + 1), |a| a.idle() && a.tabs() == 1);

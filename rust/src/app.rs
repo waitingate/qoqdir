@@ -10,10 +10,10 @@ use std::path::PathBuf;
 use std::rc::{Rc, Weak};
 use std::sync::atomic::{AtomicU32, Ordering};
 
-use windows::Win32::Foundation::{COLORREF, ERROR_OPERATION_ABORTED, HINSTANCE, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
+use windows::Win32::Foundation::{COLORREF, ERROR_OPERATION_ABORTED, HINSTANCE, HWND, LPARAM, LRESULT, POINT, RECT, SIZE, WPARAM};
 use windows::Win32::Graphics::Gdi::{
-    ClientToScreen, CreateFontIndirectW, CreateSolidBrush, InvalidateRect, GetDC, GetTextMetricsW, MONITOR_DEFAULTTONULL,
-    MonitorFromRect, PtInRect, ReleaseDC, ScreenToClient, SelectObject, TEXTMETRICW,
+    ClientToScreen, CreateFontIndirectW, CreateSolidBrush, InvalidateRect, GetDC, GetTextExtentExPointW, GetTextExtentPoint32W,
+    GetTextMetricsW, HDC, MONITOR_DEFAULTTONULL, MonitorFromRect, PtInRect, ReleaseDC, ScreenToClient, SelectObject, TEXTMETRICW,
 };
 use windows::Win32::Storage::FileSystem::CreateDirectoryW;
 use windows::Win32::System::Diagnostics::Debug::MessageBeep;
@@ -27,7 +27,7 @@ use windows::Win32::UI::Controls::{
     LVHITTESTINFO, LVM_GETITEMRECT, LVM_HITTEST, LVM_SETITEMSTATE, LVN_BEGINDRAG, LVN_BEGINRDRAG, LVN_ENDLABELEDITW, LVN_ITEMACTIVATE,
     LVM_SETBKCOLOR, LVM_SETTEXTBKCOLOR, TVM_SETBKCOLOR, LVN_ITEMCHANGED, LVN_ODSTATECHANGED, NM_RCLICK, NMHDR, NMLVDISPINFOW, SB_SETPARTS, SB_SETTEXTW,
     TCHITTESTINFO, TCIF_TEXT, TCITEMW, TCM_DELETEALLITEMS, TCM_GETCURSEL, TCM_GETITEMRECT, TCM_HITTEST, TCM_INSERTITEMW,
-    TCM_HIGHLIGHTITEM, TCM_SETCURSEL, TCN_SELCHANGE,
+    TCM_SETCURSEL, TCM_SETMINTABWIDTH, TCN_SELCHANGE,
 };
 use windows::Win32::UI::HiDpi::{GetDpiForSystem, GetDpiForWindow, SystemParametersInfoForDpi};
 use windows::Win32::UI::Input::KeyboardAndMouse::{
@@ -200,7 +200,7 @@ pub struct App {
     pub drop_tab: Cell<Option<usize>>,          // tab highlighted during a drag
     wheel: Cell<i32>,                           // mouse wheel turned over the tab bar, not yet a whole step (120)
     font: RefCell<Option<Font>>,
-    dpi: Cell<u32>,
+    pub dpi: Cell<u32>,
     row_height: Cell<i32>,
     tab_height: Cell<i32>,
     tree_width: Cell<i32>, // in 96-DPI units
@@ -227,6 +227,24 @@ fn hiword(v: usize) -> u32 {
 }
 fn point_from(lp: LPARAM) -> POINT {
     POINT { x: (lp.0 & 0xFFFF) as i16 as i32, y: ((lp.0 >> 16) & 0xFFFF) as i16 as i32 }
+}
+
+/// The text cut to fit `width` pixels on `dc`, ending in "…" if it was longer. Windows counts the two halves of an
+/// emoji as one character, so the cut never splits one.
+fn fit_text(dc: HDC, text: &[u16], width: i32) -> Vec<u16> {
+    let (mut fit, mut size) = (0, SIZE::default());
+    unsafe {
+        let _ = GetTextExtentExPointW(dc, PCWSTR(text.as_ptr()), text.len() as i32, width, Some(&raw mut fit), None, &mut size);
+        if fit as usize >= text.len() {
+            return text.to_vec();
+        }
+        let _ = GetTextExtentPoint32W(dc, &[0x2026], &mut size);
+        let width = width - size.cx;
+        let _ = GetTextExtentExPointW(dc, PCWSTR(text.as_ptr()), text.len() as i32, width, Some(&raw mut fit), None, &mut size);
+    }
+    let mut cut = text[..fit as usize].to_vec();
+    cut.push(0x2026);
+    cut
 }
 
 /// With its text selected, ready to be typed over or corrected.
@@ -372,10 +390,8 @@ impl App {
             let address = make(w!("EDIT"), w!(""), ES_AUTOHSCROLL | WS_TABSTOP.0, WS_EX_CLIENTEDGE.0, ID_ADDRESS);
             let filter = make(w!("EDIT"), w!(""), ES_AUTOHSCROLL | WS_TABSTOP.0, WS_EX_CLIENTEDGE.0, ID_FILTER);
             const TCS_FOCUSNEVER: u32 = 0x8000;
-            // Flat button-style tabs: Windows outlines the selected one, which reads clearly on gray.
-            const TCS_BUTTONS: u32 = 0x0100;
-            const TCS_FLATBUTTONS: u32 = 0x0008;
-            let tab_bar = make(w!("SysTabControl32"), w!(""), TCS_FOCUSNEVER | TCS_BUTTONS | TCS_FLATBUTTONS, 0, ID_TABS);
+            // Windows' plain tabs, as in its dialogs (the current one white and taller), all one width (show_tabs).
+            let tab_bar = make(w!("SysTabControl32"), w!(""), TCS_FOCUSNEVER, 0, ID_TABS);
             let plus = make(w!("BUTTON"), w!("+"), 0, 0, ID_PLUS);
             let exe = {
                 let mut buf = [0u16; 32768];
@@ -571,6 +587,8 @@ impl App {
             place(self.filter, w - pad - filter_w, y, filter_w, row);
             y += row + pad;
             let tab_h = self.tab_height.get();
+            let mut bar = RECT::default();
+            let _ = GetClientRect(self.tab_bar, &mut bar); // its width before
             place(self.tab_bar, 0, y, w - btn - pad, tab_h);
             place(self.plus, w - btn - pad, y + (tab_h - row) / 2, btn, row);
             y += tab_h;
@@ -581,6 +599,9 @@ impl App {
             place(self.tree.hwnd(), 0, y, tree_w, body_h);
             place(self.list.hwnd(), tree_w + split_w, y, w - tree_w - split_w, body_h);
             self.splitter_x.set(tree_w);
+            if bar.right != (w - btn - pad).max(0) {
+                self.show_tabs(); // the tabs share a bar of a new width
+            }
         }
     }
 
@@ -612,6 +633,7 @@ impl App {
                     let r = &*(lp.0 as *const RECT);
                     let _ = SetWindowPos(self.wnd, None, r.left, r.top, r.right - r.left, r.bottom - r.top, SWP_NOZORDER | SWP_NOACTIVATE);
                     self.layout(); // the size may not have changed, but the font and row heights did
+                    self.show_tabs(); // and the tabs' width and names
                     return LRESULT(0);
                 }
                 WM_ACTIVATE => {
@@ -1887,7 +1909,8 @@ impl App {
         }
     }
 
-    /// The folder of the tab under the cursor, for a drop. That tab lights up while hovered.
+    /// The folder of the tab under the cursor, for a drop. That tab shows as the current one while hovered (plain tabs
+    /// take no highlight); the current tab's name keeps its bullet.
     fn tab_drop_target(&self, pt: Option<POINT>) -> Option<Location> {
         let hover = pt.and_then(|pt| {
             let mut hit = TCHITTESTINFO { pt, ..Default::default() };
@@ -1897,12 +1920,8 @@ impl App {
             usize::try_from(send(self.tab_bar, TCM_HITTEST, 0, &mut hit as *mut _ as isize)).ok()
         });
         if hover != self.drop_tab.get() {
-            if let Some(old) = self.drop_tab.get() {
-                send(self.tab_bar, TCM_HIGHLIGHTITEM, old, 0);
-            }
-            if let Some(new) = hover {
-                send(self.tab_bar, TCM_HIGHLIGHTITEM, new, 1);
-            }
+            let active = self.st.borrow().active;
+            send(self.tab_bar, TCM_SETCURSEL, hover.unwrap_or(active), 0);
             self.drop_tab.set(hover);
         }
         let (location, unavailable) = self.st.borrow().tabs.get(hover?).map(|t| (t.location.clone(), t.unavailable))?;
@@ -1911,23 +1930,38 @@ impl App {
         (matches!(location, Location::Dir(_)) && !unavailable && !from_here).then_some(location)
     }
 
+    /// Every tab is as wide as the others: 150 (96-DPI units), all narrower when that many don't fit, down to 80, and
+    /// then the bar scrolls. The tabs sit side by side after 2 pixels of margin. Each name is cut to fit inside the
+    /// tab's padding (6 a side), so no tab grows past the minimum width set here. The current tab's name starts with a
+    /// bullet, as Windows' menus mark the chosen option: Windows draws that tab white and taller, which alone is easy
+    /// to miss.
     fn show_tabs(&self) {
-        self.drop_tab.set(None); // the tabs are rebuilt, so no highlight is left
+        self.drop_tab.set(None); // the tabs are rebuilt, with the current one shown
         let (names, active): (Vec<OsString>, usize) = {
             let st = self.st.borrow();
             (st.tabs.iter().map(|t| t.location.display_name()).collect(), st.active)
         };
         send(self.tab_bar, TCM_DELETEALLITEMS, 0, 0);
-        for (i, name) in names.iter().enumerate() {
-            let mut text: Vec<u16> = name.encode_wide().collect();
-            if text.len() > 28 {
-                let cut = if (0xD800..0xDC00).contains(&text[26]) { 26 } else { 27 }; // never between the two halves of an emoji
-                text.truncate(cut);
-                text.push(0x2026);
+        let dpi = self.dpi.get();
+        let font = self.font.borrow().as_ref().map(|f| f.0).unwrap_or_default();
+        unsafe {
+            let mut bar = RECT::default();
+            let _ = GetClientRect(self.tab_bar, &mut bar);
+            let share = (bar.right - 2) / (names.len() as i32).max(1);
+            let width = share.clamp(scale(80, dpi), scale(150, dpi));
+            send(self.tab_bar, TCM_SETMINTABWIDTH, 0, width as isize);
+            let dc = GetDC(Some(self.tab_bar));
+            let old = SelectObject(dc, font.into());
+            for (i, name) in names.iter().enumerate() {
+                let mark = if i == active { "\u{2022} " } else { "" };
+                let full: Vec<u16> = mark.encode_utf16().chain(name.encode_wide()).collect();
+                let mut text = fit_text(dc, &full, width - scale(12, dpi));
+                text.push(0);
+                let item = TCITEMW { mask: TCIF_TEXT, pszText: PWSTR(text.as_mut_ptr()), ..Default::default() };
+                send(self.tab_bar, TCM_INSERTITEMW, i, &item as *const _ as isize);
             }
-            text.push(0);
-            let item = TCITEMW { mask: TCIF_TEXT, pszText: PWSTR(text.as_mut_ptr()), ..Default::default() };
-            send(self.tab_bar, TCM_INSERTITEMW, i, &item as *const _ as isize);
+            SelectObject(dc, old);
+            ReleaseDC(Some(self.tab_bar), dc);
         }
         send(self.tab_bar, TCM_SETCURSEL, active, 0);
     }

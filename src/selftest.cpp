@@ -161,6 +161,25 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
         ClientToScreen(tabBar_, &pt);
         return POINTL{pt.x, pt.y};
     };
+    auto caption = [this](int index) {   // a tab's name as the tab bar shows it
+        wchar_t text[128] = {};
+        TCITEMW item{};
+        item.mask = TCIF_TEXT;
+        item.pszText = text;
+        item.cchTextMax = 128;
+        TabCtrl_GetItem(tabBar_, index, &item);
+        return std::wstring(text);
+    };
+    auto tabWidth = [this] {   // the width every tab has (0: they differ)
+        int width = 0;
+        for (int i = 0; i < TabCtrl_GetItemCount(tabBar_); ++i) {
+            RECT r{};
+            TabCtrl_GetItemRect(tabBar_, i, &r);
+            if (i > 0 && r.right - r.left != width) return 0;
+            width = r.right - r.left;
+        }
+        return width;
+    };
     auto goTo = [this](const std::wstring& text) {   // types into the address bar and presses Enter
         SetWindowTextW(address_, text.c_str());
         SetFocus(address_);
@@ -413,6 +432,11 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
     add(L"turning the wheel the other way goes back to the first tab, and stops there",
         [=, this] { for (int i = 0; i < 3; ++i) wheel(120); },
         [=, this] { return idle() && active_ == 0 && at(path(L"sub")); });
+    add(L"the current tab's name, and only its, starts with a bullet", nullptr, [=, this] {
+        for (int i = 0; i < int(tabs_.size()); ++i)
+            if ((caption(i).rfind(L"• ", 0) == 0) != (i == active_)) return false;
+        return true;
+    });
     add(L"a new tab goes at the end, so the newest is the last one", [=, this] { selfTestKey('T', true); },
         [=, this] {
             return tabs_.size() == 4 && samePath(tabs_[1].path, dir) && tabs_[2].path.empty() && active_ == 3 &&
@@ -420,6 +444,33 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
         });
     add(L"(close the other tabs)", [=, this] { closeOtherTabs(1); },   // keeps the test folder's own tab
         [=, this] { return idle() && tabs_.size() == 1 && at(dir); });
+    add(L"a lone tab is 150 wide at 100% scaling", nullptr, [=, this] { return tabWidth() == scale(150, dpi_); });
+    std::wstring longName = path(L"a folder with a name too long for its tab");   // never opened: only its caption
+    add(L"when more tabs are open than fit that wide, all get narrower alike, and all still show",
+        [=, this] {
+            RECT bar{};
+            GetClientRect(tabBar_, &bar);
+            while (int(tabs_.size()) <= bar.right / scale(150, dpi_)) newTab(longName, false);
+        },
+        [=, this] {
+            RECT bar{}, last{};
+            GetClientRect(tabBar_, &bar);
+            TabCtrl_GetItemRect(tabBar_, int(tabs_.size()) - 1, &last);
+            int width = tabWidth();
+            selfTest_->note = std::to_wstring(tabs_.size()) + L" tabs " + std::to_wstring(width) + L" wide";
+            return width >= scale(80, dpi_) && width < scale(150, dpi_) && last.right <= bar.right;
+        });
+    add(L"...but no narrower than 80; with more, the bar scrolls",
+        [=, this] {
+            RECT bar{};
+            GetClientRect(tabBar_, &bar);
+            while (int(tabs_.size()) <= bar.right / scale(80, dpi_)) newTab(longName, false);
+        },
+        [=, this] {
+            HWND arrows = FindWindowExW(tabBar_, nullptr, UPDOWN_CLASSW, nullptr);
+            return tabWidth() == scale(80, dpi_) && arrows && IsWindowVisible(arrows);
+        });
+    add(L"(close them)", [=, this] { closeOtherTabs(active_); }, [=, this] { return idle() && tabs_.size() == 1 && at(dir); });
     add(L"switching tabs shows the new tab at once; nothing acts on the old one meanwhile",
         [=, this] {
             newTab(path(L"sub"), false);
@@ -506,26 +557,20 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
     add(L"typing ..\\ goes up", [=, this] { goTo(L"..\\"); }, [=, this] { return at(dir); });
     add(L"typing .\\sub opens it here (not in Explorer)", [=, this] { goTo(L".\\sub"); },
         [=, this] { return at(path(L"sub")); });
-    add(L"a long folder name with an emoji where the caption is cut gives no broken character",
+    add(L"a long folder name of emojis is cut to fit its tab, ending in an ellipsis, with no broken character",
         [=, this] {
-            std::wstring name(26, L'a');
-            name += L"\U0001F600bcd";   // the emoji is two UTF-16 units; the caption's cut lands between them
+            std::wstring name;
+            for (int i = 0; i < 40; ++i) name += L"\U0001F600";   // each is two UTF-16 units; the cut lands among them
             CreateDirectoryW(path(name).c_str(), nullptr);
             open(path(name), Nav::New);
         },
         [=, this] {
-            if (!idle() || leafName(tab().path).size() != 31) return false;
-            wchar_t text[64] = {};
-            TCITEMW item{};
-            item.mask = TCIF_TEXT;
-            item.pszText = text;
-            item.cchTextMax = 64;
-            TabCtrl_GetItem(tabBar_, active_, &item);
-            std::wstring caption = text;
-            for (size_t i = 0; i < caption.size(); ++i)   // every high surrogate must be followed by its low one
-                if (IS_HIGH_SURROGATE(caption[i]) && (i + 1 >= caption.size() || !IS_LOW_SURROGATE(caption[i + 1])))
+            if (!idle() || leafName(tab().path).size() != 80) return false;
+            std::wstring shown = caption(active_);
+            for (size_t i = 0; i < shown.size(); ++i)   // every high surrogate must be followed by its low one
+                if (IS_HIGH_SURROGATE(shown[i]) && (i + 1 >= shown.size() || !IS_LOW_SURROGATE(shown[i + 1])))
                     return false;
-            return caption.size() <= 28;
+            return shown.size() < 80 && shown.back() == L'…';
         });
     backHome(L"(back up to the test folder)");
 
@@ -840,7 +885,8 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
         [=, this] { return dragEffect == DROPEFFECT_NONE && keyMs < 100; });
     add(L"(show that tab once)", [=, this] { switchTab(active_ + 1); }, [=, this] { return at(path(L"made")); });
     add(L"(and come back)", [=, this] { switchTab(active_ - 1); }, [=, this] { return at(dir); });
-    add(L"dropping a file on a tab puts it in that tab's folder",
+    add(L"dropping a file on a tab puts it in that tab's folder; while the file is over it, that tab shows as the "
+        L"current one, and afterwards the real one does again",
         [=, this] {
             POINTL cursor = tabPoint(active_ + 1);
             Com<IDataObject> data = dataObject(wnd_, path(L"file1.txt"));   // what a drag carries
@@ -848,10 +894,15 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
             tabDrop_->DragEnter(data.get(), MK_LBUTTON, cursor, &effect);
             effect = DROPEFFECT_COPY;
             tabDrop_->DragOver(MK_LBUTTON, cursor, &effect);
+            selfTest_->note = TabCtrl_GetCurSel(tabBar_) == active_ + 1 ? L"shown while over it" : L"not shown while over it";
             effect = DROPEFFECT_COPY;
             tabDrop_->Drop(data.get(), MK_LBUTTON, cursor, &effect);
         },
-        [=, this] { return exists(path(L"made\\file1.txt")) && dropTab_ == -1; }, 10000);
+        [=, this] {
+            return exists(path(L"made\\file1.txt")) && dropTab_ == -1 && selfTest_->note == L"shown while over it" &&
+                   TabCtrl_GetCurSel(tabBar_) == active_;
+        },
+        10000);
     add(L"(close the extra tab)", [=, this] { closeTab(active_ + 1); }, [=, this] { return idle() && tabs_.size() == 1; });
     add(L"middle-click on a folder opens it in a new background tab",
         [=, this] {

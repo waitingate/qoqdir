@@ -203,10 +203,14 @@ Back, Forward and Up are disabled when they can't do anything.
 ### 5.2 Look
 - Window, list and tree have a soft gray background, RGB(235, 235, 235)
   (`#EBEBEB`), easier on the eyes than white. No dark mode.
-- Tabs look like flat buttons. The selected tab shows only Windows' normal flat
-  button look, with no colored highlight. A tab turns blue only while files are
-  dragged over it, to show where they will go.
-- Tab captions are folder names; long ones are cut short with "…".
+- Tabs look like flat buttons, all the same width: 150 pixels at 100% scaling
+  while they fit, all narrower together as more open, down to 80; past that the
+  bar scrolls, with arrows at its right end.
+- They are Windows' plain tabs, as in its dialogs: the current one is white and a
+  little taller, and its name starts with a bullet ("•"), as Windows' menus mark
+  the chosen option. While files are dragged over another tab, that tab shows as
+  the current one, to show where they will go.
+- Tab captions are folder names, left-aligned; long ones are cut short with "…".
 - List and tree use Explorer's visual style and the system font at the current
   DPI, and everything scales right when the window moves to a monitor with a
   different DPI (fonts, row heights, column widths).
@@ -325,7 +329,8 @@ Back, Forward and Up are disabled when they can't do anything.
   Ctrl+Shift+PgUp / Ctrl+Shift+PgDn move the current tab one place.
   A moved tab keeps its folder, history and view (nothing reloads) and stays the
   current tab. The order is the one Ctrl+S saves.
-- Drop onto a tab: dragging files over a tab highlights it, and dropping copies or
+- Drop onto a tab: dragging files over a tab shows it as the current one while
+  they are over it (the real current tab keeps its bullet), and dropping copies or
   moves them into that tab's folder exactly as dropping on that folder in Explorer
   would (Shift, Ctrl and Alt work as usual). Not onto This PC, not onto a tab
   whose folder hasn't loaded here yet or failed, and not back into the folder the
@@ -535,7 +540,8 @@ result:
 27. The Bookmarks folder exists and is the first tree root, labelled "Bookmarks".
 28. Context menus can be built for This PC, a drive and a file.
 29. Dropping a file (a drag simulated inside the process) on a second tab copies
-    it into that tab's folder, and no tab stays highlighted afterwards.
+    it into that tab's folder. While the file is over that tab, it shows as the
+    current one; afterwards the real current tab does again.
 30. Middle-click on a folder in the list opens a new background tab with that
     folder, and the current tab doesn't change.
 31. Middle-click on a tree node opens a new background tab with that folder.
@@ -573,6 +579,10 @@ result:
     closed folder in Bookmarks lights up, opens after a moment while the drag is
     held over it, and a drop copies the file into it.
 48. A drop on the bookmark shortcut to `sub` in the tree copies the file into `sub`.
+49. The current tab's name, and only its, starts with a bullet. A lone tab is 150
+    wide (at 100% scaling). With more tabs than fit that wide (some with long
+    names), all are one narrower width and the last ends inside the bar; with more
+    than fit at 80, all are 80 wide and the bar shows its scroll arrows.
 
 ### 7.3 Command-line checks
 Run on a copy of the exe in a temp folder:
