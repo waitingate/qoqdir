@@ -35,6 +35,10 @@ target_link_libraries(core PUBLIC ${WIN_LIBS})
 add_library(app OBJECT src/crashlog.cpp src/app.cpp src/filelist.cpp src/tree.cpp src/shell.cpp)
 target_link_libraries(app PUBLIC core)
 
+# windres reports no dependencies, so name what app.rc pulls in: a new version, manifest or icon then rebuilds it.
+set_source_files_properties(src/app.rc PROPERTIES OBJECT_DEPENDS
+  "${CMAKE_CURRENT_SOURCE_DIR}/src/version.h;${CMAKE_CURRENT_SOURCE_DIR}/src/app.manifest;${CMAKE_CURRENT_SOURCE_DIR}/src/qoqdir.ico")
+
 add_executable(${PROJECT_NAME} WIN32 src/main.cpp src/app.rc)
 target_link_libraries(${PROJECT_NAME} PRIVATE app)
 target_link_options(${PROJECT_NAME} PRIVATE -municode)
