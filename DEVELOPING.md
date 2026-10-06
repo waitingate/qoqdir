@@ -53,6 +53,13 @@ test that fails, then fix it.
   so the start folder can still be renamed or ejected.
 - `crashlog.cpp`: writes `%TEMP%\qoqdir-crash.log` on a crash, a failed library
   check or `abort()`.
+- `app.rc`, `app.manifest`, `qoqdir.ico`: the manifest (modern controls, high
+  DPI, long paths), the version block and the icon. The icon is a folder in the
+  flat style of Windows' own, drawn by `make-icon.ps1` at the repo root; run
+  that script to rebuild `src/qoqdir.ico` after changing it. The Rust build
+  embeds the same file with `windres` from the C++ toolchain, so `cargo build`
+  needs `C:\mingw64\bin` on the PATH to get the icon (without it, a warning and
+  no icon).
 - `version.h`: the version, shown in the exe's Properties, the help box and each
   crash-log line. The Rust version keeps its own in `rust/Cargo.toml`.
 

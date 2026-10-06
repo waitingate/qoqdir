@@ -118,6 +118,7 @@ bool App::create(HINSTANCE instance, const CommandLine& cmd, bool useSettings) {
     wc.lpfnWndProc = wndProc;
     wc.hInstance = instance;
     wc.hCursor = LoadCursorW(nullptr, IDC_ARROW);
+    wc.hIcon = LoadIconW(instance, MAKEINTRESOURCEW(1));   // app.rc; Windows takes the title bar's small one from it too
     wc.hbrBackground = CreateSolidBrush(kBackground);   // lives as long as the process
     wc.lpszClassName = kAppName;
     RegisterClassExW(&wc);
@@ -149,7 +150,7 @@ bool App::create(HINSTANCE instance, const CommandLine& cmd, bool useSettings) {
     list_.create(wnd_, ID_LIST);
     status_ = make(STATUSCLASSNAMEW, L"", SBARS_SIZEGRIP, 0, ID_STATUS);
 
-    SendMessageW(filter_, EM_SETCUEBANNER, TRUE, reinterpret_cast<LPARAM>(L"Filter  (just start typing)"));
+    SendMessageW(filter_, EM_SETCUEBANNER, TRUE, reinterpret_cast<LPARAM>(L"Filter"));
     SHAutoComplete(address_, SHACF_FILESYS_DIRS);
     SetWindowSubclass(tabBar_, tabBarProc, 1, 0);
     SetWindowSubclass(list_.hwnd(), middleClickProc, 1, 0);
@@ -857,7 +858,7 @@ void App::showLocation(Nav nav) {
     const Tab& t = tab();
     if (nav != Nav::Refresh || GetFocus() != address_)   // never overwrite what the user is typing
         SetWindowTextW(address_, locationText(t.path).c_str());
-    SetWindowTextW(wnd_, (displayName(t.path) + L" - " + kAppName).c_str());
+    SetWindowTextW(wnd_, displayName(t.path).c_str());   // the folder's name alone, as Explorer: the icon says which app
     EnableWindow(back_, !t.back.empty());
     EnableWindow(forward_, !t.forward.empty());
     EnableWindow(up_, !t.path.empty());

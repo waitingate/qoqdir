@@ -39,7 +39,7 @@ use windows::Win32::UI::Shell::{DefSubclassProc, FOLDERID_Profile, SHACF_FILESYS
 use windows::Win32::UI::WindowsAndMessaging::{
     AppendMenuW, CW_USEDEFAULT, CreatePopupMenu, CreateWindowExW, DefWindowProcW, DestroyWindow,
     GWLP_USERDATA, GetClientRect, GetCursorPos, GetParent, GetWindowLongPtrW, GetWindowPlacement, GetWindowRect,
-    HMENU, HTCLIENT, IDC_ARROW, IDC_SIZEWE, IsChild, KillTimer, WPF_RESTORETOMAXIMIZED, LoadCursorW, MB_ICONQUESTION,
+    HMENU, HTCLIENT, IDC_ARROW, IDC_SIZEWE, IsChild, KillTimer, WPF_RESTORETOMAXIMIZED, LoadCursorW, LoadIconW, MB_ICONQUESTION,
     MB_ICONWARNING, MB_OKCANCEL, MF_GRAYED, MF_SEPARATOR, MF_STRING, MINMAXINFO, MSG, MessageBoxW, MoveWindow,
     NONCLIENTMETRICSW, PostMessageW, PostQuitMessage, RegisterClassExW, SIZE_MINIMIZED, SPI_GETNONCLIENTMETRICS, SW_SHOWMAXIMIZED,
     SW_SHOWNOACTIVATE, SW_SHOWNORMAL, SWP_NOACTIVATE, SWP_NOZORDER, SetCursor, SetTimer,
@@ -344,6 +344,8 @@ impl App {
                 lpfnWndProc: Some(Self::wndproc),
                 hInstance: instance,
                 hCursor: LoadCursorW(None, IDC_ARROW).unwrap_or_default(),
+                // Icon 1 of build.rs (the address is the resource number, as MAKEINTRESOURCE makes it); the small one too.
+                hIcon: LoadIconW(Some(instance), PCWSTR(std::ptr::without_provenance(1))).unwrap_or_default(),
                 hbrBackground: CreateSolidBrush(BACKGROUND), // lives as long as the process
                 lpszClassName: pcwstr(&name),
                 ..Default::default()
@@ -456,7 +458,7 @@ impl App {
             });
             SetWindowLongPtrW(wnd, GWLP_USERDATA, Rc::as_ptr(&app) as isize);
 
-            send(filter, EM_SETCUEBANNER, 1, w!("Filter  (just start typing)").0 as isize);
+            send(filter, EM_SETCUEBANNER, 1, w!("Filter").0 as isize);
             let _ = SHAutoComplete(address, SHACF_FILESYS_DIRS);
             let _ = SetWindowSubclass(tab_bar, Some(tab_bar_proc), 1, 0);
             let _ = SetWindowSubclass(app.list.hwnd(), Some(middle_click_proc), 1, 0);
@@ -1497,9 +1499,7 @@ impl App {
         if nav != Nav::Refresh || unsafe { GetFocus() } != self.address {
             set_text(self.address, location.text()); // never overwrite what the user is typing
         }
-        let mut title = location.display_name();
-        title.push(format!(" - {APP_NAME}"));
-        set_text(self.wnd, title);
+        set_text(self.wnd, location.display_name()); // the folder's name alone, as Explorer: the icon says which app
         let (can_back, can_forward) = self.with_tab(|t| (!t.back.is_empty(), !t.forward.is_empty()));
         unsafe {
             let _ = EnableWindow(self.back, can_back);

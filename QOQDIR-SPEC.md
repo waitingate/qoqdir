@@ -194,12 +194,13 @@ Targets on an ordinary SSD laptop with a folder of 10,000 files (faster is fine)
 
 ### 5.1 Window layout, top to bottom
 1. Toolbar: Back, Forward and Up buttons (plain arrow glyphs), the address bar
-   (it stretches), and the filter box with the hint "Filter  (just start typing)".
+   (it stretches), and the filter box with the hint "Filter".
 2. The tabs, with a "+" button at the right for a new tab.
 3. The folder tree on the left, a splitter, the file list on the right.
 4. Status bar: item counts and selection size on the left, messages on the right.
 
-The window title is `<folder name> - Qoqdir` (`This PC - Qoqdir` for This PC).
+The window title is the folder's name alone (`This PC` for This PC), as in
+Explorer; the window's icon says which program it is.
 Back, Forward and Up are disabled when they can't do anything.
 
 ### 5.2 Look
@@ -595,7 +596,7 @@ result:
 
 ### 7.3 Command-line checks
 Run on a copy of the exe in a temp folder:
-- `-tC:\Users\Public -tc:\users\public` opens one window titled "Public - Qoqdir".
+- `-tC:\Users\Public -tc:\users\public` opens one window titled "Public".
   After closing it, `qoqdir.ini` holds no tabs or paths, and a `Bookmarks` folder
   exists next to the exe.
 - No arguments: the home folder is shown.
