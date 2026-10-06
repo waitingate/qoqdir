@@ -4,10 +4,10 @@
 // changes only once its folder has loaded, so a failed or slow load never leaves it half-updated.
 
 #include "filelist.h"
-
-#include <optional>
 #include "shell.h"
 #include "tree.h"
+
+#include <optional>
 
 enum class Nav { New, Back, Forward, Refresh, Switch };
 

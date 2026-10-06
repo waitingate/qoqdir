@@ -1040,15 +1040,14 @@ Tab App::makeTab(const std::wstring& path) {
     return t;
 }
 
-// New tabs go at the end, so the newest is always the last one.
+// New tabs go at the end, so the newest is always the last one. Switching to a tab shows the tabs anew by itself
+// (open, showLocation), so only the tab functions that don't switch show them.
 void App::newTab(std::wstring path, bool switchTo) {
     tabs_.push_back(makeTab(path));
-    if (switchTo) {
-        rememberView();
-        active_ = int(tabs_.size()) - 1;
-        open(path, Nav::Switch);
-    }
-    showTabs();
+    if (!switchTo) return showTabs();
+    rememberView();
+    active_ = int(tabs_.size()) - 1;
+    open(path, Nav::Switch);
 }
 
 void App::closeTab(int index) {
@@ -1057,8 +1056,8 @@ void App::closeTab(int index) {
     tabs_.erase(tabs_.begin() + index);
     if (index < active_) --active_;
     active_ = std::min(active_, int(tabs_.size()) - 1);
-    showTabs();
     if (wasActive) open(tab().path, Nav::Switch, tab().view);
+    else showTabs();
 }
 
 void App::closeOtherTabs(int index) {
@@ -1068,8 +1067,8 @@ void App::closeOtherTabs(int index) {
     tabs_.clear();
     tabs_.push_back(std::move(keep));
     active_ = 0;
-    showTabs();
-    if (!wasActive) open(tab().path, Nav::Switch, tab().view);
+    if (wasActive) showTabs();
+    else open(tab().path, Nav::Switch, tab().view);
 }
 
 void App::switchTab(int index) {
@@ -1079,7 +1078,6 @@ void App::switchTab(int index) {
     }
     rememberView();
     active_ = index;
-    showTabs();
     open(tab().path, Nav::Switch, tab().view);
 }
 

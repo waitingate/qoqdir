@@ -51,7 +51,6 @@ pub struct FileList {
     model: RefCell<Model>,
 }
 
-
 impl FileList {
     pub fn create(parent: HWND, id: i32) -> FileList {
         let style = WS_CHILD.0 | WS_VISIBLE.0 | WS_TABSTOP.0 | LVS_REPORT | LVS_OWNERDATA | LVS_SHOWSELALWAYS

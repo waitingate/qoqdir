@@ -218,7 +218,6 @@ pub struct App {
     pub quiet: Cell<bool>, // no beeps (set by the self-test, which triggers errors on purpose)
 }
 
-
 fn loword(v: usize) -> u32 {
     (v & 0xFFFF) as u32
 }
@@ -1744,7 +1743,8 @@ impl App {
         Tab { id, location, back: Vec::new(), forward: Vec::new(), view: ViewState::default(), unavailable: true }
     }
 
-    /// New tabs go at the end, so the newest is always the last one.
+    /// New tabs go at the end, so the newest is always the last one. Switching to a tab shows the tabs anew by itself
+    /// (`open`, `show_location`), so only the tab functions that don't switch show them.
     pub fn new_tab(&self, location: Location, switch_to: bool) {
         if switch_to {
             self.remember_view();
@@ -1759,8 +1759,9 @@ impl App {
         }
         if switch_to {
             self.open(location, Nav::Switch, ViewState::default());
+        } else {
+            self.show_tabs();
         }
-        self.show_tabs();
     }
 
     pub fn close_tab(&self, index: usize) {
@@ -1778,9 +1779,9 @@ impl App {
             let t = &st.tabs[st.active];
             was_active.then(|| (t.location.clone(), t.view.clone()))
         };
-        self.show_tabs();
-        if let Some((location, view)) = reopen {
-            self.open(location, Nav::Switch, view);
+        match reopen {
+            Some((location, view)) => self.open(location, Nav::Switch, view),
+            None => self.show_tabs(),
         }
     }
 
@@ -1797,9 +1798,9 @@ impl App {
             st.active = 0;
             (!was_active).then(|| (st.tabs[0].location.clone(), st.tabs[0].view.clone()))
         };
-        self.show_tabs();
-        if let Some((location, view)) = reopen {
-            self.open(location, Nav::Switch, view);
+        match reopen {
+            Some((location, view)) => self.open(location, Nav::Switch, view),
+            None => self.show_tabs(),
         }
     }
 
@@ -1818,7 +1819,6 @@ impl App {
             st.active = index;
             (st.tabs[index].location.clone(), st.tabs[index].view.clone())
         };
-        self.show_tabs();
         self.open(location, Nav::Switch, view);
     }
 
