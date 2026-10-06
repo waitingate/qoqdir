@@ -2,12 +2,12 @@
 # exe that ships and the self-test on qoqdir-test.exe (the same compiled app plus the self-test), and leaves in
 # release\ the zip to publish (its SHA-256 is printed) and qoqdir-<version>-debug.exe to keep: the shipped exe
 # with its symbols, which turns crash-log offsets into source lines (see src/crashlog.cpp).
-# Needs MinGW (with CMake and Ninja) on the PATH.      powershell -File release.ps1
+# Needs MinGW (with CMake and Ninja) on the PATH.      powershell -File scripts\release.ps1
 $ErrorActionPreference = 'Stop'
-Set-Location $PSScriptRoot
+Set-Location (Split-Path $PSScriptRoot)   # the repository
 if (git status --porcelain) { throw 'Commit your changes first: a release is built from the last commit.' }
 $version = [regex]::Match((Get-Content src\version.h -Raw), 'QOQDIR_VERSION "([^"]+)"').Groups[1].Value
-$out = Join-Path $PSScriptRoot 'release'
+$out = Join-Path $PWD 'release'
 $work = Join-Path $out 'work'
 if (Test-Path $work) { Remove-Item $work -Recurse -Force }
 function Check([string]$step) { if ($LASTEXITCODE) { throw "$step failed" } }

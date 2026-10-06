@@ -12,6 +12,8 @@ mod shell;
 mod tree;
 mod util;
 
+use std::ffi::OsString;
+
 use windows::Win32::System::Diagnostics::Debug::{SEM_FAILCRITICALERRORS, SetErrorMode};
 use windows::Win32::System::LibraryLoader::{GetModuleHandleW, LOAD_LIBRARY_SEARCH_SYSTEM32, SetDefaultDllDirectories};
 use windows::Win32::System::Ole::{OleFlushClipboard, OleInitialize, OleUninitialize};
@@ -20,11 +22,9 @@ use windows::Win32::UI::Controls::{
     ICC_BAR_CLASSES, ICC_LISTVIEW_CLASSES, ICC_STANDARD_CLASSES, ICC_TAB_CLASSES, ICC_TREEVIEW_CLASSES,
     INITCOMMONCONTROLSEX, InitCommonControlsEx,
 };
-use windows::Win32::UI::WindowsAndMessaging::{DispatchMessageW, GetMessageW, MSG, TranslateMessage};
-
-use std::ffi::OsString;
-
-use windows::Win32::UI::WindowsAndMessaging::{MB_ICONINFORMATION, MB_ICONWARNING, MessageBoxW};
+use windows::Win32::UI::WindowsAndMessaging::{
+    DispatchMessageW, GetMessageW, MB_ICONINFORMATION, MB_ICONWARNING, MSG, MessageBoxW, TranslateMessage,
+};
 
 use crate::util::{from_wide, pcwstr, wide};
 

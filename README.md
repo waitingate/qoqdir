@@ -90,8 +90,8 @@ your Windows version.
 ## Build
 
 Needs MinGW-w64 GCC 13 with CMake and Ninja; the winlibs UCRT build
-`gcc-13.2.0-mingw-w64ucrt-11.0.1-r8` from winlibs.com has all three. Put its `bin`
-folder on the PATH (here it is in `C:\mingw64`):
+`gcc-13.2.0-mingw-w64ucrt-11.0.1-r8` from winlibs.com has all three. With its
+`bin` folder on the PATH (here it is in `C:\mingw64`):
 
 ```powershell
 $env:PATH = 'C:\mingw64\bin;' + $env:PATH
@@ -99,43 +99,20 @@ cmake -S . -B build -G Ninja
 cmake --build build
 ```
 
-That gives `build\qoqdir.exe`, statically linked. GCC's runtime checks are on, so
-a bad index or a signed integer overflow stops the program and writes the reason
-to `%TEMP%\qoqdir-crash.log` instead of running on with wrong data.
-
-## Test
-
-```powershell
-ctest --test-dir build --output-on-failure   # unit tests and the self-test
-powershell -File tests\cli-checks.ps1 -Exe build\qoqdir.exe
-powershell -File tests\watch-windows.ps1 -Exe build\qoqdir-test.exe
-```
-
-The build makes two exes from the same compiled app: `qoqdir.exe`, what users
-get, and `qoqdir-test.exe`, the same plus the self-test. The self-test
-(`qoqdir-test.exe --selftest`) drives the real app in a window that
-doesn't take the focus, and never sends keys to other windows. It replaces the
-clipboard and leaves one small file in the Recycle Bin. `cli-checks.ps1` runs a
-copy of the exe in a temp folder, so your settings and Bookmarks stay untouched.
-`watch-windows.ps1` runs the self-test and lists any window that pops up meanwhile.
-
-## Release
-
-Raise the version in `src/version.h` and commit, then run
-`powershell -File release.ps1`. It builds that commit in a clean copy, runs the
-tests (the self-test on `qoqdir-test.exe`, the rest on the exe that ships) and
-writes `release\qoqdir-<version>.zip` with its SHA-256. Keep
-`release\qoqdir-<version>-debug.exe`: it turns the offsets in a crash log from
-that version into source lines.
+That gives `build\qoqdir.exe`, statically linked. `docs/BUILDING.md` covers the
+rest: setting up the tools, the Rust version, the tests, `scripts\build.ps1`
+(which builds and checks both versions) and making a release.
 
 ## Source
 
-- `src/` the program
-- `tests/` unit tests and the two check scripts
-- `rust/` the same program in Rust (see its README)
-- `release.ps1` makes a release
-- `QOQDIR-SPEC.md` what Qoqdir must do and how it must behave
-- `DEVELOPING.md` notes for working on the code
+- `src/` the program, with its manifest, version and icon
+- `rust/` the same program in Rust
+- `tests/` the unit tests and the two check scripts
+- `scripts/` `build.ps1` builds and checks both versions, `release.ps1` makes a
+  release, `make-icon.ps1` draws the icon
+- `docs/` `BUILDING.md` (tools, building, testing, releases), `DEVELOPING.md`
+  (notes for working on the code) and `QOQDIR-SPEC.md` (what Qoqdir must do and
+  how it must behave)
 
 ## License
 

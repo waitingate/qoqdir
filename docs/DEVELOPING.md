@@ -2,38 +2,25 @@
 
 Notes for working on the code. `QOQDIR-SPEC.md` decides what is right: section 4
 (behavior) and section 7 (tests). Section 6 lists what not to build.
+`BUILDING.md` says how to build and test.
 
-## Build and test
+## Working rules
 
-Windows only: MinGW-w64 GCC 13 with CMake and Ninja on the PATH (see the README).
-
-```powershell
-$env:PATH = 'C:\mingw64\bin;' + $env:PATH
-cmake -S . -B build -G Ninja
-cmake --build build
-ctest --test-dir build --output-on-failure
-```
-
-- `build\unit_tests.exe`: paths, command line, sorting, filtering, listing. It is
-  one `main()` of `CHECK` macros that prints `FAIL line N` and keeps going.
-- `build\qoqdir-test.exe --selftest`: about 150 steps that drive the real app.
-  `qoqdir-test.exe` is `qoqdir.exe` plus the self-test, from the same compiled
-  app code; users get only `qoqdir.exe`. Each step has a timeout and a failure
-  doesn't stop the run. The log
-  (`%TEMP%\qoqdir-selftest.log`) gets an `ok` or `FAIL` line as each step ends.
-  There is no way to run a single step: run them all and read the log.
-- `tests\cli-checks.ps1` and `tests\watch-windows.ps1`, see the README.
-
-The sources also cross-build on Linux with MinGW-w64, and Wine can run the tests,
-but only as a quick check.
-
-Tests never touch the desktop: no global keys or mouse, no taking the focus, no
-dialogs, no beeps. The self-test calls `App::onKey` directly, works in its own
-folder in `%TEMP%` (never the real `qoqdir.ini` or Bookmarks), and uses
-`\\192.0.2.1\share` as a network path that never answers. For a bug, first add a
-test that fails, then fix it.
+- Both versions stay level, as they have since 5 October 2026: a change goes into
+  `src/` and `rust/` alike, with the same self-test steps under the same names and
+  in the same order. `scripts\build.ps1 -Test` checks that the two self-test logs
+  match. The C++ version is the main one.
+- A change is done when `scripts\build.ps1 -Test` passes: no compiler warnings,
+  nothing from clippy, every test and check passing.
+- For a bug, first add a test that fails, then fix it.
+- Tests never touch the desktop: no global keys or mouse, no taking the focus, no
+  dialogs, no beeps. The self-test calls `App::onKey` directly, works in its own
+  folder in `%TEMP%` (never the real `qoqdir.ini` or Bookmarks), and uses
+  `\\192.0.2.1\share` as a network path that never answers.
 
 ## Layout
+
+### C++ (`src/`)
 
 - `common.h`: owners for Windows resources (`Com<T>`, `Pidl`, `Menu`, `Font`)
   and `kAppName`. Nothing is freed by hand.
@@ -47,21 +34,38 @@ test that fails, then fix it.
   parent folder once, because looking up each full path costs about 9 ms a file.
 - `filelist.cpp`, `tree.cpp`: the two controls.
 - `app.cpp`: main window, tabs, navigation, keys, settings. `selftest.cpp` is part
-  of `App` so it can reach private state; only `qoqdir-test.exe` links it in.
+  of `App` so it can reach private state; only `qoqdir-test.exe` links it in,
+  with the same compiled app code as `qoqdir.exe` (CMake's `app` object library),
+  so the self-test checks the very code that ships.
 - `main.cpp`: command line, help box, message loop. It turns off Windows' "No Disk"
   box and, after reading the command line, moves the working folder to System32,
   so the start folder can still be renamed or ejected.
 - `crashlog.cpp`: writes `%TEMP%\qoqdir-crash.log` on a crash, a failed library
   check or `abort()`.
 - `app.rc`, `app.manifest`, `qoqdir.ico`: the manifest (modern controls, high
-  DPI, long paths), the version block and the icon. The icon is a folder in the
-  flat style of Windows' own, drawn by `make-icon.ps1` at the repo root; run
-  that script to rebuild `src/qoqdir.ico` after changing it. The Rust build
-  embeds the same file with `windres` from the C++ toolchain, so `cargo build`
-  needs `C:\mingw64\bin` on the PATH to get the icon (without it, a warning and
-  no icon).
+  DPI, long paths), the version block and the icon, which `scripts/make-icon.ps1`
+  draws (`BUILDING.md`, section 4).
 - `version.h`: the version, shown in the exe's Properties, the help box and each
   crash-log line. The Rust version keeps its own in `rust/Cargo.toml`.
+
+### Rust (`rust/`)
+
+The same parts, file for file, written with Microsoft's `windows` crate:
+
+- `src/folder.rs`: paths, folder reading, sorting, filtering, with the unit tests
+- `src/shell.rs`: the Windows shell: menus, clipboard, delete, rename, icons,
+  drag and drop
+- `src/filelist.rs`, `src/tree.rs`: the file list and the folder tree
+- `src/app.rs`: main window, tabs, navigation, keys, settings
+- `src/selftest.rs`: the self-test (only in a build with the `selftest` feature)
+- `src/main.rs`, `src/crashlog.rs`: as in C++
+- `src/util.rs`: UTF-16 strings, and owners that free Windows resources
+- `build.rs`, `icon.rc`: embed the manifest, and `../src/qoqdir.ico` through
+  `windres`
+
+Shared state is never borrowed across a call into Windows, because Windows can
+call straight back into the app. A mistake there stops the app (`panic = "abort"`)
+instead of corrupting data, and the crash log says where.
 
 ## How it works
 
@@ -119,5 +123,3 @@ test that fails, then fix it.
   in the working folder).
 - 4-space indent, lines up to about 120 columns, members end in `_`. Comments
   say why, not what.
-- `rust/` is the same program in Rust, level with the C++ version since 5 October
-  2026 (same features, same self-test steps). The C++ version is the main one.

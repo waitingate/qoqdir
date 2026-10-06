@@ -64,6 +64,6 @@ foreach ($img in $images) {
 }
 foreach ($img in $images) { $bw.Write([byte[]]$img.bytes) }
 $bw.Flush()
-$path = Join-Path $PSScriptRoot 'src\qoqdir.ico'
+$path = Join-Path (Split-Path $PSScriptRoot) 'src\qoqdir.ico'
 [IO.File]::WriteAllBytes($path, $ms.ToArray())
 "wrote $path, $((Get-Item $path).Length) bytes"

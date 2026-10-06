@@ -1,5 +1,6 @@
 # Build output (rebuilt from source)
 /build/
+/build-*/
 /rust/target/
 /release/
 

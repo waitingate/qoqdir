@@ -1,0 +1,256 @@
+# Building Qoqdir
+
+Qoqdir is one program in two versions: C++ in `src/`, the one that ships, and
+Rust in `rust/`. Both build on Windows 10 or 11 (x64) with tools that live in
+their own folders: nothing is installed system-wide and no Visual Studio is
+needed.
+
+In short, once the tools are set up (section 1):
+
+```powershell
+powershell -File scripts\build.ps1          # build both versions
+powershell -File scripts\build.ps1 -Test    # and run every check
+```
+
+| File | What it is |
+|---|---|
+| `build\qoqdir.exe` | the program, what users get |
+| `build\qoqdir-test.exe` | the same compiled program plus the self-test (`--selftest`) |
+| `build\unit_tests.exe` | the C++ unit tests |
+| `rust\target\release\qoqdir.exe` | the Rust version |
+| `rust\target\selftest\release\qoqdir.exe` | the Rust version with the self-test |
+
+## 1. Tools
+
+Set these up once.
+
+### MinGW-w64, for the C++ version
+
+GCC 13 with CMake and Ninja. The winlibs build
+`gcc-13.2.0-mingw-w64ucrt-11.0.1-r8` from winlibs.com (Win64, UCRT runtime, POSIX
+threads) has all three, and the releases are built with it. Unzip it to
+`C:\mingw64`, then in each new terminal:
+
+```powershell
+$env:PATH = 'C:\mingw64\bin;' + $env:PATH
+g++ --version
+```
+
+Its `windres` also puts the icon into the Rust exe. MSYS2's UCRT64 GCC works too
+(the build on GitHub uses it).
+
+### Rust, for the Rust version
+
+A portable install in `C:\rust` for the GNU target; nothing else on the system
+changes:
+
+```powershell
+New-Item -ItemType Directory -Force C:\rust
+Invoke-WebRequest https://static.rust-lang.org/rustup/dist/x86_64-pc-windows-gnu/rustup-init.exe -OutFile C:\rust\rustup-init.exe
+$env:RUSTUP_HOME = 'C:\rust\rustup'; $env:CARGO_HOME = 'C:\rust\cargo'
+C:\rust\rustup-init.exe -y --no-modify-path --profile minimal -c clippy --default-host x86_64-pc-windows-gnu --default-toolchain stable
+```
+
+Save these lines as `C:\rust\rust-env.ps1`, and run `. C:\rust\rust-env.ps1` in
+each new terminal:
+
+```powershell
+$env:RUSTUP_HOME = Join-Path $PSScriptRoot 'rustup'
+$env:CARGO_HOME  = Join-Path $PSScriptRoot 'cargo'
+$env:PATH = (Join-Path $PSScriptRoot 'cargo\bin') + ';' + $env:PATH
+```
+
+The code needs Rust 1.85 or newer (edition 2024). `rustup update` updates Rust;
+deleting `C:\rust` removes it.
+
+### PowerShell scripts
+
+The scripts in `scripts\` and `tests\` run in Windows' own PowerShell. Windows
+runs no `.ps1` file until you allow it, once for your account:
+
+```powershell
+Set-ExecutionPolicy -Scope CurrentUser RemoteSigned
+```
+
+Or start each one with `powershell -ExecutionPolicy Bypass -File ...` instead.
+
+## 2. Build
+
+### Both versions at once
+
+```powershell
+powershell -File scripts\build.ps1
+```
+
+It takes the tools from the PATH, or else from `C:\mingw64` and `C:\rust`, and
+builds the C++ version (a compiler warning stops it) and both Rust builds.
+
+### The C++ version by hand
+
+```powershell
+cmake -S . -B build -G Ninja      # once; Release unless told otherwise
+cmake --build build
+```
+
+`qoqdir.exe` is statically linked: one file of about 500 KB, with no DLLs beside
+it. GCC's runtime checks are on, so a bad index or a signed integer overflow
+stops the program and writes the reason to `%TEMP%\qoqdir-crash.log` instead of
+running on with wrong data. A build to step through with `gdb` (it comes with
+winlibs) goes in a folder of its own:
+`cmake -S . -B build-debug -G Ninja -DCMAKE_BUILD_TYPE=Debug`.
+
+### The Rust version by hand
+
+From `rust\`, with `C:\mingw64\bin` on the PATH for the icon:
+
+```powershell
+cargo build --release                                                    # target\release\qoqdir.exe
+cargo build --release --features selftest --target-dir target\selftest   # the same with the self-test
+```
+
+The self-test build gets its own folder, so it never replaces your exe.
+
+## 3. Test
+
+Run every check before calling a change done:
+
+```powershell
+powershell -File scripts\build.ps1 -Test
+```
+
+After building, it runs these in order and stops at the first failure:
+
+1. the unit tests of both versions;
+2. clippy on both Rust builds, which must report nothing;
+3. the command-line checks on both exes;
+4. the self-test of each version, one after the other, with the popup watch;
+5. a comparison of the two self-test logs: both versions must have taken the
+   same steps with the same results.
+
+It takes about ten minutes, most of it the two self-tests.
+
+What each one is:
+
+- Unit tests: paths, the command line, sorting, filtering and reading folders.
+  The C++ ones (`tests\tests.cpp`) are one `main()` of `CHECK` macros that prints
+  `FAIL line N` and keeps going; the Rust ones are at the end of
+  `rust\src\folder.rs`.
+- The self-test drives the real program through every scenario in section 7.2 of
+  the spec, from inside its own process: its window doesn't take the focus, and
+  it never sends keys to other windows. It works in its own folder in `%TEMP%`,
+  never touches your `qoqdir.ini` or Bookmarks, replaces the clipboard and leaves
+  one small file in the Recycle Bin. Each step has a timeout, and a failure
+  doesn't stop the run: the log (`%TEMP%\qoqdir-selftest.log`, for Rust
+  `%TEMP%\qoqdir-rs-selftest.log`) gets an `ok` or `FAIL` line as each step ends.
+  There is no way to run one step alone.
+- `tests\cli-checks.ps1` starts a copy of an exe in a temp folder (so your
+  settings stay untouched) with several command lines, a damaged `qoqdir.ini` and
+  a folder it can't write to.
+- `tests\watch-windows.ps1` runs a self-test and lists every window that pops up
+  meanwhile, from any program. It only reports: it never closes a window.
+
+The same checks by hand, from the repository folder:
+
+```powershell
+build\unit_tests.exe
+powershell -File tests\cli-checks.ps1 -Exe build\qoqdir.exe
+powershell -File tests\watch-windows.ps1 -Exe build\qoqdir-test.exe
+cd rust
+cargo test
+cargo clippy --all-targets -- -D warnings
+cargo clippy --all-targets --features selftest --target-dir target\selftest -- -D warnings
+cd ..
+powershell -File tests\cli-checks.ps1 -Exe rust\target\release\qoqdir.exe
+powershell -File tests\watch-windows.ps1 -Exe rust\target\selftest\release\qoqdir.exe -Log $env:TEMP\qoqdir-rs-selftest.log
+```
+
+(`ctest --test-dir build --output-on-failure` runs the C++ unit tests and
+self-test, without the popup watch.)
+
+Run the self-tests on a quiet PC, never two at once. A step that fails while you
+were copying files or switching windows should pass when run again; rerun it
+before blaming the code.
+
+### Deeper checks
+
+Two builds with extra runtime checks catch mistakes the normal build lets pass.
+Each takes a few minutes; then run its self-test with `tests\watch-windows.ps1`.
+
+- C++ with the undefined-behaviour checker, a stack protector and libstdc++'s
+  debug mode. Debug mode brings its own `__glibcxx_assert_fail`, which
+  `crashlog.cpp` replaces, hence the linker flag:
+
+  ```powershell
+  cmake -S . -B build-checked -G Ninja "-DCMAKE_CXX_FLAGS=-fsanitize=undefined -fno-sanitize=vptr -fsanitize-undefined-trap-on-error -fstack-protector-strong -D_GLIBCXX_DEBUG" "-DCMAKE_EXE_LINKER_FLAGS=-Wl,--allow-multiple-definition"
+  cmake --build build-checked
+  powershell -File tests\watch-windows.ps1 -Exe build-checked\qoqdir-test.exe
+  ```
+
+- Rust with its debug assertions in a release build, from `rust\`:
+
+  ```powershell
+  $env:CARGO_PROFILE_RELEASE_DEBUG_ASSERTIONS = 'true'
+  cargo build --release --features selftest --target-dir target\checked
+  Remove-Item Env:CARGO_PROFILE_RELEASE_DEBUG_ASSERTIONS
+  powershell -File ..\tests\watch-windows.ps1 -Exe target\checked\release\qoqdir.exe -Log $env:TEMP\qoqdir-rs-selftest.log
+  ```
+
+The self-test must also pass at 100% scaling. On a screen scaled higher, run it
+on a copy of `qoqdir-test.exe` whose Properties, Compatibility, "Change high DPI
+settings" has "Override high DPI scaling behavior" ticked, scaled by System.
+
+## 4. The icon
+
+`src\qoqdir.ico` is drawn by `scripts\make-icon.ps1`: a flat folder in Windows'
+own style with a Q on it. After changing the drawing, run
+`powershell -File scripts\make-icon.ps1`; the next build of either version takes
+the new icon in.
+
+## 5. Release
+
+Only the C++ version ships. Raise the version in `src\version.h` (both lines)
+and in `rust\Cargo.toml`, commit, then:
+
+```powershell
+powershell -File scripts\release.ps1
+```
+
+It builds that commit in a clean copy, runs the unit tests, the command-line
+checks on the exe that ships and the self-test on `qoqdir-test.exe`, and leaves
+in `release\`:
+
+- `qoqdir-<version>.zip` to publish (the exe, README, LICENSE and the
+  third-party notices); it prints the zip's SHA-256 for the release notes.
+- `qoqdir-<version>-debug.exe` to keep: the same exe with its symbols, which turns
+  the offsets in a crash log from that version into source lines
+  (`addr2line -e qoqdir-<version>-debug.exe 0x140000000+offset`).
+
+## 6. The build on GitHub
+
+`.github\workflows\build.yml` runs on every push and pull request. It builds the
+C++ version with MSYS2's GCC on a Windows runner, checks that `qoqdir.exe` needs
+no MinGW DLLs and stays under 1 MB, and runs the unit tests, the self-test with
+the popup watch and the command-line checks. The exe and the logs are kept with
+the run. The Rust version isn't built there.
+
+## 7. When something goes wrong
+
+- "running scripts is disabled on this system": see PowerShell scripts in
+  section 1.
+- Cargo says `windres not found: the exe gets no icon`: `C:\mingw64\bin` is not
+  on the PATH (`scripts\build.ps1` adds it).
+- The Rust build fails in `dlltool` (it did on the first build machine): point
+  cargo at MinGW's in `C:\rust\cargo\config.toml`:
+
+  ```toml
+  [target.x86_64-pc-windows-gnu]
+  rustflags = ["-C", "dlltool=C:\\mingw64\\bin\\dlltool.exe"]
+  ```
+
+- Explorer still shows an exe's old icon: Windows keeps icons in a cache, which
+  catches up after a while.
+- A program that stops on a bug, or a failed runtime check, adds a line to
+  `%TEMP%\qoqdir-crash.log` saying why.
+
+The sources also cross-build on Linux with MinGW-w64, and Wine can run the
+tests, but only as a quick check.
