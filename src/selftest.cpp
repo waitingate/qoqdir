@@ -446,12 +446,13 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
         [=, this] { return idle() && tabs_.size() == 1 && at(dir); });
     add(L"a lone tab is 150 wide at 100% scaling", nullptr, [=, this] { return tabWidth() == scale(150, dpi_); });
     std::wstring longName = path(L"a folder with a name too long for its tab");   // never opened: only its caption
+    auto openTabsPast = [=, this](int width) {   // background tabs until more are open than fit at that width
+        RECT bar{};
+        GetClientRect(tabBar_, &bar);
+        while (int(tabs_.size()) <= bar.right / width) newTab(longName, false);
+    };
     add(L"when more tabs are open than fit that wide, all get narrower alike, and all still show",
-        [=, this] {
-            RECT bar{};
-            GetClientRect(tabBar_, &bar);
-            while (int(tabs_.size()) <= bar.right / scale(150, dpi_)) newTab(longName, false);
-        },
+        [=, this] { openTabsPast(scale(150, dpi_)); },
         [=, this] {
             RECT bar{}, last{};
             GetClientRect(tabBar_, &bar);
@@ -460,12 +461,7 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
             selfTest_->note = std::to_wstring(tabs_.size()) + L" tabs " + std::to_wstring(width) + L" wide";
             return width >= scale(80, dpi_) && width < scale(150, dpi_) && last.right <= bar.right;
         });
-    add(L"...but no narrower than 80; with more, the bar scrolls",
-        [=, this] {
-            RECT bar{};
-            GetClientRect(tabBar_, &bar);
-            while (int(tabs_.size()) <= bar.right / scale(80, dpi_)) newTab(longName, false);
-        },
+    add(L"...but no narrower than 80; with more, the bar scrolls", [=, this] { openTabsPast(scale(80, dpi_)); },
         [=, this] {
             HWND arrows = FindWindowExW(tabBar_, nullptr, UPDOWN_CLASSW, nullptr);
             return tabWidth() == scale(80, dpi_) && arrows && IsWindowVisible(arrows);

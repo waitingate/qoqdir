@@ -203,9 +203,9 @@ Back, Forward and Up are disabled when they can't do anything.
 ### 5.2 Look
 - Window, list and tree have a soft gray background, RGB(235, 235, 235)
   (`#EBEBEB`), easier on the eyes than white. No dark mode.
-- Tabs look like flat buttons, all the same width: 150 pixels at 100% scaling
-  while they fit, all narrower together as more open, down to 80; past that the
-  bar scrolls, with arrows at its right end.
+- Tabs are all the same width: 150 pixels at 100% scaling while they fit, all
+  narrower together as more open, down to 80; past that the bar scrolls, with
+  arrows at its right end.
 - They are Windows' plain tabs, as in its dialogs: the current one is white and a
   little taller, and its name starts with a bullet ("•"), as Windows' menus mark
   the chosen option. While files are dragged over another tab, that tab shows as

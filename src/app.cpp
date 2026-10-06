@@ -68,8 +68,8 @@ bool opensInTab(const std::optional<std::wstring>& target) {
     return target && (target->empty() || isAbsolutePath(*target));
 }
 
-// The tab bar. A press makes a tab current at once, and it can then be dragged along the bar to move it (left to
-// itself, the control switches only when the button comes up, as a push button does). A middle-click closes it.
+// The tab bar. A press is handled here, not by the control: it makes the tab current at once and starts a drag along
+// the bar that moves it. A middle-click closes a tab.
 LRESULT CALLBACK tabBarProc(HWND h, UINT msg, WPARAM wp, LPARAM lp, UINT_PTR, DWORD_PTR) {
     TCHITTESTINFO hit{};
     hit.pt = {GET_X_LPARAM(lp), GET_Y_LPARAM(lp)};

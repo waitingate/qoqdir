@@ -276,8 +276,8 @@ fn opens_in_tab(target: &Location) -> bool {
     target.path().is_none_or(|p| p.is_absolute())
 }
 
-/// The tab bar. A press makes a tab current at once, and it can then be dragged along the bar to move it (left to
-/// itself, the control switches only when the button comes up, as a push button does). A middle-click closes it.
+/// The tab bar. A press is handled here, not by the control: it makes the tab current at once and starts a drag along
+/// the bar that moves it. A middle-click closes a tab.
 unsafe extern "system" fn tab_bar_proc(h: HWND, msg: u32, wp: WPARAM, lp: LPARAM, _: usize, _: usize) -> LRESULT {
     let mut hit = TCHITTESTINFO { pt: point_from(lp), ..Default::default() };
     let mut tab_at_point = || usize::try_from(send(h, TCM_HITTEST, 0, &mut hit as *mut _ as isize)).ok();
