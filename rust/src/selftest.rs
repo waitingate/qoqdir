@@ -2002,6 +2002,28 @@ impl App {
             },
             |a| a.idle() && !a.listed("zz minimized.dat"),
         );
+        // From This PC: from a folder nearby, the old watch would still see the change through a parent's timestamp.
+        s.add("(open This PC, so the next folder is not watched yet)", |a| a.open(Location::ThisPc, Nav::New, ViewState::default()), |a| {
+            a.at_pc()
+        });
+        s.add(
+            "a file created while the folder is still being read shows up by itself",
+            |a| {
+                a.open(Location::dir(p("big")), Nav::New, ViewState::default()); // 10,000 files: read on a worker thread
+                std::thread::sleep(Duration::from_millis(100)); // the read is past the start, where this name sorts
+                write_file(&p("big\\aaa late.dat")); // too late for the read, too early for the folder watch
+                std::thread::sleep(Duration::from_millis(1500)); // this thread waits: the read ends, and Windows reports the file to no one
+            },
+            |a| a.at(&p("big")) && a.listed("aaa late.dat"),
+        );
+        s.add(
+            "(remove that file too)",
+            |a| {
+                let _ = std::fs::remove_file(p("big\\aaa late.dat"));
+                a.refresh(ViewState::default());
+            },
+            |a| a.idle() && !a.listed("aaa late.dat"),
+        );
 
         s.add(
             "copies 10,000 selected files to the clipboard",

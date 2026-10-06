@@ -834,6 +834,7 @@ void App::onLoaded(Listing&& listing, UINT generation) {
 
     t.path = listing.path;
     t.unavailable = false;
+    FILETIME written = listing.written;
     list_.setListing(std::move(listing));
     int row = list_.select(view.select, view.focus);
     if (row < 0 && !requested && view.focusRow >= 0 && list_.count() > 0)   // the focused item is gone (4.5):
@@ -843,6 +844,9 @@ void App::onLoaded(Listing&& listing, UINT generation) {
     if (view.rename && row >= 0) list_.rename(row);
 
     watch_ = FolderWatch(wnd_, WM_APP_CHANGED, t.path);
+    // A change during the read, before the watch was there, is missed by both: the folder's own time tells.
+    FILETIME now = folderWritten(t.path);
+    if (CompareFileTime(&now, &written) != 0) queueRefresh();
     showLocation(p.nav);
     if (moved) setMessage(L"");
     showStatus();

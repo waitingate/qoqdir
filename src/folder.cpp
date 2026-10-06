@@ -56,6 +56,7 @@ Listing listFolder(const std::wstring& path, bool showHidden, const std::functio
         listDrives(r);
         return r;
     }
+    r.written = folderWritten(path);   // before the read: a change during it then shows as a newer time
     WIN32_FIND_DATAW fd;
     HANDLE h = FindFirstFileExW(joinPath(path, L"*").c_str(), FindExInfoBasic, &fd,
                                 FindExSearchNameMatch, nullptr, FIND_FIRST_EX_LARGE_FETCH);
@@ -87,6 +88,12 @@ Listing listFolder(const std::wstring& path, bool showHidden, const std::functio
     FindClose(h);
     if (end != ERROR_NO_MORE_FILES) return Listing{path, {}, end, false};   // never half a folder as all of it
     return r;
+}
+
+FILETIME folderWritten(const std::wstring& path) {
+    WIN32_FILE_ATTRIBUTE_DATA data{};
+    GetFileAttributesExW(path.c_str(), GetFileExInfoStandard, &data);   // leaves the zeros if it fails
+    return data.ftLastWriteTime;
 }
 
 namespace {

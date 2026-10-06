@@ -15,7 +15,8 @@ use windows::Win32::UI::WindowsAndMessaging::CharLowerBuffW;
 use windows::Win32::Storage::FileSystem::{
     FILE_ATTRIBUTE_DIRECTORY, FILE_ATTRIBUTE_HIDDEN, FILE_FLAGS_AND_ATTRIBUTES, FIND_FIRST_EX_LARGE_FETCH,
     FindClose, FindExInfoBasic, FindExSearchNameMatch, FindFirstFileExW, FindNextFileW, GetDiskFreeSpaceExW,
-    GetFileAttributesW, GetLogicalDrives, INVALID_FILE_ATTRIBUTES, WIN32_FIND_DATAW,
+    GetFileAttributesExW, GetFileAttributesW, GetFileExInfoStandard, GetLogicalDrives, INVALID_FILE_ATTRIBUTES,
+    WIN32_FILE_ATTRIBUTE_DATA, WIN32_FIND_DATAW,
 };
 use windows::Win32::System::Environment::ExpandEnvironmentStringsW;
 use windows::Win32::System::Time::{FileTimeToSystemTime, SystemTimeToTzSpecificLocalTime};
@@ -306,6 +307,7 @@ pub struct Listing {
     pub items: Vec<Item>,
     pub error: Option<windows::core::Error>,
     pub is_file: bool, // with an error: the path exists but is a file
+    pub written: u64,  // the folder's own last write, as it was before the read (folder_written)
 }
 
 impl Listing {
@@ -322,6 +324,7 @@ pub fn list_folder(location: &Location, show_hidden: bool, stop: Option<&dyn Fn(
         list_drives(&mut r);
         return r;
     };
+    r.written = folder_written(dir); // before the read: a change during it then shows as a newer time
     struct FindGuard(HANDLE);
     impl Drop for FindGuard {
         fn drop(&mut self) {
@@ -382,6 +385,13 @@ pub fn list_folder(location: &Location, show_hidden: bool, stop: Option<&dyn Fn(
         }
     }
     r
+}
+
+/// The folder's own last-write time (0 if unknown): it changes with its contents.
+pub fn folder_written(path: &Path) -> u64 {
+    let mut data = WIN32_FILE_ATTRIBUTE_DATA::default();
+    let _ = unsafe { GetFileAttributesExW(pcwstr(&wide(path)), GetFileExInfoStandard, &mut data as *mut _ as *mut _) };
+    (u64::from(data.ftLastWriteTime.dwHighDateTime) << 32) | u64::from(data.ftLastWriteTime.dwLowDateTime)
 }
 
 fn list_drives(r: &mut Listing) {

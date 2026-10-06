@@ -1350,6 +1350,18 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
         });
     add(L"(remove that file)", [=, this] { DeleteFileW(path(L"big\\zz minimized.dat").c_str()); refresh(); },
         [=, this] { return idle() && !listed(L"zz minimized.dat"); });
+    // From This PC: from a folder nearby, the old watch would still see the change through a parent's timestamp.
+    add(L"(open This PC, so the next folder is not watched yet)", [=, this] { open(L"", Nav::New); }, [=, this] { return at(L""); });
+    add(L"a file created while the folder is still being read shows up by itself",
+        [=, this] {
+            open(path(L"big"), Nav::New);   // 10,000 files: read on a worker thread
+            Sleep(100);                     // the read is past the start, where this name sorts
+            writeFile(path(L"big\\aaa late.dat"));   // too late for the read, too early for the folder watch
+            Sleep(1500);                    // this thread waits: the read ends, and Windows reports the file to no one
+        },
+        [=, this] { return at(path(L"big")) && listed(L"aaa late.dat"); });
+    add(L"(remove that file too)", [=, this] { DeleteFileW(path(L"big\\aaa late.dat").c_str()); refresh(); },
+        [=, this] { return idle() && !listed(L"aaa late.dat"); });
 
     add(L"copies 10,000 selected files to the clipboard",
         [=, this] {

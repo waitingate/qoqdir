@@ -145,7 +145,9 @@ These describe what the user sees. Each must hold in every situation.
 ### 4.5 Live but calm
 - Changes made by other programs (files created, deleted, renamed, changed) show
   up by themselves within about half a second, keeping the selection, focus and
-  scroll position. A burst of changes causes one refresh, not hundreds.
+  scroll position. A burst of changes causes one refresh, not hundreds. A change
+  made while the folder was still being read is caught too: the folder's own
+  modified time is compared once the watch is in place.
 - If the shown folder itself is deleted or renamed by another program, the tab
   notices and shows the "not available" state (4.3).
 - Plugging in or removing a drive updates the tree and This PC.
@@ -588,6 +590,8 @@ result:
 51. The message Windows sends for a monitor with another scaling (4/3 of the
     current, with the window's new place) rescales the font, the columns and the
     tabs; the message for the old scaling restores them.
+52. A file created in the 10,000-file folder while it is still being read, coming
+    from This PC so that no watch covers it yet, shows up by itself.
 
 ### 7.3 Command-line checks
 Run on a copy of the exe in a temp folder:

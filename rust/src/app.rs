@@ -56,8 +56,8 @@ use windows::core::{PCWSTR, PWSTR, w};
 use crate::filelist::FileList;
 use crate::APP_NAME;
 use crate::folder::{
-    CommandLine, Listing, Location, SortKey, byte_size, expand_vars, extension_of, is_relative_path, is_shortcut,
-    list_folder, normalize, row_after_deleting,
+    CommandLine, Listing, Location, SortKey, byte_size, expand_vars, extension_of, folder_written, is_relative_path,
+    is_shortcut, list_folder, normalize, row_after_deleting,
 };
 use crate::shell::{
     FolderWatch, IconBatch, acknowledge_change, has_own_icon, read_own_icons, remember_icons, background_menu, copy_to_clipboard, delete_items, drag_out,
@@ -1458,6 +1458,7 @@ impl App {
         }
 
         let location = listing.location.clone();
+        let written = listing.written;
         self.list.set_listing(listing);
         let mut row = self.list.select(&view.select, view.focus.as_deref());
         if row.is_none() && !requested && self.list.count() > 0 {
@@ -1479,6 +1480,10 @@ impl App {
         let watch = FolderWatch::new(self.wnd, WM_APP_CHANGED, &location);
         let old_watch = self.st.borrow_mut().watch.replace(watch);
         drop(old_watch);
+        // A change during the read, before the watch was there, is missed by both: the folder's own time tells.
+        if location.path().is_some_and(|p| folder_written(p) != written) {
+            self.queue_refresh();
+        }
         self.show_location(pending.nav);
         if moved {
             self.set_message("");
