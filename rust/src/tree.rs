@@ -13,7 +13,7 @@ use windows::Win32::System::SystemInformation::GetTickCount64;
 use windows::Win32::System::WindowsProgramming::DRIVE_REMOTE;
 use windows::Win32::UI::Controls::{
     HTREEITEM, NM_CLICK, NMHDR, NMTREEVIEWW, TVE_COLLAPSE, TVE_COLLAPSERESET, TVE_EXPAND, TVGN_CARET,
-    TVGN_CHILD, TVGN_DROPHILITE, TVGN_NEXT, TVGN_ROOT, TVHITTESTINFO, TVHT_ONITEM, TVHT_ONITEMRIGHT, TVI_LAST, TVI_ROOT,
+    TVGN_CHILD, TVGN_DROPHILITE, TVGN_NEXT, TVGN_ROOT, TVHITTESTINFO, TVHT_ONITEM, TVHT_ONITEMRIGHT, TVI_FIRST, TVI_LAST, TVI_ROOT,
     TVIF_CHILDREN, TVIF_IMAGE, TVIF_SELECTEDIMAGE, TVIF_TEXT, TVINSERTSTRUCTW, TVINSERTSTRUCTW_0, TVIS_EXPANDED, TVITEMEXW,
     TVITEMEXW_CHILDREN, TVITEMW, TVM_DELETEITEM, TVM_EXPAND, TVM_GETITEMSTATE, TVM_GETNEXTITEM, TVM_HITTEST,
     TVM_INSERTITEMW, TVM_SELECTITEM, TVM_SETEXTENDEDSTYLE, TVM_SETIMAGELIST, TVM_SETITEMW, TVN_DELETEITEMW, TVN_ITEMEXPANDEDW,
@@ -309,8 +309,10 @@ impl FolderTree {
             }
             return;
         }
-        for c in batch.children {
-            self.add(node, c.location, &c.text, c.icon.unwrap_or_else(folder_icon), c.shortcut, TVI_LAST);
+        // Each at the front, the last one first: the same order, but Windows never walks the list to its end for each
+        // one, which froze the window for seconds on a folder with 20,000 subfolders.
+        for c in batch.children.into_iter().rev() {
+            self.add(node, c.location, &c.text, c.icon.unwrap_or_else(folder_icon), c.shortcut, TVI_FIRST);
         }
         send(self.hwnd, TVM_EXPAND, TVE_EXPAND.0 as usize, node.0);
     }

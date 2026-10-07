@@ -1181,6 +1181,27 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
             treeDrop_->Drop(data.get(), MK_LBUTTON, shortcut, &effect);
         },
         [=, this] { return dragEffect == DROPEFFECT_COPY && exists(path(L"sub\\renamed.txt")); }, 10000);
+    static double lastTick = 0, longestWait = 0;   // the longest the window went without a timer tick
+    add(L"expanding a folder with 10,000 subfolders in the tree keeps the window responsive",   // WinSxS has 20,000
+        [=, this] {
+            for (int i = 0; i < 10000; ++i)
+                CreateDirectoryW(path(L"Bookmarks\\two\\inner\\" + std::to_wstring(i)).c_str(), nullptr);
+            TreeView_Expand(tree_.hwnd(), TreeView_GetChild(tree_.hwnd(), two()), TVE_EXPAND);   // "inner"
+            lastTick = nowMs();
+            longestWait = 0;
+        },
+        [=, this] {
+            longestWait = std::max(longestWait, nowMs() - lastTick);
+            lastTick = nowMs();
+            HWND tv = tree_.hwnd();
+            int shown = 0;
+            for (HTREEITEM c = TreeView_GetChild(tv, TreeView_GetChild(tv, two())); c; c = TreeView_GetNextSibling(tv, c))
+                ++shown;
+            selfTest_->note = std::to_wstring(shown) + L" shown, the window waited up to " +
+                              std::to_wstring(int(longestWait)) + L" ms";
+            return shown == 10000 && longestWait < 1000;
+        },
+        10000);
     backHome(L"(back to the test folder)");
 
     // Saved tabs: Ctrl+S writes a shortcut per tab in Bookmarks\Tabs, Ctrl+O opens their folders as tabs.

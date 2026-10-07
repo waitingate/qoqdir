@@ -46,7 +46,7 @@ while (-not $p.HasExited) {
   Start-Sleep -Milliseconds 200
 }
 "self-test (pid $($p.Id)) exit code: $($p.ExitCode)"
-if ($busy) { "Qoqdir's window was busy for 5+ seconds $busy time(s) (the self-test's own setup of 10,000 test files does this)" }
+if ($busy) { "Qoqdir's window was busy for 5+ seconds $busy time(s) (the self-test's own setup of 10,000 files, and of 10,000 folders, does this)" }
 $others = @($seen.Values | Where-Object { $_ -notmatch "\[Ghost\] '.*Qoqdir" })
 if ($others) { 'new windows during the run:'; $others | ForEach-Object { "  $_" } } else { 'no new windows' }
 if (Test-Path $Log) { Get-Content -Encoding UTF8 $Log | Select-String 'FAIL|passed' }

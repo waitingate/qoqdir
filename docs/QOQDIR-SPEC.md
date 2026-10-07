@@ -172,6 +172,8 @@ Targets on an ordinary SSD laptop with a folder of 10,000 files (faster is fine)
 - The copy or delete itself runs at Windows' speed (minutes for 10,000 small
   files), and the window keeps responding meanwhile.
 - The window shows up well under a second after start.
+- A folder with 20,000 subfolders (`C:\Windows\WinSxS` has that many) opens in the
+  tree with the window waiting under 1 s (about 0.5 s measured).
 
 ### 4.8 Never lose data
 - Delete goes to the Recycle Bin. Shift+Delete deletes for good, after Windows'
@@ -604,6 +606,8 @@ result:
     together) goes into the filter box whole.
 54. With a broken `rundll32.exe` in the shown folder, typing `rundll32` runs
     Windows' own program: no `Can't find`.
+55. Expanding a tree folder with 10,000 subfolders: all are shown, and the window
+    never waits a second.
 
 ### 7.3 Command-line checks
 Run on a copy of the exe in a temp folder:

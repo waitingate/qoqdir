@@ -198,7 +198,10 @@ void FolderTree::addChildren(const TreeBatch& batch) {
         TreeView_SetItem(tv_, &item);
         return;
     }
-    for (const auto& c : batch.children) add(batch.node, c.path, c.text, c.icon >= 0 ? c.icon : folderIcon(), c.shortcut);
+    // Each at the front, the last one first: the same order, but Windows never walks the list to its end for each
+    // one, which froze the window for seconds on a folder with 20,000 subfolders.
+    for (auto c = batch.children.rbegin(); c != batch.children.rend(); ++c)
+        add(batch.node, c->path, c->text, c->icon >= 0 ? c->icon : folderIcon(), c->shortcut, TVI_FIRST);
     TreeView_Expand(tv_, batch.node, TVE_EXPAND);
 }
 

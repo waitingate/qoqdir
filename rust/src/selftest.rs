@@ -1798,6 +1798,30 @@ impl App {
             |_| EFFECT.get() == DROPEFFECT_COPY.0 && exists(&p("sub\\renamed.txt")),
         )
         .wait(10000);
+        s.add(
+            "expanding a folder with 10,000 subfolders in the tree keeps the window responsive", // WinSxS has 20,000
+            |a| {
+                for i in 0..10000 {
+                    let _ = std::fs::create_dir(p(&format!("Bookmarks\\two\\inner\\{i}")));
+                }
+                send(a.tree.hwnd(), TVM_EXPAND, TVE_EXPAND.0 as usize, a.tree_child(a.tree_two())); // "inner"
+                T0.set(Some(Instant::now())); // the last timer tick
+                KEY_MS.set(0); // the longest the window went without one
+            },
+            |a| {
+                KEY_MS.set(KEY_MS.get().max(T0.get().map_or(0, |t| t.elapsed().as_millis())));
+                T0.set(Some(Instant::now()));
+                let mut shown = 0;
+                let mut child = a.tree_child(a.tree_child(a.tree_two()));
+                while child != 0 {
+                    shown += 1;
+                    child = a.tree_next(child);
+                }
+                note(format!("{shown} shown, the window waited up to {} ms", KEY_MS.get()));
+                shown == 10000 && KEY_MS.get() < 1000
+            },
+        )
+        .wait(10000);
         s.home("(back to the test folder)");
 
         // Saved tabs: Ctrl+S writes a shortcut per tab in Bookmarks\Tabs, Ctrl+O opens their folders as tabs.
