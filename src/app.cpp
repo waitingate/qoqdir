@@ -620,7 +620,9 @@ bool App::handleKey(const MSG& m) {
     if (m.message != WM_KEYDOWN && m.message != WM_SYSKEYDOWN && m.message != WM_CHAR) return false;
     // Only our own window: never steal keys from dialogs such as Properties.
     if (!wnd_ || (m.hwnd != wnd_ && !IsChild(wnd_, m.hwnd))) return false;
-    return onKey({m.message, m.wParam, GetFocus(), GetKeyState(VK_CONTROL) < 0, GetKeyState(VK_SHIFT) < 0,
+    // A key counts where it was typed: an input method's word arrives as several characters at once, and the first
+    // moves the focus to the filter box before the others are read.
+    return onKey({m.message, m.wParam, m.hwnd, GetKeyState(VK_CONTROL) < 0, GetKeyState(VK_SHIFT) < 0,
                   GetKeyState(VK_MENU) < 0});
 }
 

@@ -215,6 +215,18 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
         [=, this] { return list_.count() == 3 && GetFocus() == filter_; });
     add(L"Esc clears the filter and returns to the list", [=, this] { selfTestKey(VK_ESCAPE); },
         [=, this] { return list_.count() == 6 && GetFocus() == list_.hwnd(); });
+    // An input method hands over a whole word at once: its letters wait in the queue for the list together.
+    add(L"a word an input method types at once goes into the filter box whole, not just its first letter",
+        [=, this] {
+            SetFocus(list_.hwnd());
+            for (wchar_t c : std::wstring(L"\u5831\u544A")) PostMessageW(list_.hwnd(), WM_CHAR, c, 1);
+        },
+        [=, this] {
+            selfTest_->note = L"filter \"" + filterText() + L"\"";
+            return filterText() == L"\u5831\u544A" && list_.count() == 1;
+        });
+    add(L"(Esc clears it)", [=, this] { selfTestKey(VK_ESCAPE); },
+        [=, this] { return list_.count() == 6 && GetFocus() == list_.hwnd(); });
     // AltGr arrives as Ctrl + Alt: the key must type its character, not fire the Ctrl shortcut.
     add(L"AltGr+L types into the filter instead of focusing the address bar",
         [=, this] {

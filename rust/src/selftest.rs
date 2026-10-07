@@ -570,6 +570,25 @@ impl App {
         s.add("Esc clears the filter and returns to the list", |a| a.press(VK_ESCAPE, 0), |a| {
             a.list.count() == 6 && unsafe { GetFocus() } == a.list.hwnd()
         });
+        // An input method hands over a whole word at once: its letters wait in the queue for the list together.
+        s.add(
+            "a word an input method types at once goes into the filter box whole, not just its first letter",
+            |a| {
+                focus(a.list.hwnd());
+                for c in "\u{5831}\u{544A}".encode_utf16() {
+                    unsafe {
+                        let _ = PostMessageW(Some(a.list.hwnd()), WM_CHAR, WPARAM(c as usize), LPARAM(1));
+                    }
+                }
+            },
+            |a| {
+                note(format!("filter \"{}\"", a.filter_text()));
+                a.filter_text() == "\u{5831}\u{544A}" && a.list.count() == 1
+            },
+        );
+        s.add("(Esc clears it)", |a| a.press(VK_ESCAPE, 0), |a| {
+            a.list.count() == 6 && unsafe { GetFocus() } == a.list.hwnd()
+        });
         // AltGr arrives as Ctrl + Alt: the key must type its character, not fire the Ctrl shortcut.
         s.add(
             "AltGr+L types into the filter instead of focusing the address bar",

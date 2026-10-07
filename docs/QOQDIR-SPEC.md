@@ -254,11 +254,12 @@ Back, Forward and Up are disabled when they can't do anything.
 - Hidden files are hidden unless "show hidden" is on (Ctrl+H; the status bar says
   "Showing hidden files" or "Hiding hidden files").
 - Filter: typing a character while the list has the focus moves it into the
-  filter box, which filters at once. It matches anywhere in the name, ignoring
-  case; with `*` or `?` it is a wildcard pattern (`*.pdf`). Matches show from the
-  top, except that a highlighted item that matches stays highlighted and in view.
-  Esc clears the filter, Down moves to the list, and Enter opens the focused item.
-  Going to another folder clears the filter; refreshing the same folder keeps it.
+  filter box, which filters at once; a word from an input method goes in whole. It
+  matches anywhere in the name, ignoring case; with `*` or `?` it is a wildcard
+  pattern (`*.pdf`). Matches show from the top, except that a highlighted item
+  that matches stays highlighted and in view. Esc clears the filter, Down moves
+  to the list, and Enter opens the focused item. Going to another folder clears
+  the filter; refreshing the same folder keeps it.
 - Rename in place with F2 or the context menu. The name is selected without its
   extension, as in Explorer. Drives can't be renamed here.
 - Opening (Enter or double-click):
@@ -595,6 +596,8 @@ result:
     tabs; the message for the old scaling restores them.
 52. A file created in the 10,000-file folder while it is still being read, coming
     from This PC so that no watch covers it yet, shows up by itself.
+53. A word an input method types at once (its letters queued for the list
+    together) goes into the filter box whole.
 
 ### 7.3 Command-line checks
 Run on a copy of the exe in a temp folder:

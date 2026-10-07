@@ -1098,10 +1098,12 @@ impl App {
         if m.hwnd != self.wnd && !unsafe { IsChild(self.wnd, m.hwnd) }.as_bool() {
             return false;
         }
+        // A key counts where it was typed: an input method's word arrives as several characters at once, and the
+        // first moves the focus to the filter box before the others are read.
         self.on_key(Key {
             message: m.message,
             code: m.wParam.0,
-            focus: unsafe { GetFocus() },
+            focus: m.hwnd,
             ctrl: key_down(VK_CONTROL),
             shift: key_down(VK_SHIFT),
             alt: key_down(VK_MENU),

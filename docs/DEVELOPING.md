@@ -99,7 +99,9 @@ instead of corrupting data, and the crash log says where.
   `TVN_DELETEITEM`. A bookmark shortcut is read from the .lnk file alone; its own
   icon comes later from the worker, like file icons in the list.
 - Every message goes through `App::handleKey` before dispatch, but only for
-  Qoqdir's own windows. `App::onKey` is the one shortcut table.
+  Qoqdir's own windows. `App::onKey` is the one shortcut table. A key counts for
+  the window it was typed in, not for where the focus is once it is read: an input
+  method's word arrives as several characters at once.
 - `qoqdir.ini` is saved on close and at shutdown. A saved position on a monitor
   that is gone falls back to the default.
 - `ShellProcessRef` keeps the process alive after the window closes until
