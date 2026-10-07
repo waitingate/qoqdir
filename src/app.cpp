@@ -137,9 +137,9 @@ bool App::create(HINSTANCE instance, const CommandLine& cmd, bool useSettings) {
         return CreateWindowExW(exStyle, cls, text, WS_CHILD | WS_VISIBLE | style, 0, 0, 0, 0, wnd_,
                                reinterpret_cast<HMENU>(INT_PTR(id)), instance, nullptr);
     };
-    back_ = make(L"BUTTON", L"←", BS_PUSHBUTTON, 0, ID_BACK);
-    forward_ = make(L"BUTTON", L"→", BS_PUSHBUTTON, 0, ID_FORWARD);
-    up_ = make(L"BUTTON", L"↑", BS_PUSHBUTTON, 0, ID_UP);
+    back_ = make(L"BUTTON", L"\uE72B", BS_PUSHBUTTON, 0, ID_BACK);   // Explorer's arrow icons (applyFont)
+    forward_ = make(L"BUTTON", L"\uE72A", BS_PUSHBUTTON, 0, ID_FORWARD);
+    up_ = make(L"BUTTON", L"\uE74A", BS_PUSHBUTTON, 0, ID_UP);
     address_ = make(WC_EDITW, L"", ES_AUTOHSCROLL | WS_TABSTOP, WS_EX_CLIENTEDGE, ID_ADDRESS);
     filter_ = make(WC_EDITW, L"", ES_AUTOHSCROLL | WS_TABSTOP, WS_EX_CLIENTEDGE, ID_FILTER);
     // Windows' plain tabs, as in its dialogs (the current one white and taller), all one width (showTabs).
@@ -206,9 +206,14 @@ void App::applyFont() {
     ncm.cbSize = sizeof ncm;
     SystemParametersInfoForDpi(SPI_GETNONCLIENTMETRICS, sizeof ncm, &ncm, 0, dpi_);
     Font font(CreateFontIndirectW(&ncm.lfMessageFont));
-    for (HWND h : {back_, forward_, up_, address_, filter_, tabBar_, plus_, tree_.hwnd(), list_.hwnd(), status_})
+    LOGFONTW icons = ncm.lfMessageFont;   // Back, Forward and Up: Explorer's arrows, as tall as the text
+    lstrcpynW(icons.lfFaceName, L"Segoe MDL2 Assets", LF_FACESIZE);
+    Font arrows(CreateFontIndirectW(&icons));
+    for (HWND h : {address_, filter_, tabBar_, plus_, tree_.hwnd(), list_.hwnd(), status_})
         SendMessageW(h, WM_SETFONT, reinterpret_cast<WPARAM>(font.get()), TRUE);
-    font_ = std::move(font);   // the old font is deleted only after no control uses it
+    for (HWND h : {back_, forward_, up_}) SendMessageW(h, WM_SETFONT, reinterpret_cast<WPARAM>(arrows.get()), TRUE);
+    font_ = std::move(font);   // the old fonts are deleted only after no control uses them
+    arrowFont_ = std::move(arrows);
 
     HDC dc = GetDC(wnd_);
     HGDIOBJ old = SelectObject(dc, font_.get());
@@ -244,7 +249,7 @@ void App::layout() {
     SendMessageW(status_, SB_SETPARTS, 2, reinterpret_cast<LPARAM>(parts));
 
     int pad = scale(4, dpi_), btn = std::max(rowHeight_, scale(30, dpi_)), gap = scale(2, dpi_);
-    int filterW = std::min(scale(240, dpi_), w / 3);
+    int filterW = std::min(scale(120, dpi_), w / 3);
     int y = pad, x = pad;
     HDWP d = BeginDeferWindowPos(10);
     auto place = [&](HWND hwnd, int px, int py, int pw, int ph) {

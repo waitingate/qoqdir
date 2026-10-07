@@ -134,7 +134,7 @@ private:
     Com<IDropTarget> treeDrop_;     // and on a folder in the tree, to that folder
     int dropTab_ = -1;              // tab highlighted during a drag
     int wheel_ = 0;                 // mouse wheel turned over the tab bar, not yet a whole step (WHEEL_DELTA)
-    Font font_;
+    Font font_, arrowFont_;
     UINT dpi_ = 96;
     int rowHeight_ = 0, tabHeight_ = 0;
     int treeWidth_ = 220;           // in 96-DPI units

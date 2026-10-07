@@ -201,6 +201,7 @@ pub struct App {
     pub drop_tab: Cell<Option<usize>>,          // tab highlighted during a drag
     wheel: Cell<i32>,                           // mouse wheel turned over the tab bar, not yet a whole step (120)
     font: RefCell<Option<Font>>,
+    arrow_font: RefCell<Option<Font>>,          // Back, Forward and Up's
     pub dpi: Cell<u32>,
     pub row_height: Cell<i32>,
     tab_height: Cell<i32>,
@@ -396,9 +397,9 @@ impl App {
                 .unwrap_or_default()
             };
             const ES_AUTOHSCROLL: u32 = 0x80;
-            let back = make(w!("BUTTON"), w!("\u{2190}"), 0, 0, ID_BACK);
-            let forward = make(w!("BUTTON"), w!("\u{2192}"), 0, 0, ID_FORWARD);
-            let up = make(w!("BUTTON"), w!("\u{2191}"), 0, 0, ID_UP);
+            let back = make(w!("BUTTON"), w!("\u{E72B}"), 0, 0, ID_BACK); // Explorer's arrow icons (apply_font)
+            let forward = make(w!("BUTTON"), w!("\u{E72A}"), 0, 0, ID_FORWARD);
+            let up = make(w!("BUTTON"), w!("\u{E74A}"), 0, 0, ID_UP);
             let address = make(w!("EDIT"), w!(""), ES_AUTOHSCROLL | WS_TABSTOP.0, WS_EX_CLIENTEDGE.0, ID_ADDRESS);
             let filter = make(w!("EDIT"), w!(""), ES_AUTOHSCROLL | WS_TABSTOP.0, WS_EX_CLIENTEDGE.0, ID_FILTER);
             const TCS_FOCUSNEVER: u32 = 0x8000;
@@ -441,6 +442,7 @@ impl App {
                 drop_tab: Cell::new(None),
                 wheel: Cell::new(0),
                 font: RefCell::new(None),
+                arrow_font: RefCell::new(None),
                 dpi: Cell::new(GetDpiForWindow(wnd)),
                 row_height: Cell::new(0),
                 tab_height: Cell::new(0),
@@ -552,8 +554,15 @@ impl App {
                 dpi,
             );
             let font = Font(CreateFontIndirectW(&ncm.lfMessageFont));
-            for h in [self.back, self.forward, self.up, self.address, self.filter, self.tab_bar, self.plus, self.tree.hwnd(), self.list.hwnd(), self.status] {
+            let mut icons = ncm.lfMessageFont; // Back, Forward and Up: Explorer's arrows, as tall as the text
+            let face = wide("Segoe MDL2 Assets");
+            icons.lfFaceName[..face.len()].copy_from_slice(&face);
+            let arrows = Font(CreateFontIndirectW(&icons));
+            for h in [self.address, self.filter, self.tab_bar, self.plus, self.tree.hwnd(), self.list.hwnd(), self.status] {
                 send(h, WM_SETFONT, font.0.0 as usize, 1);
+            }
+            for h in [self.back, self.forward, self.up] {
+                send(h, WM_SETFONT, arrows.0.0 as usize, 1);
             }
             let dc = GetDC(Some(self.wnd));
             let old = SelectObject(dc, font.0.into());
@@ -563,7 +572,8 @@ impl App {
             ReleaseDC(Some(self.wnd), dc);
             self.row_height.set(tm.tmHeight + scale(10, dpi));
             self.tab_height.set(tm.tmHeight + scale(12, dpi));
-            *self.font.borrow_mut() = Some(font); // the old font is freed only after no control uses it
+            *self.font.borrow_mut() = Some(font); // the old fonts are freed only after no control uses them
+            *self.arrow_font.borrow_mut() = Some(arrows);
         }
     }
 
@@ -600,7 +610,7 @@ impl App {
             let row = self.row_height.get();
             let btn = row.max(scale(30, dpi));
             let gap = scale(2, dpi);
-            let filter_w = scale(240, dpi).min(w / 3);
+            let filter_w = scale(120, dpi).min(w / 3);
             let (mut x, mut y) = (pad, pad);
             for b in [self.back, self.forward, self.up] {
                 place(b, x, y, btn, row);

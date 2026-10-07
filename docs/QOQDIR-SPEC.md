@@ -195,8 +195,9 @@ Targets on an ordinary SSD laptop with a folder of 10,000 files (faster is fine)
 ## 5. Features
 
 ### 5.1 Window layout, top to bottom
-1. Toolbar: Back, Forward and Up buttons (plain arrow glyphs), the address bar
-   (it stretches), and the filter box with the hint "Filter".
+1. Toolbar: Back, Forward and Up buttons (Explorer's own arrow icons, from
+   Windows' icon font, as tall as the text), the address bar (it stretches), and
+   the filter box, 120 pixels wide at 100% scaling, with the hint "Filter".
 2. The tabs, with a "+" button at the right for a new tab.
 3. The folder tree on the left, a splitter, the file list on the right.
 4. Status bar: item counts and selection size on the left, messages on the right.
