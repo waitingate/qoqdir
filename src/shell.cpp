@@ -369,6 +369,24 @@ void openFile(HWND owner, const std::wstring& path) {
     ShellExecuteExW(&sei);   // Windows shows its own "open with" / error dialog
 }
 
+namespace {
+// The program a bare name means ("cmd", "code", "services.msc"): the one on the PATH, as the Run box finds it.
+// Windows would look in the folder shown first, where a program of that name could be waiting (in Downloads, on a
+// USB stick). A path, a web address or a document ("notes.txt") stays as typed.
+std::wstring programOnPath(const std::wstring& name) {
+    if (name.find_first_of(L"\\/:") != std::wstring::npos) return name;
+    std::wstring own = extensionOf(name), path = expandVars(L"%PATH%"), found(32768, L'\0');
+    std::wstring exts = toLower(expandVars(L"%PATHEXT%")) + L';';
+    for (size_t at = 0, end; (end = exts.find(L';', at)) != std::wstring::npos; at = end + 1) {
+        std::wstring ext = exts.substr(at, end - at);
+        if (!own.empty() && ext != own) continue;
+        DWORD n = SearchPathW(path.c_str(), name.c_str(), ext.c_str(), DWORD(found.size()), found.data(), nullptr);
+        if (n > 0 && n < found.size()) return found.substr(0, n);
+    }
+    return name;
+}
+}  // namespace
+
 bool runCommand(HWND owner, const std::wstring& command, const std::wstring& workDir) {
     SHELLEXECUTEINFOW sei{};
     sei.cbSize = sizeof sei;
@@ -376,12 +394,14 @@ bool runCommand(HWND owner, const std::wstring& command, const std::wstring& wor
     sei.hwnd = owner;
     sei.lpDirectory = workDir.empty() ? nullptr : workDir.c_str();
     sei.nShow = SW_SHOWNORMAL;
-    sei.lpFile = command.c_str();
+    std::wstring file = programOnPath(command);
+    sei.lpFile = file.c_str();
     if (ShellExecuteExW(&sei)) return true;
     // "notepad file.txt": program first, the rest as arguments.
     size_t space = command.find(L' ');
     if (space == std::wstring::npos) return false;
-    std::wstring file = command.substr(0, space), args = command.substr(space + 1);
+    std::wstring args = command.substr(space + 1);
+    file = programOnPath(command.substr(0, space));
     sei.lpFile = file.c_str();
     sei.lpParameters = args.c_str();
     return ShellExecuteExW(&sei) != FALSE;

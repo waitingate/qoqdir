@@ -1050,6 +1050,19 @@ impl App {
                 && from == 0
                 && to as i32 == unsafe { GetWindowTextLengthW(a.address) }
         });
+        s.add(
+            "a program typed by name is Windows' own, not a file of that name in the folder shown",
+            |a| {
+                write_file(&p("rundll32.exe")); // not a program: run from here, it would fail
+                a.set_message("");
+                a.go_to("rundll32");
+                let _ = std::fs::remove_file(p("rundll32.exe"));
+            },
+            move |a| {
+                note(format!("status: {}", a.status_message()));
+                a.at(&dir()) && a.status_message().is_empty()
+            },
+        );
 
         s.add("(open This PC)", |a| a.open(Location::ThisPc, Nav::New, ViewState::default()), |a| a.at_pc());
         s.add(

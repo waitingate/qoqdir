@@ -12,7 +12,7 @@ use windows::Win32::Foundation::{
     WPARAM,
 };
 use windows::Win32::Storage::FileSystem::{
-    FILE_ATTRIBUTE_DIRECTORY, FILE_ATTRIBUTE_NORMAL, FILE_FLAGS_AND_ATTRIBUTES, WIN32_FIND_DATAW,
+    FILE_ATTRIBUTE_DIRECTORY, FILE_ATTRIBUTE_NORMAL, FILE_FLAGS_AND_ATTRIBUTES, SearchPathW, WIN32_FIND_DATAW,
 };
 use windows::Win32::System::Com::{
     BIND_OPTS, CLSCTX_ALL, CLSCTX_INPROC_SERVER, CoCreateInstance, CoTaskMemFree, CreateBindCtx, DVASPECT_CONTENT,
@@ -499,6 +499,29 @@ pub fn open_file(owner: HWND, path: &Path) {
     }
 }
 
+/// The program a bare name means ("cmd", "code", "services.msc"): the one on the PATH, as the Run box finds it.
+/// Windows would look in the folder shown first, where a program of that name could be waiting (in Downloads, on a
+/// USB stick). A path, a web address or a document ("notes.txt") stays as typed.
+fn program_on_path(name: &OsStr) -> Vec<u16> {
+    let typed = wide(name);
+    if typed.iter().any(|&c| c == b'\\' as u16 || c == b'/' as u16 || c == b':' as u16) {
+        return typed;
+    }
+    let (own, path) = (extension_of(name), wide(std::env::var_os("PATH").unwrap_or_default()));
+    let mut found = vec![0u16; 32768];
+    for ext in std::env::var("PATHEXT").unwrap_or_default().to_lowercase().split(';') {
+        if !own.is_empty() && ext != own {
+            continue;
+        }
+        let n = unsafe { SearchPathW(pcwstr(&path), pcwstr(&typed), pcwstr(&wide(ext)), Some(&mut found), None) } as usize;
+        if n > 0 && n < found.len() {
+            found.truncate(n + 1); // with its NUL
+            return found;
+        }
+    }
+    typed
+}
+
 /// Runs what was typed in the address bar: "cmd", "notepad file.txt", a web address...
 pub fn run_command(owner: HWND, command: &OsStr, work_dir: Option<&Path>) -> bool {
     let dir = work_dir.map(wide);
@@ -516,11 +539,11 @@ pub fn run_command(owner: HWND, command: &OsStr, work_dir: Option<&Path>) -> boo
         unsafe { ShellExecuteExW(&mut sei).is_ok() }
     };
     let text = command.to_string_lossy();
-    if run(&wide(command), None) {
+    if run(&program_on_path(command), None) {
         return true;
     }
     match text.split_once(' ') {
-        Some((file, args)) => run(&wide(file), Some(&wide(args))),
+        Some((file, args)) => run(&program_on_path(OsStr::new(file)), Some(&wide(args))),
         None => false,
     }
 }

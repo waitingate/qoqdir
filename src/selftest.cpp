@@ -572,6 +572,17 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
             return at(dir) && statusMessage().find(L"Can't find") != std::wstring::npos && from == 0 &&
                    int(to) == GetWindowTextLengthW(address_);
         });
+    add(L"a program typed by name is Windows' own, not a file of that name in the folder shown",
+        [=, this] {
+            writeFile(path(L"rundll32.exe"));   // not a program: run from here, it would fail
+            setMessage(L"");
+            goTo(L"rundll32");
+            DeleteFileW(path(L"rundll32.exe").c_str());
+        },
+        [=, this] {
+            selfTest_->note = L"status: " + statusMessage();
+            return at(dir) && statusMessage().empty();
+        });
 
     add(L"(open This PC)", [=, this] { open(L"", Nav::New); }, [=, this] { return at(L""); });
     add(L"typing . on This PC says Can't find (not handed to Windows, which opens Explorer)",

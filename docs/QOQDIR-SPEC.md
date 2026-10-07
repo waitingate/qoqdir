@@ -237,6 +237,10 @@ Back, Forward and Up are disabled when they can't do anything.
     Windows can't run it, the status bar says `Can't find "<text>"` and it beeps.
     One difference: text that starts with a full path is always a path, so
     `"C:\Tools\app.exe" file.txt` doesn't run (`C:\Tools\app.exe` alone does).
+    A program named without a folder (`cmd`, `code`) is the one on the PATH, as
+    the Run box finds it, never a file of that name in the current folder, where
+    Windows would look first (a stranger's `cmd.exe` in Downloads would run). A
+    document's name (`notes.txt`) still opens the current folder's own.
   - A path that doesn't work stays selected in the box, so it can be fixed.
 - Folder names autocomplete as you type (Windows' own autocomplete).
 - Esc in the address bar puts the current path back and returns to the list.
@@ -598,6 +602,8 @@ result:
     from This PC so that no watch covers it yet, shows up by itself.
 53. A word an input method types at once (its letters queued for the list
     together) goes into the filter box whole.
+54. With a broken `rundll32.exe` in the shown folder, typing `rundll32` runs
+    Windows' own program: no `Can't find`.
 
 ### 7.3 Command-line checks
 Run on a copy of the exe in a temp folder:
