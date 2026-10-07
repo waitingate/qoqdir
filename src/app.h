@@ -118,6 +118,7 @@ private:
 
     // Window
     void applyFont();
+    void applyColors(bool highContrast);
     void layout();
     void showStatus();
     void setMessage(const std::wstring& text);

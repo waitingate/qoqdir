@@ -12,8 +12,9 @@ use std::sync::atomic::{AtomicU32, Ordering};
 
 use windows::Win32::Foundation::{COLORREF, ERROR_OPERATION_ABORTED, HINSTANCE, HWND, LPARAM, LRESULT, POINT, RECT, SIZE, WPARAM};
 use windows::Win32::Graphics::Gdi::{
-    ClientToScreen, CreateFontIndirectW, CreateSolidBrush, InvalidateRect, GetDC, GetTextExtentExPointW, GetTextExtentPoint32W,
-    GetTextMetricsW, HDC, MONITOR_DEFAULTTONULL, MonitorFromRect, PtInRect, ReleaseDC, ScreenToClient, SelectObject, TEXTMETRICW,
+    COLOR_WINDOW, ClientToScreen, CreateFontIndirectW, CreateSolidBrush, InvalidateRect, GetDC, GetSysColor, GetSysColorBrush,
+    GetTextExtentExPointW, GetTextExtentPoint32W, GetTextMetricsW, HBRUSH, HDC, MONITOR_DEFAULTTONULL, MonitorFromRect, PtInRect,
+    ReleaseDC, ScreenToClient, SelectObject, TEXTMETRICW,
 };
 use windows::Win32::Storage::FileSystem::CreateDirectoryW;
 use windows::Win32::System::Diagnostics::Debug::MessageBeep;
@@ -37,18 +38,18 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
 };
 use windows::Win32::UI::Shell::{DefSubclassProc, FOLDERID_Profile, SHACF_FILESYS_DIRS, SHAutoComplete, SetWindowSubclass};
 use windows::Win32::UI::WindowsAndMessaging::{
-    AppendMenuW, CW_USEDEFAULT, CreatePopupMenu, CreateWindowExW, DefWindowProcW, DestroyWindow,
+    AppendMenuW, CW_USEDEFAULT, CreatePopupMenu, CreateWindowExW, DefWindowProcW, DestroyWindow, GCLP_HBRBACKGROUND,
     GWLP_USERDATA, GetClientRect, GetCursorPos, GetParent, GetWindowLongPtrW, GetWindowPlacement, GetWindowRect,
     HMENU, HTCLIENT, IDC_ARROW, IDC_SIZEWE, IsChild, KillTimer, WPF_RESTORETOMAXIMIZED, LoadCursorW, LoadIconW, MB_ICONQUESTION,
     MB_ICONWARNING, MB_OKCANCEL, MF_GRAYED, MF_SEPARATOR, MF_STRING, MINMAXINFO, MSG, MessageBoxW, MoveWindow,
-    NONCLIENTMETRICSW, PostMessageW, PostQuitMessage, RegisterClassExW, SIZE_MINIMIZED, SPI_GETNONCLIENTMETRICS, SW_SHOWMAXIMIZED,
-    SW_SHOWNOACTIVATE, SW_SHOWNORMAL, SWP_NOACTIVATE, SWP_NOZORDER, SetCursor, SetTimer,
-    SetWindowLongPtrW, SetWindowPlacement, SetWindowPos, ShowWindow, TPM_RETURNCMD,
+    NONCLIENTMETRICSW, PostMessageW, PostQuitMessage, RegisterClassExW, SIZE_MINIMIZED, SPI_GETHIGHCONTRAST,
+    SPI_GETNONCLIENTMETRICS, SW_SHOWMAXIMIZED, SW_SHOWNOACTIVATE, SW_SHOWNORMAL, SWP_NOACTIVATE, SWP_NOZORDER, SetClassLongPtrW,
+    SetCursor, SetTimer, SetWindowLongPtrW, SetWindowPlacement, SetWindowPos, ShowWindow, SystemParametersInfoW, TPM_RETURNCMD,
     TPM_RIGHTBUTTON, TrackPopupMenuEx, WINDOW_EX_STYLE, WINDOW_STYLE, WINDOWPLACEMENT, WM_ACTIVATE, WM_APP,
     WM_APPCOMMAND, WM_CAPTURECHANGED, WM_CHAR, WM_CLOSE, WM_COMMAND, WM_CONTEXTMENU, WM_DESTROY, WM_DEVICECHANGE,
     WM_DPICHANGED, WM_DRAWITEM, WM_ENDSESSION, WM_GETMINMAXINFO, WM_INITMENUPOPUP, WM_KEYDOWN, WM_LBUTTONDBLCLK,
     WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONUP, WM_MEASUREITEM, WM_MENUCHAR, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_NOTIFY, WM_SETCURSOR, WM_SETFONT, WM_SIZE,
-    WM_SYSKEYDOWN, WM_TIMER, WNDCLASSEXW, WS_CHILD, WS_CLIPCHILDREN, WS_EX_CLIENTEDGE, WS_OVERLAPPEDWINDOW,
+    WM_SYSCOLORCHANGE, WM_SYSKEYDOWN, WM_TIMER, WNDCLASSEXW, WS_CHILD, WS_CLIPCHILDREN, WS_EX_CLIENTEDGE, WS_OVERLAPPEDWINDOW,
     WS_TABSTOP, WS_VISIBLE,
 };
 use windows::core::{PCWSTR, PWSTR, w};
@@ -216,6 +217,17 @@ pub struct App {
     ini: Vec<u16>, // settings file
     pub st: RefCell<State>,
     pub quiet: Cell<bool>, // no beeps (set by the self-test, which triggers errors on purpose)
+    gray: HBRUSH,          // the window's soft gray: lives as long as the process
+}
+
+/// A high-contrast theme is on. (HIGHCONTRASTW is written out here: the crate feature with it holds all of UI
+/// Automation.)
+fn high_contrast_on() -> bool {
+    #[repr(C)]
+    struct HighContrast(u32, u32, *mut u16); // size, flags (1: on), the theme's name
+    let mut hc = HighContrast(size_of::<HighContrast>() as u32, 0, std::ptr::null_mut());
+    let read = unsafe { SystemParametersInfoW(SPI_GETHIGHCONTRAST, hc.0, Some((&raw mut hc).cast()), Default::default()) };
+    read.is_ok() && hc.1 & 1 != 0
 }
 
 fn loword(v: usize) -> u32 {
@@ -346,7 +358,6 @@ impl App {
                 hCursor: LoadCursorW(None, IDC_ARROW).unwrap_or_default(),
                 // Icon 1 of build.rs (the address is the resource number, as MAKEINTRESOURCE makes it); the small one too.
                 hIcon: LoadIconW(Some(instance), PCWSTR(std::ptr::without_provenance(1))).unwrap_or_default(),
-                hbrBackground: CreateSolidBrush(BACKGROUND), // lives as long as the process
                 lpszClassName: pcwstr(&name),
                 ..Default::default()
             };
@@ -455,6 +466,7 @@ impl App {
                     last_focus: None,
                 }),
                 quiet: Cell::new(false),
+                gray: CreateSolidBrush(BACKGROUND),
             });
             SetWindowLongPtrW(wnd, GWLP_USERDATA, Rc::as_ptr(&app) as isize);
 
@@ -492,9 +504,7 @@ impl App {
             let _ = RegisterDragDrop(app.tree.hwnd(), &tree_drop);
             *app.tree_drop.borrow_mut() = Some(tree_drop);
 
-            send(app.list.hwnd(), LVM_SETBKCOLOR, 0, BACKGROUND.0 as isize);
-            send(app.list.hwnd(), LVM_SETTEXTBKCOLOR, 0, BACKGROUND.0 as isize);
-            send(app.tree.hwnd(), TVM_SETBKCOLOR, 0, BACKGROUND.0 as isize);
+            app.apply_colors(high_contrast_on());
             app.apply_font();
             app.tree.fill();
             app.load_settings(&cmd);
@@ -554,6 +564,19 @@ impl App {
             self.row_height.set(tm.tmHeight + scale(10, dpi));
             self.tab_height.set(tm.tmHeight + scale(12, dpi));
             *self.font.borrow_mut() = Some(font); // the old font is freed only after no control uses it
+        }
+    }
+
+    /// The soft gray, or a high-contrast theme's own colours: the theme's text could be white, unreadable on the gray.
+    pub fn apply_colors(&self, high_contrast: bool) {
+        let color = if high_contrast { COLORREF(unsafe { GetSysColor(COLOR_WINDOW) }) } else { BACKGROUND };
+        send(self.list.hwnd(), LVM_SETBKCOLOR, 0, color.0 as isize);
+        send(self.list.hwnd(), LVM_SETTEXTBKCOLOR, 0, color.0 as isize);
+        send(self.tree.hwnd(), TVM_SETBKCOLOR, 0, color.0 as isize);
+        unsafe {
+            let brush = if high_contrast { GetSysColorBrush(COLOR_WINDOW) } else { self.gray };
+            SetClassLongPtrW(self.wnd, GCLP_HBRBACKGROUND, brush.0 as isize);
+            let _ = InvalidateRect(Some(self.wnd), None, true);
         }
     }
 
@@ -635,6 +658,14 @@ impl App {
                     let _ = SetWindowPos(self.wnd, None, r.left, r.top, r.right - r.left, r.bottom - r.top, SWP_NOZORDER | SWP_NOACTIVATE);
                     self.layout(); // the size may not have changed, but the font and row heights did
                     self.show_tabs(); // and the tabs' width and names
+                    return LRESULT(0);
+                }
+                WM_SYSCOLORCHANGE => {
+                    // E.g. a high-contrast theme came or went: the controls hear of it only from here.
+                    for h in [self.back, self.forward, self.up, self.address, self.filter, self.tab_bar, self.plus, self.tree.hwnd(), self.list.hwnd(), self.status] {
+                        send(h, WM_SYSCOLORCHANGE, wp.0, lp.0);
+                    }
+                    self.apply_colors(high_contrast_on());
                     return LRESULT(0);
                 }
                 WM_ACTIVATE => {

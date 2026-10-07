@@ -207,7 +207,8 @@ Back, Forward and Up are disabled when they can't do anything.
 
 ### 5.2 Look
 - Window, list and tree have a soft gray background, RGB(235, 235, 235)
-  (`#EBEBEB`), easier on the eyes than white. No dark mode.
+  (`#EBEBEB`), easier on the eyes than white. No dark mode. A high-contrast theme's
+  own colours replace the gray, also when the theme is turned on while Qoqdir runs.
 - Tabs are all the same width: 150 pixels at 100% scaling while they fit, all
   narrower together as more open, down to 80; past that the bar scrolls, with
   arrows at its right end.
@@ -612,6 +613,9 @@ result:
     Windows' own program: no `Can't find`.
 55. Expanding a tree folder with 10,000 subfolders: all are shown, and the window
     never waits a second.
+56. The colours for a high-contrast theme (applied directly: the test never
+    switches the user's theme) replace the soft gray in the window, list and tree,
+    and the gray comes back after.
 
 ### 7.3 Command-line checks
 Run on a copy of the exe in a temp folder:

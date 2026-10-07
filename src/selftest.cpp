@@ -513,6 +513,22 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
             int column = list_.columnWidths()[0] - col0;   // within rounding
             return dpi_ == dpi0 && rowHeight_ == row0 && column >= -1 && column <= 1 && tabWidth() == scale(150, dpi0);
         });
+    // The test must not switch the user's theme: it applies the colours for one directly.
+    add(L"in a high-contrast theme the window, list and tree take the theme's colours; the soft gray comes back after",
+        [=, this] {
+            applyColors(true);
+            COLORREF window = GetSysColor(COLOR_WINDOW);
+            bool themed = ListView_GetBkColor(list_.hwnd()) == window && ListView_GetTextBkColor(list_.hwnd()) == window &&
+                          TreeView_GetBkColor(tree_.hwnd()) == window &&
+                          HBRUSH(GetClassLongPtrW(wnd_, GCLP_HBRBACKGROUND)) == GetSysColorBrush(COLOR_WINDOW);
+            selfTest_->note = themed ? L"theme colours" : L"still gray";
+            applyColors(false);
+        },
+        [=, this] {
+            COLORREF gray = RGB(235, 235, 235);
+            return selfTest_->note == L"theme colours" && ListView_GetBkColor(list_.hwnd()) == gray &&
+                   TreeView_GetBkColor(tree_.hwnd()) == gray;
+        });
     add(L"switching tabs shows the new tab at once; nothing acts on the old one meanwhile",
         [=, this] {
             newTab(path(L"sub"), false);

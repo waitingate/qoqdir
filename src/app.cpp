@@ -25,6 +25,11 @@ std::atomic<UINT> g_newestLoad{0};
 
 constexpr COLORREF kBackground = RGB(235, 235, 235);   // soft gray: less glare than white
 
+bool highContrastOn() {
+    HIGHCONTRASTW hc{sizeof hc, 0, nullptr};
+    return SystemParametersInfoW(SPI_GETHIGHCONTRAST, sizeof hc, &hc, 0) && (hc.dwFlags & HCF_HIGHCONTRASTON);
+}
+
 bool is(const std::wstring& verb, const wchar_t* name) { return _wcsicmp(verb.c_str(), name) == 0; }
 
 std::wstring windowText(HWND h) {
@@ -119,7 +124,6 @@ bool App::create(HINSTANCE instance, const CommandLine& cmd, bool useSettings) {
     wc.hInstance = instance;
     wc.hCursor = LoadCursorW(nullptr, IDC_ARROW);
     wc.hIcon = LoadIconW(instance, MAKEINTRESOURCEW(1));   // app.rc; Windows takes the title bar's small one from it too
-    wc.hbrBackground = CreateSolidBrush(kBackground);   // lives as long as the process
     wc.lpszClassName = kAppName;
     RegisterClassExW(&wc);
 
@@ -173,9 +177,7 @@ bool App::create(HINSTANCE instance, const CommandLine& cmd, bool useSettings) {
     });
     RegisterDragDrop(tree_.hwnd(), treeDrop_.get());
 
-    ListView_SetBkColor(list_.hwnd(), kBackground);
-    ListView_SetTextBkColor(list_.hwnd(), kBackground);
-    TreeView_SetBkColor(tree_.hwnd(), kBackground);
+    applyColors(highContrastOn());
     applyFont();
     tree_.fill();
 
@@ -216,6 +218,17 @@ void App::applyFont() {
     ReleaseDC(wnd_, dc);
     rowHeight_ = tm.tmHeight + scale(10, dpi_);
     tabHeight_ = tm.tmHeight + scale(12, dpi_);   // tab text plus the control's own padding
+}
+
+// The soft gray, or a high-contrast theme's own colours: the theme's text could be white, unreadable on the gray.
+void App::applyColors(bool highContrast) {
+    static HBRUSH gray = CreateSolidBrush(kBackground);   // lives as long as the process
+    COLORREF color = highContrast ? GetSysColor(COLOR_WINDOW) : kBackground;
+    ListView_SetBkColor(list_.hwnd(), color);
+    ListView_SetTextBkColor(list_.hwnd(), color);
+    TreeView_SetBkColor(tree_.hwnd(), color);
+    SetClassLongPtrW(wnd_, GCLP_HBRBACKGROUND, LONG_PTR(highContrast ? GetSysColorBrush(COLOR_WINDOW) : gray));
+    InvalidateRect(wnd_, nullptr, TRUE);
 }
 
 void App::layout() {
@@ -286,6 +299,11 @@ LRESULT App::onMessage(UINT msg, WPARAM wp, LPARAM lp) {
         showTabs();   // and the tabs' width and names
         return 0;
     }
+    case WM_SYSCOLORCHANGE:   // e.g. a high-contrast theme came or went: the controls hear of it only from here
+        for (HWND h : {back_, forward_, up_, address_, filter_, tabBar_, plus_, tree_.hwnd(), list_.hwnd(), status_})
+            SendMessageW(h, WM_SYSCOLORCHANGE, wp, lp);
+        applyColors(highContrastOn());
+        return 0;
     case WM_ACTIVATE:
         if (LOWORD(wp) == WA_INACTIVE) {
             lastFocus_ = GetFocus();

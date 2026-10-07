@@ -12,7 +12,7 @@ use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
 use windows::Win32::Foundation::{HGLOBAL, HWND, LPARAM, POINT, POINTL, RECT, WPARAM};
-use windows::Win32::Graphics::Gdi::ClientToScreen;
+use windows::Win32::Graphics::Gdi::{COLOR_WINDOW, ClientToScreen, GetSysColor, GetSysColorBrush};
 use windows::Win32::Storage::FileSystem::{
     FILE_ATTRIBUTE_ARCHIVE, FILE_ATTRIBUTE_HIDDEN, FILE_FLAGS_AND_ATTRIBUTES, GetFileAttributesW, GetLongPathNameW,
     SetFileAttributesW,
@@ -25,7 +25,8 @@ use windows::Win32::System::Ole::{DROPEFFECT_COPY, DROPEFFECT_NONE};
 use windows::Win32::System::SystemInformation::GetSystemDirectoryW;
 use windows::Win32::System::SystemServices::MK_LBUTTON;
 use windows::Win32::UI::Controls::{
-    EM_GETSEL, EM_REPLACESEL, HTREEITEM, LVIF_IMAGE, LVIR_LABEL, LVITEMW, LVM_CANCELEDITLABEL, LVM_GETCOUNTPERPAGE,
+    EM_GETSEL, EM_REPLACESEL, HTREEITEM, LVIF_IMAGE, LVIR_LABEL, LVITEMW, LVM_CANCELEDITLABEL, LVM_GETBKCOLOR, LVM_GETCOUNTPERPAGE,
+    LVM_GETTEXTBKCOLOR, TVM_GETBKCOLOR,
     LVM_GETITEMRECT, LVM_GETITEMW, SB_GETTEXTLENGTHW, SB_GETTEXTW, TCIF_TEXT, TCITEMW,
     TCM_GETCURSEL, TCM_GETITEMCOUNT, TCM_GETITEMRECT, TCM_GETITEMW, TCM_SETCURFOCUS, UPDOWN_CLASSW,
     TVE_EXPAND, TVGN_CARET, TVGN_CHILD, TVGN_DROPHILITE, TVGN_NEXT, TVGN_ROOT, TVHITTESTINFO, TVHT_ONITEMBUTTON, TVIF_CHILDREN,
@@ -42,7 +43,7 @@ use windows::Win32::UI::Shell::{
     SHGFI_SYSICONINDEX, SHGetFileInfoW, SHGetKnownFolderIDList, StrCmpLogicalW,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    FindWindowExW, GWLP_USERDATA, GetClientRect, GetWindowLongPtrW, GetWindowRect, GetWindowTextLengthW, IsWindowVisible,
+    FindWindowExW, GCLP_HBRBACKGROUND, GWLP_USERDATA, GetClassLongPtrW, GetClientRect, GetWindowLongPtrW, GetWindowRect, GetWindowTextLengthW, IsWindowVisible,
     KillTimer, PostMessageW, SW_SHOWMINNOACTIVE, SW_SHOWNOACTIVATE, SetTimer, ShowWindow, WM_CHAR, WM_CLOSE,
     WM_DEVICECHANGE, WM_DPICHANGED, WM_KEYDOWN, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONUP, WM_MOUSEMOVE, WM_MOUSEWHEEL,
     WM_SYSKEYDOWN, WM_TIMER,
@@ -977,6 +978,27 @@ impl App {
                 let (dpi0, row0, col0, _) = BEFORE.get();
                 let column = a.list.column_widths()[0] - col0; // within rounding
                 a.dpi.get() == dpi0 && a.row_height.get() == row0 && (-1..=1).contains(&column) && tab_width(a) == scale(150, dpi0)
+            },
+        );
+        // The test must not switch the user's theme: it applies the colours for one directly.
+        s.add(
+            "in a high-contrast theme the window, list and tree take the theme's colours; the soft gray comes back after",
+            |a| {
+                a.apply_colors(true);
+                let window = unsafe { GetSysColor(COLOR_WINDOW) } as isize;
+                let brush = unsafe { GetClassLongPtrW(a.wnd, GCLP_HBRBACKGROUND) } as isize;
+                let themed = send(a.list.hwnd(), LVM_GETBKCOLOR, 0, 0) == window
+                    && send(a.list.hwnd(), LVM_GETTEXTBKCOLOR, 0, 0) == window
+                    && send(a.tree.hwnd(), TVM_GETBKCOLOR, 0, 0) == window
+                    && brush == unsafe { GetSysColorBrush(COLOR_WINDOW) }.0 as isize;
+                note(if themed { "theme colours" } else { "still gray" }.into());
+                a.apply_colors(false);
+            },
+            |a| {
+                let gray = 0x00EBEBEB;
+                noted() == "theme colours"
+                    && send(a.list.hwnd(), LVM_GETBKCOLOR, 0, 0) == gray
+                    && send(a.tree.hwnd(), TVM_GETBKCOLOR, 0, 0) == gray
             },
         );
         s.add(
