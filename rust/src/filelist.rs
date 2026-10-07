@@ -129,9 +129,7 @@ impl FileList {
     }
 
     pub fn set_filter(&self, filter: &OsStr) {
-        // A run of stars means one star; the matcher would try every way of splitting the name between them.
-        let mut w = wide(filter);
-        w.dedup_by(|a, b| *a == b'*' as u16 && *b == b'*' as u16);
+        let w = wide(filter);
         if self.model.borrow().filter == w {
             return;
         }

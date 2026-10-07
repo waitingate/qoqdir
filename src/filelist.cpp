@@ -45,9 +45,6 @@ void FileList::setListing(Listing&& listing) {
 }
 
 void FileList::setFilter(std::wstring filter) {
-    // A run of stars means one star; the matcher would try every way of splitting the name between them.
-    filter.erase(std::unique(filter.begin(), filter.end(), [](wchar_t a, wchar_t b) { return a == L'*' && b == L'*'; }),
-                 filter.end());
     if (filter == filter_) return;
     update(true, [&] { filter_ = filter; });
     ensureVisible(focused() >= 0 ? focused() : 0);   // the old scroll position may be past the end

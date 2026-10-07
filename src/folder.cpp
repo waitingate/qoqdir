@@ -143,11 +143,35 @@ void sortItems(std::vector<Item>& items, SortKey key, bool ascending) {
     items = std::move(sorted);
 }
 
+namespace {
+// '*' is any run of characters and '?' any one, both strings in lower case. On a mismatch only the last star takes
+// one more character, so a name takes at most (name x pattern) steps. Windows' PathMatchSpecW tries every way of
+// splitting the name between the stars (8.8 s for "*a*a*a*a*a*a*a*b" on a 40-letter name), and under a double-byte
+// code page it misreads Chinese letters.
+bool wildcardMatch(std::wstring_view name, std::wstring_view pattern) {
+    size_t n = 0, p = 0, star = pattern.npos, mark = 0;
+    while (n < name.size()) {
+        if (p < pattern.size() && (pattern[p] == L'?' || pattern[p] == name[n])) { ++n; ++p; }
+        else if (p < pattern.size() && pattern[p] == L'*') { star = p++; mark = n; }
+        else if (star != pattern.npos) { p = star + 1; n = ++mark; }
+        else return false;
+    }
+    while (p < pattern.size() && pattern[p] == L'*') ++p;
+    return p == pattern.size();
+}
+}  // namespace
+
 bool matchesFilter(const Item& item, const std::wstring& filter) {
     if (filter.empty()) return true;
-    if (filter.find_first_of(L"*?") != std::wstring::npos)
-        return PathMatchSpecW(item.shown().c_str(), filter.c_str()) != FALSE;
-    return StrStrIW(item.shown().c_str(), filter.c_str()) != nullptr;
+    if (filter.find_first_of(L"*?") == std::wstring::npos)
+        return StrStrIW(item.shown().c_str(), filter.c_str()) != nullptr;
+    // Wildcards, ignoring case, in one pattern or several separated by ';' ("*.jpg; *.png").
+    std::wstring name = toLower(item.shown()), patterns = toLower(filter) + L';';
+    for (size_t at = 0, end; (end = patterns.find(L';', at)) != std::wstring::npos; at = end + 1) {
+        size_t start = patterns.find_first_not_of(L' ', at);   // never past the ';'
+        if (wildcardMatch(name, std::wstring_view(patterns).substr(start, end - start))) return true;
+    }
+    return false;
 }
 
 std::wstring normalizePath(std::wstring p) {

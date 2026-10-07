@@ -262,10 +262,11 @@ Back, Forward and Up are disabled when they can't do anything.
 - Filter: typing a character while the list has the focus moves it into the
   filter box, which filters at once; a word from an input method goes in whole. It
   matches anywhere in the name, ignoring case; with `*` or `?` it is a wildcard
-  pattern (`*.pdf`). Matches show from the top, except that a highlighted item
-  that matches stays highlighted and in view. Esc clears the filter, Down moves
-  to the list, and Enter opens the focused item. Going to another folder clears
-  the filter; refreshing the same folder keeps it.
+  pattern (`*.pdf`: `*` is any run of characters, `?` one), and `;` separates
+  several (`*.jpg; *.png`). Matches show from the top, except that a highlighted
+  item that matches stays highlighted and in view. Esc clears the filter, Down
+  moves to the list, and Enter opens the focused item. Going to another folder
+  clears the filter; refreshing the same folder keeps it.
 - Rename in place with F2 or the context menu. The name is selected without its
   extension, as in Explorer. Drives can't be renamed here.
 - Opening (Enter or double-click):
@@ -479,7 +480,10 @@ At least these, with concrete examples:
 - Sorting: folders first, natural number order, each column both ways, ties by
   name, Type by the shown type text.
 - Filtering: substring, ignoring case, wildcards (`*.pdf` must not match
-  `x.pdf.txt`), an empty filter.
+  `x.pdf.txt`; `a?c` needs one character in the middle), an empty filter, letters
+  beyond English (`資*` finds `資料.txt`, `äbc*` finds `ÄBC.txt`), several patterns
+  (`*.jpg; *.png`), and many stars without a slow-down (`*a*a*a*a*a*a*a*b` on a
+  name of 40 a's).
 - Listing a real folder: no `.` or `..`, a missing folder gives an error, This PC
   lists at least one drive, and a path that is a file is reported as one.
 - Spotting shortcuts by extension (`.lnk`, `.url`, any letter case).

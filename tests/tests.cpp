@@ -235,6 +235,17 @@ int main() {
     CHECK(!matchesFilter(file(L"Holiday Photo.jpg"), L"video"));
     CHECK(matchesFilter(file(L"report.PDF"), L"*.pdf"));
     CHECK(!matchesFilter(file(L"report.pdf.txt"), L"*.pdf"));
+    // Letters beyond English, and their case: Windows' own matcher missed these under a Chinese code page.
+    CHECK(matchesFilter(file(L"資料.txt"), L"資*"));
+    CHECK(matchesFilter(file(L"ÄBC.txt"), L"äbc*"));
+    CHECK(matchesFilter(file(L"a.png"), L"*.jpg; *.png") && !matchesFilter(file(L"a.gif"), L"*.jpg;*.png"));
+    CHECK(matchesFilter(file(L"abc"), L"a?c") && !matchesFilter(file(L"ac"), L"a?c"));
+    {
+        // Windows' matcher took 8.8 s here, 4 to 9 times longer with each star; the filter runs it on every file.
+        ULONGLONG start = GetTickCount64();
+        CHECK(!matchesFilter(file(std::wstring(40, L'a').c_str()), L"*a*a*a*a*a*a*a*b"));
+        CHECK(GetTickCount64() - start < 100);
+    }
 
     // listFolder
     {

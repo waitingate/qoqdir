@@ -21,8 +21,8 @@ use windows::Win32::Storage::FileSystem::{
 use windows::Win32::System::Environment::ExpandEnvironmentStringsW;
 use windows::Win32::System::Time::{FileTimeToSystemTime, SystemTimeToTzSpecificLocalTime};
 use windows::Win32::UI::Shell::{
-    PathMatchSpecW, SHFILEINFOW, SHGFI_DISPLAYNAME, SHGFI_SMALLICON, SHGFI_SYSICONINDEX, SHGFI_TYPENAME,
-    SHGetFileInfoW, StrFormatByteSizeW, StrFormatKBSizeW, StrStrIW,
+    SHFILEINFOW, SHGFI_DISPLAYNAME, SHGFI_SMALLICON, SHGFI_SYSICONINDEX, SHGFI_TYPENAME, SHGetFileInfoW,
+    StrFormatByteSizeW, StrFormatKBSizeW, StrStrIW,
 };
 use windows::core::PCWSTR;
 
@@ -517,19 +517,44 @@ pub fn is_shortcut(name: &OsStr) -> bool {
     matches!(extension_of(name).as_str(), ".lnk" | ".url")
 }
 
-/// Case-insensitive substring match, or a wildcard match when the filter has * or ?. `filter` ends in a NUL.
+/// Case-insensitive substring match, or a wildcard match when the filter has * or ?, in one pattern or several
+/// separated by ';' ("*.jpg; *.png"). `filter` ends in a NUL.
 pub fn matches_filter(item: &Item, filter: &[u16]) -> bool {
     if filter.len() <= 1 {
         return true;
     }
-    let shown = wide(item.shown());
-    unsafe {
-        if filter.iter().any(|&c| c == b'*' as u16 || c == b'?' as u16) {
-            PathMatchSpecW(pcwstr(&shown), pcwstr(filter)).as_bool()
+    if !filter.iter().any(|&c| c == b'*' as u16 || c == b'?' as u16) {
+        return !unsafe { StrStrIW(pcwstr(&wide(item.shown())), pcwstr(filter)) }.is_null();
+    }
+    let name = to_lower(item.shown());
+    let patterns = to_lower(&OsString::from_wide(&filter[..filter.len() - 1]));
+    patterns.split(|&c| c == b';' as u16).any(|p| {
+        let spaces = p.iter().take_while(|&&c| c == b' ' as u16).count(); // spaces after a ';' don't count
+        wildcard_match(&name, &p[spaces..])
+    })
+}
+
+/// `*` is any run of characters and `?` any one, both in lower case. On a mismatch only the last star takes one more
+/// character, so a name takes at most (name x pattern) steps. Windows' PathMatchSpecW tries every way of splitting
+/// the name between the stars (8.8 s for "*a*a*a*a*a*a*a*b" on a 40-letter name), and under a double-byte code page
+/// it misreads Chinese letters.
+fn wildcard_match(name: &[u16], pattern: &[u16]) -> bool {
+    let (star, any) = (b'*' as u16, b'?' as u16);
+    let (mut n, mut p, mut back) = (0, 0, None);
+    while n < name.len() {
+        if p < pattern.len() && (pattern[p] == any || pattern[p] == name[n]) {
+            (n, p) = (n + 1, p + 1);
+        } else if p < pattern.len() && pattern[p] == star {
+            back = Some((p, n));
+            p += 1;
+        } else if let Some((s, mark)) = back {
+            back = Some((s, mark + 1));
+            (n, p) = (mark + 1, s + 1);
         } else {
-            !StrStrIW(pcwstr(&shown), pcwstr(filter)).is_null()
+            return false;
         }
     }
+    pattern[p..].iter().all(|&c| c == star)
 }
 
 pub fn format_size(bytes: u64) -> OsString {
@@ -778,6 +803,16 @@ mod tests {
         assert!(!matches_filter(&photo, &wide("video")));
         assert!(matches_filter(&item("report.PDF", 0, false), &wide("*.pdf")));
         assert!(!matches_filter(&item("report.pdf.txt", 0, false), &wide("*.pdf")));
+        // Letters beyond English, and their case: Windows' own matcher missed these under a Chinese code page.
+        assert!(matches_filter(&item("\u{8CC7}\u{6599}.txt", 0, false), &wide("\u{8CC7}*")));
+        assert!(matches_filter(&item("\u{C4}BC.txt", 0, false), &wide("\u{E4}bc*")));
+        assert!(matches_filter(&item("a.png", 0, false), &wide("*.jpg; *.png")));
+        assert!(!matches_filter(&item("a.gif", 0, false), &wide("*.jpg;*.png")));
+        assert!(matches_filter(&item("abc", 0, false), &wide("a?c")) && !matches_filter(&item("ac", 0, false), &wide("a?c")));
+        // Windows' matcher took 8.8 s here, 4 to 9 times longer with each star; the filter runs it on every file.
+        let start = std::time::Instant::now();
+        assert!(!matches_filter(&item(&"a".repeat(40), 0, false), &wide("*a*a*a*a*a*a*a*b")));
+        assert!(start.elapsed().as_millis() < 100);
     }
 
     #[test]
