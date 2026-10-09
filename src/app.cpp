@@ -890,11 +890,11 @@ void App::onLoaded(Listing&& listing, UINT generation) {
     showStatus();
 }
 
-// The address bar, title, buttons and tabs follow the current tab's folder.
+// The address bar, title, buttons and tabs follow the current tab's folder. A reload changes none of them.
 void App::showLocation(Nav nav) {
+    if (nav == Nav::Refresh) return;
     const Tab& t = tab();
-    if (nav != Nav::Refresh || GetFocus() != address_)   // never overwrite what the user is typing
-        SetWindowTextW(address_, locationText(t.path).c_str());
+    SetWindowTextW(address_, locationText(t.path).c_str());
     SetWindowTextW(wnd_, displayName(t.path).c_str());   // the folder's name alone, as Explorer: the icon says which app
     EnableWindow(back_, !t.back.empty());
     EnableWindow(forward_, !t.forward.empty());

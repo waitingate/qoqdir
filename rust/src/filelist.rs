@@ -376,13 +376,14 @@ impl FileList {
         match code {
             LVN_GETDISPINFOW => {
                 let lvi = unsafe { &mut (*(nm as *mut NMLVDISPINFOW)).item };
-                let row = lvi.iItem as usize;
-                let (Some(it), location) = (self.item(row), self.location()) else { return Some(LRESULT(0)) };
+                let m = self.model.borrow(); // held while painting: nothing below sends the list a message
+                let Some(&i) = m.view.get(lvi.iItem as usize) else { return Some(LRESULT(0)) };
+                let it = &m.items[i];
                 if lvi.mask.contains(LVIF_TEXT) {
                     let text: OsString = match lvi.iSubItem {
                         0 => it.shown().to_os_string(),
                         1 => format_time(it.modified),
-                        2 => type_name(&it),
+                        2 => type_name(it),
                         3 if !it.is_dir() => format_size(it.size),
                         _ => OsString::new(),
                     };
@@ -390,7 +391,7 @@ impl FileList {
                 }
                 if lvi.mask.contains(LVIF_IMAGE) {
                     // Not stored in the item: a file's own icon may arrive later.
-                    lvi.iImage = if it.icon >= 0 { it.icon } else { icon_for(&location.join(&it.name), &it) };
+                    lvi.iImage = if it.icon >= 0 { it.icon } else { icon_for(&m.location.join(&it.name), it) };
                 }
                 Some(LRESULT(0))
             }

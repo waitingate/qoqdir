@@ -1570,12 +1570,13 @@ impl App {
         self.show_status();
     }
 
-    /// The address bar, title, buttons and tabs follow the current tab's folder.
+    /// The address bar, title, buttons and tabs follow the current tab's folder. A reload changes none of them.
     fn show_location(&self, nav: Nav) {
-        let location = self.location();
-        if nav != Nav::Refresh || unsafe { GetFocus() } != self.address {
-            set_text(self.address, location.text()); // never overwrite what the user is typing
+        if nav == Nav::Refresh {
+            return;
         }
+        let location = self.location();
+        set_text(self.address, location.text());
         set_text(self.wnd, location.display_name()); // the folder's name alone, as Explorer: the icon says which app
         let (can_back, can_forward) = self.with_tab(|t| (!t.back.is_empty(), !t.forward.is_empty()));
         unsafe {
