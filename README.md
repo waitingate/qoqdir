@@ -20,10 +20,10 @@ choose More info, then Run anyway. Each release lists the zip's SHA-256, which
 ```
 qoqdir [switches] [folders...]
 
-  {folder}         open the folder in a tab (qoqdir . works too)
-  -t="{folder}"    the same: -t="D:\logs" -t="C:\My Files"
-  --tab={folder}   the same, quotes needed only for spaces: --tab=D:\logs
-  -h, -?           help (F1 in the window shows it too)
+  {folder}           open the folder in a tab (qoqdir . works too)
+  -t="{folder}"      the same: -t="D:\logs" -t="C:\My Files"
+  --tab="{folder}"   the same: --tab="D:\logs"
+  -h, -?, --help     the command-line help, for scripts and shortcuts
 ```
 
 Each folder opens once, and the first one is shown. With no folders you get the
@@ -70,7 +70,7 @@ rename that folder.
 | Ctrl+C / Ctrl+X / Ctrl+V | copy / cut / paste |
 | Alt+Enter | properties |
 | Esc | clear the filter |
-| F1 | this list of keys, and the command line |
+| F1 | the main keys |
 
 Middle-click a folder to open it in a background tab. New tabs always go at the
 end. Drag a tab along the bar to move it, and turn the mouse wheel over the tabs

@@ -71,11 +71,10 @@ Check (Test-Path (Join-Path $dir 'Bookmarks') -PathType Container) 'a Bookmarks 
 $homeName = Split-Path ([Environment]::GetFolderPath('UserProfile')) -Leaf
 $title = TitleAfterStart @()
 Check ($title -eq $homeName) "no folders opens the home folder: '$title'"
-$r = HelpExitCode '-h'
-Check ($r.Shown -and $r.Code -eq 0) "-h shows the help and exits with 0 (shown: $($r.Shown), exit code $($r.Code))"
-$help = $r.Text
-Check ($help.StartsWith('Navigation') -and $help -match 'Refresh: F5' -and $help -match 'F1' -and $r.Title -match '^Qoqdir \d') `
-  "the help starts with the navigation keys, says F1 shows it, and has the version in its title ('$($r.Title)')"
+$r = HelpExitCode '--help'   # the switch F1's help names (-h and -? are the same: unit tests)
+Check ($r.Shown -and $r.Code -eq 0) "--help shows the help and exits with 0 (shown: $($r.Shown), exit code $($r.Code))"
+Check ($r.Text.StartsWith('qoqdir [switches] [folders...]') -and $r.Text -match '--tab="' -and $r.Title -match '^Qoqdir \d') `
+  "--help shows the command-line help, with the version in its title ('$($r.Title)')"
 # F1 in the window: posted to the file list as a key press would arrive (nothing global), then the box is closed.
 $p = Start-Process $copy -ArgumentList '--tab=C:\Users\Public' -PassThru
 Start-Sleep -Milliseconds 2000
@@ -87,9 +86,11 @@ $text = if ($box -ne [IntPtr]::Zero) { [QoqdirHelp]::Text($box) } else { '' }
 if ($box -ne [IntPtr]::Zero) { [void][QoqdirHelp]::PostMessage($box, 0x0010, [IntPtr]::Zero, [IntPtr]::Zero) }
 Start-Sleep -Milliseconds 300
 [void]$p.CloseMainWindow(); [void]$p.WaitForExit(5000)
-Check ($text -ne '' -and $text -eq $help) "F1 in the window shows the same help (shown: $($box -ne [IntPtr]::Zero))"
+Check ($text.StartsWith('Navigation') -and $text -match 'Refresh: F5' -and $text -match 'type qoqdir --help') `
+  "F1 in the window shows the keys and points to qoqdir --help (shown: $($box -ne [IntPtr]::Zero))"
 $r = HelpExitCode '-x'
-Check ($r.Shown -and $r.Code -eq 1) "-x shows the error with the help and exits with 1 (shown: $($r.Shown), exit code $($r.Code))"
+Check ($r.Shown -and $r.Code -eq 1 -and $r.Text.StartsWith('Unknown switch: -x') -and $r.Text -match 'qoqdir \[switches\]') `
+  "-x shows the error with the command-line help and exits with 1 (shown: $($r.Shown), exit code $($r.Code))"
 # A damaged qoqdir.ini: a number far off any screen gives the default (x + width must not overflow and stop it).
 Set-Content -Path $ini -Value "[Window]`r`nX=2147483000`r`nWidth=1000`r`nHeight=600"
 $title = TitleAfterStart @('--tab=C:\Users\Public')

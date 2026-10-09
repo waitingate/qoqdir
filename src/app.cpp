@@ -683,7 +683,7 @@ bool App::onKey(const Key& key) {
     if ((ctrl && k == 'L') || (alt && k == 'D') || (k == VK_F4 && !alt)) { focusEdit(address_); return true; }
     if ((ctrl && k == 'F') || k == VK_F3) { focusEdit(filter_); return true; }
     if (k == VK_F5 || (ctrl && k == 'R')) { refreshAll(); return true; }
-    if (k == VK_F1) { showHelp(wnd_); return true; }
+    if (k == VK_F1) { showKeys(wnd_); return true; }
     if (ctrl && k == 'H') {   // hidden items are always read: the list just shows or hides them
         list_.setShowHidden(!list_.showHidden());
         setMessage(list_.showHidden() ? L"Showing hidden files" : L"Hiding hidden files");

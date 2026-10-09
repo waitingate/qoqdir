@@ -39,7 +39,7 @@ struct Tab {
     bool unavailable = true;        // not loaded here yet, or failed: no drops onto it (asking Windows could freeze)
 };
 
-void showHelp(HWND owner, const std::wstring& error = {});   // the help box, for -h and F1 (main.cpp)
+void showKeys(HWND owner);   // F1's help box: the main keys (main.cpp; qoqdir --help shows the command line)
 
 class App {
 public:

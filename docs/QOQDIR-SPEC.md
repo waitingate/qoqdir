@@ -405,7 +405,7 @@ Anywhere in the window:
 | Ctrl+H | show or hide hidden files |
 | Alt+Left / Alt+Right / Alt+Up | back / forward / up |
 | Mouse back and forward buttons | back / forward |
-| F1 | the help, with the main keys (5.10) |
+| F1 | the keys help (5.10) |
 | Tab, Shift+Tab | move the focus: address, filter, tree, list |
 
 In the file list:
@@ -433,10 +433,10 @@ No console window appears.
 ```
 qoqdir [switches] [folders...]
 
-  {folder}         open the folder in a tab (relative paths work: qoqdir .)
-  -t="{folder}"    the same, as a switch: -t="D:\logs"  -t="C:\My Files"
-  --tab={folder}   the same, quotes needed only for spaces: --tab=D:\logs
-  -h, -?           show the help
+  {folder}           open the folder in a tab (relative paths work: qoqdir .)
+  -t="{folder}"      the same, as a switch: -t="D:\logs"  -t="C:\My Files"
+  --tab="{folder}"   the same: --tab="D:\logs"
+  -h, -?, --help     show the command-line help
 ```
 
 - `-t=` and `--tab=` are the safe forms for scripts: all after `=` is the
@@ -458,22 +458,27 @@ qoqdir [switches] [folders...]
 - `qoqdir .` opens the terminal's current folder, and `D:` means `D:\`.
 - A folder that can't be opened still gets its tab, in the "not available" state
   (4.3). That helps with network drives that connect later.
-- `-h` and `-?` show the help in a small window titled "Qoqdir" and the version,
-  and exit with code 0; F1 shows the same help over the window.
-  An unknown switch shows the error ("Unknown switch: -x") above the help and
-  exits with code 1.
-- The help is short and in plain words. It lists the main keys of 5.9 in groups
-  (navigation, tabs, files), the most helpful first in each: what Explorer users
-  wouldn't guess (typing to filter, Backspace for up, Alt+drag onto Bookmarks,
-  saving tabs, Ctrl+H) before what they know. One action a line, named as in the
-  menus where there is one, with its main key ("Save tabs: Ctrl+S"); "or" adds a
-  key only when it does what the main one can't (Ctrl+F filters from anywhere).
-  Explorer's other keys for the same things (Alt+Up, Alt+D, F4, F3, Ctrl+R) work
-  but aren't listed, nor are Enter and Ctrl+C. No tab stops: a message box sets
-  them by the font's average letter width, so columns would line up in one font
-  only. Last, the command line by example (`-t=` and a quoted folder for each; -h
-  or F1 shows the help); `--tab=`, plain folders, `-?` and the quoting rules are
-  in the README.
+- `-h`, `-?` and `--help` show the command-line help in a small window titled
+  "Qoqdir" and the version, and exit with code 0. An unknown switch shows the
+  error ("Unknown switch: -x") above that help and exits with code 1.
+- The command-line help is for people who start Qoqdir from scripts and
+  shortcuts. In the same plain words, one fact a line: the forms by example, what
+  happens to the folders, the quoting rules (keep the quotes; don't end a quoted
+  folder with `\`; a drive as `D:`), that each run opens a new window and how a
+  script waits for it (`start /wait`, `Start-Process -Wait`), the exit codes, the
+  files next to the exe, and the switches.
+- F1 shows the keys help over the window. It is short and in plain words. It
+  lists the main keys of 5.9 in groups (navigation, tabs, files), the most
+  helpful first in each: what Explorer users wouldn't guess (typing to filter,
+  Backspace for up, Alt+drag onto Bookmarks, saving tabs, Ctrl+H) before what
+  they know. One action a line, named as in the menus where there is one, with
+  its main key ("Save tabs: Ctrl+S"); "or" adds a key only when it does what the
+  main one can't (Ctrl+F filters from anywhere). Explorer's other keys for the
+  same things (Alt+Up, Alt+D, F4, F3, Ctrl+R) work but aren't listed, nor are
+  Enter and Ctrl+C. No tab stops: a message box sets them by the font's average
+  letter width, so columns would line up in one font only. Last, the command
+  line by example (`-t=`, then `--tab=`, each with a quoted folder: quotes are
+  safe in every shell) and "More detail: type qoqdir --help in a terminal".
 - `--selftest` runs the self-test (7.2) in `qoqdir-test.exe`; the exe users get
   treats it as an unknown switch. It isn't in the help.
 
@@ -669,9 +674,9 @@ Run on a copy of the exe in a temp folder:
 - No arguments: the home folder is shown.
 - `-h` shows the help and exits with code 0. `-x` shows the error with the help
   and exits with code 1.
-- The help starts with the navigation keys, says that F1 shows it, and has the
-  version in its title. F1 in the window (a key press posted to the file list,
-  nothing global) shows the same help.
+- `--help` shows the command-line help, with the version in its title, and the
+  error of `-x` comes above it. F1 in the window (a key press posted to the file
+  list, nothing global) shows the keys help, which points to `qoqdir --help`.
 - With a damaged `qoqdir.ini` (a window position far off any screen) it starts
   with the defaults.
 - From a folder it can't write to (as Program Files is for most users), it runs,

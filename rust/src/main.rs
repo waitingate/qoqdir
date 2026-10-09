@@ -1,4 +1,4 @@
-//! Qoqdir: a light, fast, portable file manager for Windows (usage: USAGE below; `--selftest`: selftest.rs,
+//! Qoqdir: a light, fast, portable file manager for Windows (usage: COMMAND_LINE below; `--selftest`: selftest.rs,
 //! only in a build with the `selftest` feature).
 #![windows_subsystem = "windows"]
 
@@ -24,17 +24,19 @@ use windows::Win32::UI::Controls::{
     INITCOMMONCONTROLSEX, InitCommonControlsEx,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    DispatchMessageW, GetMessageW, MB_ICONINFORMATION, MB_ICONWARNING, MSG, MessageBoxW, TranslateMessage,
+    DispatchMessageW, GetMessageW, MB_ICONINFORMATION, MB_ICONWARNING, MESSAGEBOX_STYLE, MSG, MessageBoxW,
+    TranslateMessage,
 };
 
 use crate::util::{from_wide, pcwstr, wide};
 
-// The main keys in groups, the most helpful first in each: what Explorer users wouldn't guess comes first. One action
-// a line, in plain words (the menus' own where there is one), with its main key: Explorer's other keys for the same
-// thing work but aren't listed (Alt+Up, F4, Ctrl+R), nor are Enter and Ctrl+C. The command line last, by example.
-// The line breaks are the text's own: a \ at a line end would also drop the next line's indent. No tab stops: a
-// message box puts them by the font's average letter width, so columns line up in one font only.
-const USAGE: &str = "Navigation
+// F1: the main keys in groups, the most helpful first in each: what Explorer users wouldn't guess comes first. One
+// action a line, in plain words (the menus' own where there is one), with its main key: Explorer's other keys for the
+// same thing work but aren't listed (Alt+Up, F4, Ctrl+R), nor are Enter and Ctrl+C. The command line last, by
+// example, and where to read more. The line breaks are the text's own: a \ at a line end would also drop the next
+// line's indent. No tab stops in either help: a message box puts them by the font's average letter width, so columns
+// line up in one font only.
+const KEYS: &str = "Navigation
   Filter: type in the list, or Ctrl+F
   Clear the filter: Esc
   Up: Backspace
@@ -63,20 +65,55 @@ Files
 
 Command line
   Open folders in tabs: qoqdir -t=\"D:\\logs\" -t=\"D:\\My Files\"
-  This help: qoqdir -h, or F1 in the window";
+  Or: qoqdir --tab=\"D:\\logs\"
+  More detail: type qoqdir --help in a terminal";
+
+// qoqdir --help (or -h, -?): the command line in full, for people who start Qoqdir from scripts and shortcuts.
+const COMMAND_LINE: &str = "qoqdir [switches] [folders...]
+
+  qoqdir \"D:\\logs\"
+  qoqdir -t=\"D:\\logs\" -t=\"D:\\My Files\"
+  qoqdir --tab=\"D:\\logs\"
+
+Each folder opens in a tab. The first one is shown.
+The same folder twice gives one tab.
+With no folders, the home folder opens.
+. is the current folder. D: means D:\\.
+A folder that can't be opened still gets a tab,
+marked \"not available\".
+
+Quotes
+  Keep them: PowerShell needs them after -t=.
+  Don't end a quoted folder with \\: write \"D:\\My Files\",
+  not \"D:\\My Files\\\". For a drive, write D: alone.
+
+Windows and scripts
+  Each run opens a new window.
+  To wait until it closes: start /wait in cmd,
+  Start-Process -Wait in PowerShell.
+  Exit code: 0, or 1 for an unknown switch.
+
+Files next to qoqdir.exe
+  qoqdir.ini: window size, sort and columns
+  Bookmarks: shortcuts shown at the top of the tree
+  Bookmarks\\Tabs: the tabs Ctrl+S saved
+
+Switches
+  -t=\"{folder}\", --tab=\"{folder}\": open in a tab
+  -h, -?, --help: this help";
 
 /// The app's name: window title, settings file, logs. (The exe name is set in Cargo.toml.)
 pub const APP_NAME: &str = "Qoqdir";
 
-/// The help box, titled with the version: qoqdir -h (the mistake first, if there was one) and F1 in the window.
-pub fn show_help(owner: Option<HWND>, error: Option<&str>) {
-    let text = match error {
-        Some(error) => format!("{error}\n\n{USAGE}"),
-        None => USAGE.to_string(),
-    };
+/// A help box, titled with the version.
+fn help_box(owner: Option<HWND>, text: &str, icon: MESSAGEBOX_STYLE) {
     let title = format!("{APP_NAME} {}", env!("CARGO_PKG_VERSION"));
-    let icon = if error.is_some() { MB_ICONWARNING } else { MB_ICONINFORMATION };
     unsafe { MessageBoxW(owner, pcwstr(&wide(text)), pcwstr(&wide(title)), icon) };
+}
+
+/// F1's help box: the main keys (qoqdir --help shows the command line).
+pub fn show_keys(owner: HWND) {
+    help_box(Some(owner), KEYS, MB_ICONINFORMATION);
 }
 
 fn main() {
@@ -101,7 +138,11 @@ fn main() {
         cmd.error = Some("Unknown switch: --selftest".into()); // only a build with the selftest feature has it
     }
     if cmd.help || cmd.error.is_some() {
-        show_help(None, cmd.error.as_deref()); // there is no console, so the help is a small window
+        // There is no console, so the help is a small window, with the mistake first if there was one.
+        match &cmd.error {
+            Some(error) => help_box(None, &format!("{error}\n\n{COMMAND_LINE}"), MB_ICONWARNING),
+            None => help_box(None, COMMAND_LINE, MB_ICONINFORMATION),
+        }
         std::process::exit(if cmd.error.is_some() { 1 } else { 0 });
     }
     let code = unsafe {

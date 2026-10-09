@@ -1227,7 +1227,7 @@ impl App {
             return true;
         }
         if is(VK_F1) {
-            crate::show_help(Some(self.wnd), None);
+            crate::show_keys(self.wnd);
             return true;
         }
         if ctrl && letter(b'H') {
