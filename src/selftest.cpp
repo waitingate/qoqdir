@@ -1224,6 +1224,23 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
             tree_.refreshFolder(path(L"Bookmarks\\one"));
         },
         [=, this] { return nodeTexts(TreeView_GetChild(tree_.hwnd(), one())) == L"deep,new"; });
+    add(L"a shortcut in a folder inside Bookmarks shows there too, after the subfolders, with its own icon and no arrow "
+        L"(5.6)",
+        [=, this] {
+            makeShortcut(path(L"Bookmarks\\one\\sub.lnk"), path(L"sub"));
+            tree_.refreshFolder(path(L"Bookmarks\\one"));
+        },
+        [=, this] {
+            if (nodeTexts(TreeView_GetChild(tree_.hwnd(), one())) != L"deep,new,sub") return false;
+            SHFILEINFOW own{};
+            SHGetFileInfoW(path(L"Bookmarks\\one\\sub.lnk").c_str(), 0, &own, sizeof own,
+                           SHGFI_SYSICONINDEX | SHGFI_SMALLICON);
+            TVITEMW item{};
+            item.mask = TVIF_IMAGE | TVIF_CHILDREN;
+            item.hItem = TreeView_GetNextSibling(tree_.hwnd(), newNode());   // "sub"
+            TreeView_GetItem(tree_.hwnd(), &item);
+            return item.iImage == own.iIcon && !item.cChildren;
+        });
     auto nodePoint = [this](HTREEITEM node) {   // the middle of a tree node, in screen coordinates
         RECT r{};
         TreeView_GetItemRect(tree_.hwnd(), node, &r, TRUE);

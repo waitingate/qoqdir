@@ -99,10 +99,10 @@ void FolderTree::fill() {
     TreeView_Expand(tv_, thisPc, TVE_EXPAND);
 }
 
-// The shortcuts' own icons, read after their node was shown (startWorker).
-void FolderTree::setIcons(const IconBatch& batch) {
-    if (!samePath(batch.dir, bookmarks_)) return;   // shortcuts are shown only under Bookmarks
-    for (HTREEITEM c = TreeView_GetChild(tv_, TreeView_GetRoot(tv_)); c; c = TreeView_GetNextSibling(tv_, c)) {
+// The shortcuts' own icons, read after their node was shown (startWorker). The node may be gone by now.
+void FolderTree::setIcons(HTREEITEM node, const IconBatch& batch) {
+    if (!paths_.count(node)) return;
+    for (HTREEITEM c = TreeView_GetChild(tv_, node); c; c = TreeView_GetNextSibling(tv_, c)) {
         for (const auto& [name, icon] : batch.icons) {
             if (!samePath(pathOf(c), joinPath(batch.dir, name))) continue;
             TVITEMW item{};
@@ -165,7 +165,9 @@ const std::wstring& FolderTree::pathOf(HTREEITEM node) const {
 void FolderTree::startReading(HTREEITEM node, bool again) {
     if ((!again && TreeView_GetChild(tv_, node)) || reading_.count(node)) return;   // already read, or being read
     std::wstring dir = pathOf(node);
-    bool shortcuts = node == TreeView_GetRoot(tv_);   // the Bookmarks node
+    HTREEITEM top = node;   // shortcuts show under Bookmarks, the first root, at any depth (5.6)
+    while (HTREEITEM up = TreeView_GetParent(tv_, top)) top = up;
+    bool shortcuts = top == TreeView_GetRoot(tv_);
     startWorker(node, [dir, shortcuts](TreeBatch& batch) { readChildren(batch, dir, shortcuts); });
 }
 
@@ -185,7 +187,8 @@ void FolderTree::startWorker(HTREEITEM node, std::function<void(TreeBatch&)> rea
         }
         post(parent, msg, 0, std::move(batch));
         // Then each shortcut's own icon, which asks the target (maybe a server that is off), as the list does.
-        if (!shortcuts.empty()) post(parent, iconMsg, 0, std::make_unique<IconBatch>(readOwnIcons(dir, shortcuts)));
+        if (!shortcuts.empty())
+            post(parent, iconMsg, reinterpret_cast<WPARAM>(node), std::make_unique<IconBatch>(readOwnIcons(dir, shortcuts)));
     });
 }
 

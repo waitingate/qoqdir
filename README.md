@@ -40,7 +40,7 @@ to type just `qoqdir`.
 Keep shortcuts to the folders you use often in the `Bookmarks` folder next to
 `qoqdir.exe`. It is created if missing and shown at the top of the tree. Alt+drag
 a folder into it, or copy a folder and use Paste shortcut there. Rename or delete
-bookmarks like any file.
+bookmarks like any file. Subfolders group them, and open in the tree too.
 
 Tabs aren't saved by themselves. Ctrl+S (or "Save tabs" on a tab's right-click
 menu) saves them as shortcuts in `Bookmarks\Tabs`, replacing the ones there, and

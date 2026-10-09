@@ -360,7 +360,7 @@ LRESULT App::onMessage(UINT msg, WPARAM wp, LPARAM lp) {
     }
     case WM_APP_TREE_ICONS: {   // bookmark shortcuts get their own icons the same way
         std::unique_ptr<IconBatch> batch(reinterpret_cast<IconBatch*>(lp));
-        tree_.setIcons(*batch);
+        tree_.setIcons(reinterpret_cast<HTREEITEM>(wp), *batch);
         return 0;
     }
     case WM_APP_TREE: {

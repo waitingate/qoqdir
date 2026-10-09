@@ -328,9 +328,10 @@ Back, Forward and Up are disabled when they can't do anything.
   subfolders for grouping, in the `Bookmarks` folder next to `qoqdir.exe`. There
   is no bookmark database or special format: they are added, renamed and deleted
   like any file (for example, Alt+drag a folder into Bookmarks).
-- The Bookmarks node is open at start and lists, one level deep, its subfolders
-  and then its shortcuts. Shortcuts show the name and icon Windows gives them
-  ("Work", not "Work.lnk") and have no expand arrow.
+- The Bookmarks node is open at start and lists its subfolders and then its
+  shortcuts. A folder inside Bookmarks lists its own the same way when expanded,
+  so bookmarks can be grouped. Shortcuts show the name and icon Windows gives
+  them ("Work", not "Work.lnk") and have no expand arrow.
 - Choosing a bookmark shortcut in the tree works like opening it in the list
   (5.4): a folder opens in this tab, anything else is opened by Windows, and an
   unreachable folder gives the status message, never a Windows popup.
@@ -678,6 +679,8 @@ result:
     `one\later` made by another program shows up under `one` by itself.
 61. With the list elsewhere, `later` deleted and `one` read again (as after a
     command from a node's own menu): the tree shows `deep`, `new` again.
+62. A shortcut to `sub` made in `one`, once `one` is read again, shows under it
+    after the subfolders, with the shortcut's own icon and no expand arrow.
 
 ### 7.3 Command-line checks
 Run on a copy of the exe in a temp folder:

@@ -1870,6 +1870,27 @@ impl App {
             |a| a.node_texts(a.tree_child(a.tree_child(a.tree_root()))) == "deep,new",
         );
         s.add(
+            "a shortcut in a folder inside Bookmarks shows there too, after the subfolders, with its own icon and no arrow \
+             (5.6)",
+            |a| {
+                make_shortcut(&p("Bookmarks\\one\\sub.lnk"), p("sub"));
+                a.tree.refresh_folder(&Location::dir(p("Bookmarks\\one")));
+            },
+            |a| {
+                let one = a.tree_child(a.tree_root());
+                if a.node_texts(a.tree_child(one)) != "deep,new,sub" {
+                    return false;
+                }
+                let mut own = SHFILEINFOW::default();
+                unsafe {
+                    SHGetFileInfoW(pcwstr(&wide(p("Bookmarks\\one\\sub.lnk"))), FILE_FLAGS_AND_ATTRIBUTES(0), Some(&mut own), size_of::<SHFILEINFOW>() as u32, SHGFI_SYSICONINDEX | SHGFI_SMALLICON);
+                }
+                let sub = a.tree_next(a.tree_next(a.tree_child(one)));
+                let item = a.tree_item(sub, TVIF_IMAGE | TVIF_CHILDREN);
+                item.iImage == own.iIcon && item.cChildren.0 == 0
+            },
+        );
+        s.add(
             "This PC in the tree takes no drop",
             |a| {
                 let data = data_object_at(a.wnd, &Location::dir(p("file1.txt")));

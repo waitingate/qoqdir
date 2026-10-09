@@ -21,8 +21,8 @@ struct TreeBatch {
 
 class FolderTree {
 public:
-    // Posts `batchMsg` (a TreeBatch*, for addChildren) and `iconMsg` (an IconBatch*, for setIcons) to `parent`.
-    // `bookmarks` is the first root, open, with its shortcuts as well as its folders.
+    // Posts `batchMsg` (a TreeBatch*, for addChildren) and `iconMsg` (an IconBatch*, with its node as WPARAM, for
+    // setIcons) to `parent`. `bookmarks` is the first root, open; it and the folders in it show shortcuts too.
     void create(HWND parent, int id, UINT batchMsg, UINT iconMsg, const std::wstring& bookmarks);
     HWND hwnd() const { return tv_; }
     const std::wstring& bookmarks() const { return bookmarks_; }
@@ -31,7 +31,7 @@ public:
     void refresh();         // F5: reads again the folders whose subfolders are shown or known to be none (5.5)
     void refreshFolder(const std::wstring& dir);   // the same for that folder's nodes alone
     void addChildren(const TreeBatch& batch);
-    void setIcons(const IconBatch& batch);
+    void setIcons(HTREEITEM node, const IconBatch& batch);
 
     // Path of the node under a screen point, or of the selected node when pt is (-1,-1).
     bool pathAt(POINT screenPt, std::wstring* path) const;

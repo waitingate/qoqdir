@@ -12,7 +12,8 @@ use windows::Win32::System::SystemInformation::GetTickCount64;
 use windows::Win32::System::WindowsProgramming::DRIVE_REMOTE;
 use windows::Win32::UI::Controls::{
     HTREEITEM, NM_CLICK, NMHDR, NMTREEVIEWW, TVE_COLLAPSE, TVE_COLLAPSERESET, TVE_EXPAND, TVGN_CARET,
-    TVGN_CHILD, TVGN_DROPHILITE, TVGN_NEXT, TVGN_NEXTVISIBLE, TVGN_ROOT, TVHITTESTINFO, TVHT_ONITEM, TVHT_ONITEMRIGHT, TVI_FIRST, TVI_LAST, TVI_ROOT,
+    TVGN_CHILD, TVGN_DROPHILITE, TVGN_NEXT, TVGN_NEXTVISIBLE, TVGN_PARENT, TVGN_ROOT, TVHITTESTINFO, TVHT_ONITEM, TVHT_ONITEMRIGHT,
+    TVI_FIRST, TVI_LAST, TVI_ROOT,
     TVIF_CHILDREN, TVIF_IMAGE, TVIF_SELECTEDIMAGE, TVIF_TEXT, TVINSERTSTRUCTW, TVINSERTSTRUCTW_0, TVIS_EXPANDED, TVITEMEXW,
     TVITEMEXW_CHILDREN, TVITEMW, TVM_DELETEITEM, TVM_EXPAND, TVM_GETITEMSTATE, TVM_GETITEMW, TVM_GETNEXTITEM, TVM_HITTEST,
     TVM_INSERTITEMW, TVM_SELECTITEM, TVM_SETEXTENDEDSTYLE, TVM_SETIMAGELIST, TVM_SETITEMW, TVN_DELETEITEMW, TVN_ITEMEXPANDEDW,
@@ -281,7 +282,14 @@ impl FolderTree {
             return; // already read, or being read
         }
         let location = self.location_of(node);
-        let shortcuts = node.0 == self.root(); // the Bookmarks node
+        let mut top = node.0; // shortcuts show under Bookmarks, the first root, at any depth (5.6)
+        loop {
+            match send(self.hwnd, TVM_GETNEXTITEM, TVGN_PARENT as usize, top) {
+                0 => break,
+                up => top = up,
+            }
+        }
+        let shortcuts = top == self.root();
         self.start_worker(node.0, move |batch| read_children(batch, &location, shortcuts));
     }
 
@@ -299,7 +307,7 @@ impl FolderTree {
             // Then each shortcut's own icon, which asks the target (maybe a server that is off), as the list does.
             if let Some(first) = shortcuts.first() {
                 let names = shortcuts.iter().filter_map(|l| l.path()?.file_name().map(OsStr::to_os_string)).collect();
-                post(parent, icon_msg, 0, Box::new(read_own_icons(&first.parent(), names)));
+                post(parent, icon_msg, node as usize, Box::new(read_own_icons(&first.parent(), names)));
             }
         });
     }
@@ -352,12 +360,12 @@ impl FolderTree {
         send(self.hwnd, TVM_EXPAND, TVE_EXPAND.0 as usize, node.0);
     }
 
-    /// The shortcuts' own icons, read after their node was shown (start_worker).
-    pub fn set_icons(&self, batch: &IconBatch) {
-        if !batch.dir.same(&self.bookmarks) {
-            return; // shortcuts are shown only under Bookmarks
+    /// The shortcuts' own icons, read after their node was shown (start_worker). The node may be gone by now.
+    pub fn set_icons(&self, node: isize, batch: &IconBatch) {
+        if !self.paths.borrow().contains_key(&node) {
+            return;
         }
-        let mut child = send(self.hwnd, TVM_GETNEXTITEM, TVGN_CHILD as usize, self.root());
+        let mut child = send(self.hwnd, TVM_GETNEXTITEM, TVGN_CHILD as usize, node);
         while child != 0 {
             let location = self.location_of(HTREEITEM(child));
             for (name, icon) in &batch.icons {

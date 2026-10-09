@@ -746,7 +746,7 @@ impl App {
                 }
                 WM_APP_TREE_ICONS => {
                     // Bookmark shortcuts get their own icons the same way.
-                    self.tree.set_icons(&Box::from_raw(lp.0 as *mut IconBatch));
+                    self.tree.set_icons(wp.0 as isize, &Box::from_raw(lp.0 as *mut IconBatch));
                     return LRESULT(0);
                 }
                 WM_APP_TREE => {
