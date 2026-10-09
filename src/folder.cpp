@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <numeric>
+#include <unordered_map>
 
 namespace {
 
@@ -114,11 +115,22 @@ std::string sortKey(const std::wstring& s) {
 void sortItems(std::vector<Item>& items, SortKey key, bool ascending) {
     // Sorts the items' numbers, then moves each item once. Sort keys are made on first use and kept: a date or
     // size sort needs the names only for ties.
-    std::vector<std::string> names(items.size()), types(items.size());
+    std::vector<std::string> names(items.size());
     auto keyOf = [](std::vector<std::string>& keys, size_t i, const std::wstring& text) -> const std::string& {
         if (keys[i].empty()) keys[i] = sortKey(text);
         return keys[i];
     };
+    // The type names' keys, one per type (a folder holds few), and the one each item has.
+    std::vector<std::string> typeKeys;
+    std::vector<size_t> typeOf;
+    if (key == SortKey::Type) {
+        std::unordered_map<std::wstring, size_t> seen;
+        for (const Item& it : items) {
+            auto [at, fresh] = seen.try_emplace(it.type, typeKeys.size());
+            if (fresh) typeKeys.push_back(sortKey(it.type));
+            typeOf.push_back(at->second);
+        }
+    }
     std::vector<size_t> order(items.size());
     std::iota(order.begin(), order.end(), size_t(0));
     std::stable_sort(order.begin(), order.end(), [&](size_t i, size_t j) {
@@ -129,8 +141,10 @@ void sortItems(std::vector<Item>& items, SortKey key, bool ascending) {
         case SortKey::Modified: c = CompareFileTime(&a.modified, &b.modified); break;
         case SortKey::Size: c = a.size < b.size ? -1 : (a.size > b.size ? 1 : 0); break;
         case SortKey::Type:   // by the type name shown in the list when known, else by extension
-            c = a.type.empty() || b.type.empty() ? CompareStringOrdinal(extPtr(a.name), -1, extPtr(b.name), -1, TRUE) - CSTR_EQUAL
-                                                 : keyOf(types, i, a.type).compare(keyOf(types, j, b.type));
+            if (a.type.empty() || b.type.empty())
+                c = CompareStringOrdinal(extPtr(a.name), -1, extPtr(b.name), -1, TRUE) - CSTR_EQUAL;
+            else if (typeOf[i] != typeOf[j])   // the same type needs no comparing
+                c = typeKeys[typeOf[i]].compare(typeKeys[typeOf[j]]);
             break;
         case SortKey::Name: break;
         }

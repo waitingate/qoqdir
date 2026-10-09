@@ -1,5 +1,6 @@
 //! Folder contents and path rules, with no UI, so all of it is unit-tested (`cargo test`).
 
+use std::collections::HashMap;
 use std::ffi::{OsStr, OsString};
 use std::os::windows::ffi::{OsStrExt, OsStringExt};
 use std::path::{Component, Path, PathBuf, Prefix};
@@ -470,7 +471,23 @@ pub fn sort_items(items: &mut Vec<Item>, key: SortKey, ascending: bool) {
     // Sorts the items' numbers, then moves each item once. Sort keys are made on first use and kept: a date or
     // size sort needs the names only for ties.
     let names: Vec<OnceCell<Vec<u8>>> = items.iter().map(|_| OnceCell::new()).collect();
-    let types: Vec<OnceCell<Vec<u8>>> = items.iter().map(|_| OnceCell::new()).collect();
+    // The type names' keys, one per type (a folder holds few), and the one each item has.
+    let mut type_keys: Vec<Vec<u8>> = Vec::new();
+    let type_of: Vec<usize> = if key == SortKey::Type {
+        let mut seen: HashMap<&OsStr, usize> = HashMap::new();
+        items
+            .iter()
+            .map(|it| {
+                let t = it.type_text.as_deref().unwrap_or_default();
+                *seen.entry(t).or_insert_with(|| {
+                    type_keys.push(sort_key(t));
+                    type_keys.len() - 1
+                })
+            })
+            .collect()
+    } else {
+        Vec::new()
+    };
     let mut order: Vec<usize> = (0..items.len()).collect();
     order.sort_by(|&i, &j| {
         let (a, b) = (&items[i], &items[j]);
@@ -482,7 +499,8 @@ pub fn sort_items(items: &mut Vec<Item>, key: SortKey, ascending: bool) {
             SortKey::Size => a.size.cmp(&b.size),
             // By the type name shown in the list when known, else by extension.
             SortKey::Type => match (&a.type_text, &b.type_text) {
-                (Some(at), Some(bt)) => types[i].get_or_init(|| sort_key(at)).cmp(types[j].get_or_init(|| sort_key(bt))),
+                (Some(_), Some(_)) if type_of[i] == type_of[j] => Ordering::Equal, // the same type needs no comparing
+                (Some(_), Some(_)) => type_keys[type_of[i]].cmp(&type_keys[type_of[j]]),
                 _ => {
                     let r = unsafe { CompareStringOrdinal(ext(&wide(&a.name)), ext(&wide(&b.name)), true) };
                     (r.0 - CSTR_EQUAL.0).cmp(&0)
@@ -750,12 +768,22 @@ mod tests {
 
     #[test]
     fn sorting_by_type_name() {
-        let mut v = vec![item("b.txt", 0, false), item("a.zip", 0, false), item("c.docx", 0, false)];
+        let mut v = vec![
+            item("b.txt", 0, false),
+            item("a.zip", 0, false),
+            item("c.docx", 0, false),
+            item("a.txt", 0, false),
+            item("c.txt", 0, false),
+        ];
         v[0].type_text = Some("Text Document".into());
         v[1].type_text = Some("Compressed (zipped) Folder".into());
         v[2].type_text = Some("Microsoft Word Document".into());
+        v[3].type_text = Some("Text Document".into()); // the same type: by name
+        v[4].type_text = Some("text document".into()); // the same but for letter case: by name too
         sort_items(&mut v, SortKey::Type, true);
-        assert_eq!(names(&v), "a.zip,c.docx,b.txt");
+        assert_eq!(names(&v), "a.zip,c.docx,a.txt,b.txt,c.txt");
+        sort_items(&mut v, SortKey::Type, false);
+        assert_eq!(names(&v), "c.txt,b.txt,a.txt,c.docx,a.zip");
     }
 
     #[test]

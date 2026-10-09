@@ -196,12 +196,16 @@ int main() {
 
     // sortItems by Type uses the type name shown in the list (when known), like Explorer
     {
-        std::vector<Item> v = {file(L"b.txt"), file(L"a.zip"), file(L"c.docx")};
+        std::vector<Item> v = {file(L"b.txt"), file(L"a.zip"), file(L"c.docx"), file(L"a.txt"), file(L"c.txt")};
         v[0].type = L"Text Document";
         v[1].type = L"Compressed (zipped) Folder";
         v[2].type = L"Microsoft Word Document";
+        v[3].type = L"Text Document";   // the same type: by name
+        v[4].type = L"text document";   // the same but for letter case: by name too
         sortItems(v, SortKey::Type, true);
-        CHECK_EQ(names(v), L"a.zip,c.docx,b.txt");
+        CHECK_EQ(names(v), L"a.zip,c.docx,a.txt,b.txt,c.txt");
+        sortItems(v, SortKey::Type, false);
+        CHECK_EQ(names(v), L"c.txt,b.txt,a.txt,c.docx,a.zip");
     }
 
     // sortItems orders names exactly as Windows' StrCmpLogicalW (Explorer) does, tricky names included
