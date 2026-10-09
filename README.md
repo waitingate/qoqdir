@@ -18,12 +18,12 @@ choose More info, then Run anyway. Each release lists the zip's SHA-256, which
 ## Command line
 
 ```
-qoqdir [switches] [folders...]
+qoqdir [options] [folder ...]
 
   {folder}           open the folder in a tab (qoqdir . works too)
-  -t="{folder}"      the same: -t="D:\logs" -t="C:\My Files"
   --tab="{folder}"   the same: --tab="D:\logs"
-  -h, -?, --help     the command-line help, for scripts and shortcuts
+  -t="{folder}"      short for --tab=: -t="D:\logs" -t="C:\My Files"
+  -h, --help, -?     print the help: options, examples, notes for scripts
 ```
 
 Each folder opens once, and the first one is shown. With no folders you get the

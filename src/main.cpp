@@ -45,44 +45,87 @@ const wchar_t kKeys[] =
     L"  Or: qoqdir --tab=\"D:\\logs\"\n"
     L"  More detail: type qoqdir --help in a terminal";
 
-// qoqdir --help (or -h, -?): the command line in full, for people who start Qoqdir from scripts and shortcuts.
+// qoqdir --help, -h, -?: printed in a terminal, so the columns line up.
 const wchar_t kCommandLine[] =
-    L"qoqdir [switches] [folders...]\n"
+    L"Qoqdir " QOQDIR_VERSION "\n"
     L"\n"
-    L"  qoqdir \"D:\\logs\"\n"
-    L"  qoqdir -t=\"D:\\logs\" -t=\"D:\\My Files\"\n"
-    L"  qoqdir --tab=\"D:\\logs\"\n"
+    L"Usage: qoqdir [options] [folder path ...]\n"
     L"\n"
-    L"Each folder opens in a tab. The first one is shown.\n"
-    L"The same folder twice gives one tab.\n"
-    L"With no folders, the home folder opens.\n"
-    L". is the current folder. D: means D:\\.\n"
-    L"A folder that can't be opened still gets a tab,\n"
-    L"marked \"not available\".\n"
+    L"Opens each folder in a tab and shows the first one.\n"
+    L"With no folder, opens your home folder.\n"
     L"\n"
-    L"Quotes\n"
-    L"  Keep them: PowerShell needs them after -t=.\n"
-    L"  Don't end a quoted folder with \\: write \"D:\\My Files\",\n"
-    L"  not \"D:\\My Files\\\". For a drive, write D: alone.\n"
+    L"Options:\n"
+    L"  -t=\"folder path\", --tab=\"folder path\"   open the folder in a tab\n"
+    L"  -h, --help, -?                          show this help\n"
     L"\n"
-    L"Windows and scripts\n"
+    L"Examples:\n"
+    L"  qoqdir .                               open the current folder\n"
+    L"  qoqdir -t=\"D:\\logs\"                    open D:\\logs\n"
+    L"  qoqdir -t=\"D:\\logs\" -t=\"D:\\My Files\"   open two tabs\n"
+    L"  qoqdir \"D:\\logs\"                       same as -t=\"D:\\logs\"\n"
+    L"\n"
+    L"Notes:\n"
+    L"  Always quote folders. PowerShell needs the quotes after -t=.\n"
+    L"  Don't end a quoted folder with a backslash: use \"D:\\My Files\",\n"
+    L"  not \"D:\\My Files\\\". For a drive, use \"D:\" (not \"D:\\\").\n"
+    L"  A folder that can't be opened yet (like a network drive that\n"
+    L"  is not connected) still gets a tab.\n"
+    L"\n"
+    L"Scripts:\n"
     L"  Each run opens a new window.\n"
-    L"  To wait until it closes: start /wait in cmd,\n"
-    L"  Start-Process -Wait in PowerShell.\n"
-    L"  Exit code: 0, or 1 for an unknown switch.\n"
+    L"  A .bat file waits until the window is closed. PowerShell doesn't.\n"
+    L"  Don't wait in a .bat file:  start \"\" qoqdir \"D:\\logs\"\n"
+    L"  Wait in PowerShell:         Start-Process qoqdir \"D:\\logs\" -Wait\n"
+    L"  Exit code: 0 = OK, 1 = error (such as an unknown option).\n"
     L"\n"
-    L"Files next to qoqdir.exe\n"
-    L"  qoqdir.ini: window size, sort and columns\n"
-    L"  Bookmarks: shortcuts shown at the top of the tree\n"
-    L"  Bookmarks\\Tabs: the tabs Ctrl+S saved\n"
-    L"\n"
-    L"Switches\n"
-    L"  -t=\"{folder}\", --tab=\"{folder}\": open in a tab\n"
-    L"  -h, -?, --help: this help";
+    L"Files next to qoqdir.exe:\n"
+    L"  qoqdir.ini       window size, sort order, column widths\n"
+    L"  Bookmarks\\       shortcuts shown at the top of the tree\n"
+    L"  Bookmarks\\Tabs\\  tabs saved with Ctrl+S\n";
 
 void helpBox(HWND owner, const std::wstring& text, UINT icon) {   // titled with the version
     std::wstring title = std::wstring(kAppName) + L" " QOQDIR_VERSION;
     MessageBoxW(owner, text.c_str(), title.c_str(), icon);
+}
+
+// Prints to a file or pipe (qoqdir -h > help.txt), else to the terminal it was typed in. False with neither (a
+// shortcut, Run): then the caller shows a box.
+bool printHelp(std::wstring text) {
+    for (size_t i = 0; (i = text.find(L'\n', i)) != std::wstring::npos; i += 2) text.insert(i, 1, L'\r');
+    DWORD n = 0;
+    HANDLE out = GetStdHandle(STD_OUTPUT_HANDLE);
+    DWORD type = out ? GetFileType(out) : FILE_TYPE_UNKNOWN;
+    if (type == FILE_TYPE_DISK || type == FILE_TYPE_PIPE) {
+        std::string utf8(size_t(WideCharToMultiByte(CP_UTF8, 0, text.c_str(), int(text.size()), nullptr, 0, nullptr, nullptr)), '\0');
+        WideCharToMultiByte(CP_UTF8, 0, text.c_str(), int(text.size()), utf8.data(), int(utf8.size()), nullptr, nullptr);
+        // PowerShell 7 closes the pipe at once for $h = qoqdir -h: then the terminal.
+        if (WriteFile(out, utf8.data(), DWORD(utf8.size()), &n, nullptr)) return true;
+    }
+    if (!AttachConsole(ATTACH_PARENT_PROCESS)) return false;
+    auto open = [](const wchar_t* name) {
+        return CreateFileW(name, GENERIC_READ | GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr,
+                           OPEN_EXISTING, 0, nullptr);
+    };
+    HANDLE con = open(L"CONOUT$"), in = open(L"CONIN$");
+    // cmd and PowerShell don't wait for a window program, so their prompt may be back already (cursor past column 0).
+    // Print below it, then send Enter for a new prompt after the help. Without it PowerShell 7 draws the next typed
+    // line over the help.
+    CONSOLE_SCREEN_BUFFER_INFO info{};
+    bool prompt = GetConsoleScreenBufferInfo(con, &info) && info.dwCursorPosition.X > 0;
+    if (prompt) text = L"\r\n" + text;
+    bool ok = WriteConsoleW(con, text.c_str(), DWORD(text.size()), &n, nullptr);
+    if (ok && prompt) {
+        INPUT_RECORD enter[2] = {};
+        for (int i = 0; i < 2; ++i) {   // pressed and let go
+            enter[i].EventType = KEY_EVENT;
+            enter[i].Event.KeyEvent = {i == 0, 1, VK_RETURN, 0, {L'\r'}, 0};
+        }
+        WriteConsoleInputW(in, enter, 2, &n);
+    }
+    CloseHandle(con);
+    CloseHandle(in);
+    FreeConsole();
+    return ok;
 }
 
 }  // namespace
@@ -106,11 +149,11 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int) {
     wchar_t sys[MAX_PATH];
     if (GetSystemDirectoryW(sys, MAX_PATH)) SetCurrentDirectoryW(sys);
 #ifndef QOQDIR_SELFTEST
-    if (cmd.selfTest) cmd.error = L"Unknown switch: --selftest";   // only qoqdir-test.exe has the self-test
+    if (cmd.selfTest) cmd.error = L"Unknown option: --selftest";   // only qoqdir-test.exe has the self-test
 #endif
-    if (cmd.help || !cmd.error.empty()) {   // there is no console, so the help is a small window
-        if (cmd.error.empty()) helpBox(nullptr, kCommandLine, MB_ICONINFORMATION);
-        else helpBox(nullptr, cmd.error + L"\n\n" + kCommandLine, MB_ICONWARNING);   // the mistake first
+    if (cmd.help || !cmd.error.empty()) {
+        std::wstring text = cmd.error.empty() ? kCommandLine : cmd.error + L"\n\n" + kCommandLine;   // the mistake first
+        if (!printHelp(text)) helpBox(nullptr, text, cmd.error.empty() ? MB_ICONINFORMATION : MB_ICONWARNING);
         return cmd.error.empty() ? 0 : 1;
     }
 

@@ -215,7 +215,7 @@ CommandLine parseCommandLine(const std::vector<std::wstring>& args) {
         // PowerShell takes "-t=" for a switch of its own: unquoted, it splits "-t=my.folder" at the dot and keeps
         // "-t=$HOME" as typed, so there the folder after "-t=" needs quotes (5.10).
         else if (arg.rfind(L"--tab=", 0) == 0 || arg.rfind(L"-t=", 0) == 0) addFolder(arg.substr(arg.find(L'=') + 1));
-        else cmd.error = L"Unknown switch: " + arg;
+        else cmd.error = L"Unknown option: " + arg;
         if (!cmd.error.empty()) break;
     }
     return cmd;

@@ -18,6 +18,15 @@ public class QoqdirHelp {
   [DllImport("user32.dll")] public static extern IntPtr GetDlgItem(IntPtr h, int id);
   [DllImport("user32.dll", CharSet=CharSet.Unicode)] static extern int GetDlgItemText(IntPtr h, int id, StringBuilder s, int n);
   [DllImport("user32.dll", CharSet=CharSet.Unicode)] static extern int GetWindowText(IntPtr h, StringBuilder s, int n);
+  [StructLayout(LayoutKind.Sequential, CharSet=CharSet.Unicode)] struct STARTUPINFO { public int cb; public string lpReserved, lpDesktop, lpTitle; public int dwX, dwY, dwXSize, dwYSize, dwXCountChars, dwYCountChars, dwFillAttribute, dwFlags; public short wShowWindow, cbReserved2; public IntPtr lpReserved2, hStdInput, hStdOutput, hStdError; }
+  [StructLayout(LayoutKind.Sequential)] struct PROCESS_INFORMATION { public IntPtr hProcess, hThread; public int dwProcessId, dwThreadId; }
+  [DllImport("kernel32.dll", CharSet=CharSet.Unicode)] static extern bool CreateProcess(string app, StringBuilder cmd, IntPtr pa, IntPtr ta, bool inherit, uint flags, IntPtr env, string dir, ref STARTUPINFO si, out PROCESS_INFORMATION pi);
+  [DllImport("kernel32.dll")] static extern bool CloseHandle(IntPtr h);
+  // Runs a command line with no console (DETACHED_PROCESS): what it starts has no terminal in reach, as from a shortcut.
+  public static void StartDetached(string cmd) {
+    var si = new STARTUPINFO(); si.cb = Marshal.SizeOf(si); PROCESS_INFORMATION pi;
+    if (CreateProcess(null, new StringBuilder(cmd), IntPtr.Zero, IntPtr.Zero, false, 8, IntPtr.Zero, null, ref si, out pi)) { CloseHandle(pi.hThread); CloseHandle(pi.hProcess); }
+  }
   // A message box's text (its static control, id 0xFFFF), and its title.
   public static string Text(IntPtr box) { var s = new StringBuilder(8192); GetDlgItemText(box, 0xFFFF, s, s.Capacity); return s.ToString(); }
   public static string Title(IntPtr box) { var s = new StringBuilder(256); GetWindowText(box, s, s.Capacity); return s.ToString(); }
@@ -52,9 +61,19 @@ function TitleAfterStart([string[]]$argList) {   # starts the copy, reads its wi
   [void]$p.CloseMainWindow(); [void]$p.WaitForExit(5000)
   $title
 }
-function HelpExitCode([string]$arg) {   # starts the copy with a help/error switch, closes its help box
-  $p = Start-Process $copy -ArgumentList $arg -PassThru
+function HelpOutput([string]$arg) {   # runs the copy with its output going to a pipe, as in "qoqdir -h | more"
+  $si = New-Object Diagnostics.ProcessStartInfo $copy, $arg
+  $si.UseShellExecute = $false; $si.RedirectStandardOutput = $true; $si.StandardOutputEncoding = [Text.Encoding]::UTF8
+  $p = [Diagnostics.Process]::Start($si)
+  $text = $p.StandardOutput.ReadToEnd(); $p.WaitForExit()
+  @{ Text = $text; Code = $p.ExitCode }
+}
+function HelpBox([string]$arg) {   # starts the copy as a shortcut would, with no terminal to print in; closes its box
+  [QoqdirHelp]::StartDetached("cmd.exe /c start `"`" `"$copy`" $arg")   # a cmd with no console starts it
   Start-Sleep -Milliseconds 1500
+  $p = Get-Process | Where-Object { $_.Path -eq $copy } | Select-Object -First 1
+  if (-not $p) { return @{ Shown = $false; Code = 'none: it did not run' } }
+  [void]$p.Handle   # opened while it runs, so that its exit code can be read after it ends
   $box = [QoqdirHelp]::Dialog([uint32]$p.Id)
   $text = if ($box -ne [IntPtr]::Zero) { [QoqdirHelp]::Text($box) } else { '' }
   $title = if ($box -ne [IntPtr]::Zero) { [QoqdirHelp]::Title($box) } else { '' }
@@ -71,10 +90,12 @@ Check (Test-Path (Join-Path $dir 'Bookmarks') -PathType Container) 'a Bookmarks 
 $homeName = Split-Path ([Environment]::GetFolderPath('UserProfile')) -Leaf
 $title = TitleAfterStart @()
 Check ($title -eq $homeName) "no folders opens the home folder: '$title'"
-$r = HelpExitCode '--help'   # the switch F1's help names (-h and -? are the same: unit tests)
-Check ($r.Shown -and $r.Code -eq 0) "--help shows the help and exits with 0 (shown: $($r.Shown), exit code $($r.Code))"
-Check ($r.Text.StartsWith('qoqdir [switches] [folders...]') -and $r.Text -match '--tab="' -and $r.Title -match '^Qoqdir \d') `
-  "--help shows the command-line help, with the version in its title ('$($r.Title)')"
+$r = HelpOutput '--help'   # the switch F1's help names (-h and -? are the same: unit tests)
+Check ($r.Code -eq 0 -and $r.Text -match '^Qoqdir \d' -and $r.Text -match 'Usage: qoqdir \[options\]' -and $r.Text -match '--tab="folder path"') `
+  "--help writes the command-line help where its output goes (a pipe here) and exits with 0 (exit code $($r.Code))"
+$r = HelpOutput '-x'
+Check ($r.Code -eq 1 -and $r.Text.StartsWith('Unknown option: -x') -and $r.Text -match 'Usage: qoqdir') `
+  "-x writes the error, then the help, and exits with 1 (exit code $($r.Code))"
 # F1 in the window: posted to the file list as a key press would arrive (nothing global), then the box is closed.
 $p = Start-Process $copy -ArgumentList '--tab=C:\Users\Public' -PassThru
 Start-Sleep -Milliseconds 2000
@@ -88,9 +109,9 @@ Start-Sleep -Milliseconds 300
 [void]$p.CloseMainWindow(); [void]$p.WaitForExit(5000)
 Check ($text.StartsWith('Navigation') -and $text -match 'Refresh: F5' -and $text -match 'type qoqdir --help') `
   "F1 in the window shows the keys and points to qoqdir --help (shown: $($box -ne [IntPtr]::Zero))"
-$r = HelpExitCode '-x'
-Check ($r.Shown -and $r.Code -eq 1 -and $r.Text.StartsWith('Unknown switch: -x') -and $r.Text -match 'qoqdir \[switches\]') `
-  "-x shows the error with the command-line help and exits with 1 (shown: $($r.Shown), exit code $($r.Code))"
+$r = HelpBox '-x'
+Check ($r.Shown -and $r.Code -eq 1 -and $r.Text.StartsWith('Unknown option: -x') -and $r.Title -match '^Qoqdir \d') `
+  "with no terminal (as from a shortcut), -x shows the error and help in a box and exits with 1 (shown: $($r.Shown), exit code $($r.Code))"
 # A damaged qoqdir.ini: a number far off any screen gives the default (x + width must not overflow and stop it).
 Set-Content -Path $ini -Value "[Window]`r`nX=2147483000`r`nWidth=1000`r`nHeight=600"
 $title = TitleAfterStart @('--tab=C:\Users\Public')

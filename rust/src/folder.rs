@@ -227,7 +227,7 @@ pub fn parse_command_line(args: &[OsString]) -> CommandLine {
             match text.as_ref() {
                 "--selftest" => cmd.self_test = true,
                 "-h" | "-?" | "--help" => cmd.help = true,
-                _ => cmd.error = Some(format!("Unknown switch: {text}")),
+                _ => cmd.error = Some(format!("Unknown option: {text}")),
             }
         }
         if cmd.error.is_some() {
@@ -786,7 +786,7 @@ mod tests {
         assert!(parse_command_line(&[]).folders.is_empty());
         assert!(parse_command_line(&args(&["-h"])).help && parse_command_line(&args(&["-?"])).help);
         assert!(parse_command_line(&args(&["--selftest"])).self_test);
-        assert_eq!(parse_command_line(&args(&["-x"])).error.as_deref(), Some("Unknown switch: -x"));
+        assert_eq!(parse_command_line(&args(&["-x"])).error.as_deref(), Some("Unknown option: -x"));
         // A network folder comes out as itself, and a name that starts with "-" is a folder too.
         assert_eq!(parse_command_line(&args(&["--tab=\\\\nas\\share\\"])).folders.iter().map(text).collect::<Vec<_>>(), ["\\\\nas\\share"]);
         let dash = parse_command_line(&args(&["--tab=-h"]));

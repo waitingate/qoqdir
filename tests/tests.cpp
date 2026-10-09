@@ -136,7 +136,7 @@ int main() {
         CHECK(parseCommandLine({}).folders.empty());
         CHECK(parseCommandLine({L"-h"}).help && parseCommandLine({L"-?"}).help);
         CHECK(parseCommandLine({L"--selftest"}).selfTest);
-        CHECK_EQ(parseCommandLine({L"-x"}).error, L"Unknown switch: -x");
+        CHECK_EQ(parseCommandLine({L"-x"}).error, L"Unknown option: -x");
         // A network folder comes out as itself, and a name that starts with "-" is a folder too.
         CHECK_EQ(parseCommandLine({L"--tab=\\\\nas\\share\\"}).folders.at(0), L"\\\\nas\\share");
         CommandLine dash = parseCommandLine({L"--tab=-h"});

@@ -427,16 +427,16 @@ Keys are handled only for Qoqdir's own window. Dialogs opened from it
 (Properties, copy progress) keep their own keys.
 
 ### 5.10 Command line
-Switches start with `-`, and the folder switches take their folder after `=`.
+Options start with `-`, and the folder options take their folder after `=`.
 No console window appears.
 
 ```
-qoqdir [switches] [folders...]
+qoqdir [options] [folder ...]
 
   {folder}           open the folder in a tab (relative paths work: qoqdir .)
-  -t="{folder}"      the same, as a switch: -t="D:\logs"  -t="C:\My Files"
   --tab="{folder}"   the same: --tab="D:\logs"
-  -h, -?, --help     show the command-line help
+  -t="{folder}"      short for --tab=: -t="D:\logs"  -t="C:\My Files"
+  -h, --help, -?     print the command-line help
 ```
 
 - `-t=` and `--tab=` are the safe forms for scripts: all after `=` is the
@@ -458,15 +458,20 @@ qoqdir [switches] [folders...]
 - `qoqdir .` opens the terminal's current folder, and `D:` means `D:\`.
 - A folder that can't be opened still gets its tab, in the "not available" state
   (4.3). That helps with network drives that connect later.
-- `-h`, `-?` and `--help` show the command-line help in a small window titled
-  "Qoqdir" and the version, and exit with code 0. An unknown switch shows the
-  error ("Unknown switch: -x") above that help and exits with code 1.
-- The command-line help is for people who start Qoqdir from scripts and
-  shortcuts. In the same plain words, one fact a line: the forms by example, what
-  happens to the folders, the quoting rules (keep the quotes; don't end a quoted
-  folder with `\`; a drive as `D:`), that each run opens a new window and how a
-  script waits for it (`start /wait`, `Start-Process -Wait`), the exit codes, the
-  files next to the exe, and the switches.
+- `-h`, `--help` and `-?` print the command-line help and exit with 0. An
+  unknown option prints "Unknown option: -x" above the help and exits with 1.
+  The help goes to a file or pipe if the output is sent there, else to the
+  terminal it was typed in, else (shortcut, Run) to a box titled with the
+  version. cmd and PowerShell don't wait for a window program, so their prompt
+  can be back before the help. Then the help goes below it and Qoqdir sends the
+  terminal an Enter for a new prompt (without it PowerShell 7 draws the next
+  typed line over the help). No Enter when the cursor is at column 0, as in a
+  `.bat` file, which waits. PowerShell 7 closes the pipe at once for
+  `$h = qoqdir -h`, so a failed pipe write goes to the terminal. Checked by hand
+  in a pseudo console with cmd, PowerShell 5.1 and 7.6.
+- The command-line help is short, in plain words, at most 72 columns: version,
+  usage, options, examples, notes on quotes, scripts (a `.bat` file waits for
+  the window, PowerShell doesn't; exit codes) and the files next to the exe.
 - F1 shows the keys help over the window. It is short and in plain words. It
   lists the main keys of 5.9 in groups (navigation, tabs, files), the most
   helpful first in each: what Explorer users wouldn't guess (typing to filter,
@@ -480,7 +485,7 @@ qoqdir [switches] [folders...]
   line by example (`-t=`, then `--tab=`, each with a quoted folder: quotes are
   safe in every shell) and "More detail: type qoqdir --help in a terminal".
 - `--selftest` runs the self-test (7.2) in `qoqdir-test.exe`; the exe users get
-  treats it as an unknown switch. It isn't in the help.
+  treats it as an unknown option. It isn't in the help.
 
 ### 5.11 Settings (`qoqdir.ini`)
 Saved when the window closes and loaded at start:
@@ -514,7 +519,7 @@ At least these, with concrete examples:
   select the folder you came from).
 - Command line: plain folders, `--tab=` and `-t=` (a name that starts with `-`
   too), duplicates removed (letter case, trailing backslash), `.`, `-h`, `-?`,
-  `--selftest`; unknown switches (`-t` without `=` among them) are errors.
+  `--selftest`; unknown options (`-t` without `=` among them) are errors.
 - Sorting: folders first, natural number order, each column both ways, ties by
   name, Type by the shown type text.
 - Filtering: substring, ignoring case, wildcards (`*.pdf` must not match
@@ -672,11 +677,16 @@ Run on a copy of the exe in a temp folder:
   After closing it, `qoqdir.ini` holds no tabs or paths, and a `Bookmarks` folder
   exists next to the exe.
 - No arguments: the home folder is shown.
-- `-h` shows the help and exits with code 0. `-x` shows the error with the help
+- With its output sent to a pipe, `--help` writes the command-line help (the
+  version first) and exits with code 0; `-x` writes the error, then the help, and
+  exits with code 1.
+- Started with no terminal in reach (by a cmd that has no console, as from a
+  shortcut), `-x` shows the error and the help in a box titled with the version,
   and exits with code 1.
-- `--help` shows the command-line help, with the version in its title, and the
-  error of `-x` comes above it. F1 in the window (a key press posted to the file
-  list, nothing global) shows the keys help, which points to `qoqdir --help`.
+- F1 in the window (a key press posted to the file list, nothing global) shows
+  the keys help, which points to `qoqdir --help`.
+- Printing in a terminal itself (the prompt and the Enter, 5.10) is checked by
+  hand in a pseudo console; these checks don't type into a terminal.
 - With a damaged `qoqdir.ini` (a window position far off any screen) it starts
   with the defaults.
 - From a folder it can't write to (as Program Files is for most users), it runs,

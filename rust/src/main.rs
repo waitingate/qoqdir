@@ -14,7 +14,16 @@ mod util;
 
 use std::ffi::OsString;
 
-use windows::Win32::Foundation::HWND;
+use windows::Win32::Foundation::{CloseHandle, GENERIC_READ, GENERIC_WRITE, HWND};
+use windows::Win32::Storage::FileSystem::{
+    CreateFileW, FILE_SHARE_READ, FILE_SHARE_WRITE, FILE_TYPE_DISK, FILE_TYPE_PIPE, FILE_TYPE_UNKNOWN, GetFileType,
+    OPEN_EXISTING, WriteFile,
+};
+use windows::Win32::System::Console::{
+    ATTACH_PARENT_PROCESS, AttachConsole, CONSOLE_SCREEN_BUFFER_INFO, FreeConsole, GetConsoleScreenBufferInfo,
+    GetStdHandle, INPUT_RECORD, INPUT_RECORD_0, KEY_EVENT, KEY_EVENT_RECORD, KEY_EVENT_RECORD_0, STD_OUTPUT_HANDLE,
+    WriteConsoleInputW, WriteConsoleW,
+};
 use windows::Win32::System::Diagnostics::Debug::{SEM_FAILCRITICALERRORS, SetErrorMode};
 use windows::Win32::System::LibraryLoader::{GetModuleHandleW, LOAD_LIBRARY_SEARCH_SYSTEM32, SetDefaultDllDirectories};
 use windows::Win32::System::Ole::{OleFlushClipboard, OleInitialize, OleUninitialize};
@@ -23,6 +32,7 @@ use windows::Win32::UI::Controls::{
     ICC_BAR_CLASSES, ICC_LISTVIEW_CLASSES, ICC_STANDARD_CLASSES, ICC_TAB_CLASSES, ICC_TREEVIEW_CLASSES,
     INITCOMMONCONTROLSEX, InitCommonControlsEx,
 };
+use windows::Win32::UI::Input::KeyboardAndMouse::VK_RETURN;
 use windows::Win32::UI::WindowsAndMessaging::{
     DispatchMessageW, GetMessageW, MB_ICONINFORMATION, MB_ICONWARNING, MESSAGEBOX_STYLE, MSG, MessageBoxW,
     TranslateMessage,
@@ -68,39 +78,47 @@ Command line
   Or: qoqdir --tab=\"D:\\logs\"
   More detail: type qoqdir --help in a terminal";
 
-// qoqdir --help (or -h, -?): the command line in full, for people who start Qoqdir from scripts and shortcuts.
-const COMMAND_LINE: &str = "qoqdir [switches] [folders...]
+// qoqdir --help, -h, -?: printed in a terminal, so the columns line up.
+const COMMAND_LINE: &str = concat!(
+    "Qoqdir ",
+    env!("CARGO_PKG_VERSION"),
+    "
 
-  qoqdir \"D:\\logs\"
-  qoqdir -t=\"D:\\logs\" -t=\"D:\\My Files\"
-  qoqdir --tab=\"D:\\logs\"
+Usage: qoqdir [options] [folder path ...]
 
-Each folder opens in a tab. The first one is shown.
-The same folder twice gives one tab.
-With no folders, the home folder opens.
-. is the current folder. D: means D:\\.
-A folder that can't be opened still gets a tab,
-marked \"not available\".
+Opens each folder in a tab and shows the first one.
+With no folder, opens your home folder.
 
-Quotes
-  Keep them: PowerShell needs them after -t=.
-  Don't end a quoted folder with \\: write \"D:\\My Files\",
-  not \"D:\\My Files\\\". For a drive, write D: alone.
+Options:
+  -t=\"folder path\", --tab=\"folder path\"   open the folder in a tab
+  -h, --help, -?                          show this help
 
-Windows and scripts
+Examples:
+  qoqdir .                               open the current folder
+  qoqdir -t=\"D:\\logs\"                    open D:\\logs
+  qoqdir -t=\"D:\\logs\" -t=\"D:\\My Files\"   open two tabs
+  qoqdir \"D:\\logs\"                       same as -t=\"D:\\logs\"
+
+Notes:
+  Always quote folders. PowerShell needs the quotes after -t=.
+  Don't end a quoted folder with a backslash: use \"D:\\My Files\",
+  not \"D:\\My Files\\\". For a drive, use \"D:\" (not \"D:\\\").
+  A folder that can't be opened yet (like a network drive that
+  is not connected) still gets a tab.
+
+Scripts:
   Each run opens a new window.
-  To wait until it closes: start /wait in cmd,
-  Start-Process -Wait in PowerShell.
-  Exit code: 0, or 1 for an unknown switch.
+  A .bat file waits until the window is closed. PowerShell doesn't.
+  Don't wait in a .bat file:  start \"\" qoqdir \"D:\\logs\"
+  Wait in PowerShell:         Start-Process qoqdir \"D:\\logs\" -Wait
+  Exit code: 0 = OK, 1 = error (such as an unknown option).
 
-Files next to qoqdir.exe
-  qoqdir.ini: window size, sort and columns
-  Bookmarks: shortcuts shown at the top of the tree
-  Bookmarks\\Tabs: the tabs Ctrl+S saved
-
-Switches
-  -t=\"{folder}\", --tab=\"{folder}\": open in a tab
-  -h, -?, --help: this help";
+Files next to qoqdir.exe:
+  qoqdir.ini       window size, sort order, column widths
+  Bookmarks\\       shortcuts shown at the top of the tree
+  Bookmarks\\Tabs\\  tabs saved with Ctrl+S
+"
+);
 
 /// The app's name: window title, settings file, logs. (The exe name is set in Cargo.toml.)
 pub const APP_NAME: &str = "Qoqdir";
@@ -109,6 +127,57 @@ pub const APP_NAME: &str = "Qoqdir";
 fn help_box(owner: Option<HWND>, text: &str, icon: MESSAGEBOX_STYLE) {
     let title = format!("{APP_NAME} {}", env!("CARGO_PKG_VERSION"));
     unsafe { MessageBoxW(owner, pcwstr(&wide(text)), pcwstr(&wide(title)), icon) };
+}
+
+/// Prints to a file or pipe (qoqdir -h > help.txt), else to the terminal it was typed in. False with neither (a
+/// shortcut, Run): then the caller shows a box.
+fn print_help(text: &str) -> bool {
+    let text = text.replace('\n', "\r\n");
+    unsafe {
+        let out = GetStdHandle(STD_OUTPUT_HANDLE).unwrap_or_default();
+        let kind = if out.is_invalid() { FILE_TYPE_UNKNOWN } else { GetFileType(out) };
+        // PowerShell 7 closes the pipe at once for $h = qoqdir -h: then the terminal.
+        if (kind == FILE_TYPE_DISK || kind == FILE_TYPE_PIPE) && WriteFile(out, Some(text.as_bytes()), None, None).is_ok() {
+            return true;
+        }
+        if AttachConsole(ATTACH_PARENT_PROCESS).is_err() {
+            return false;
+        }
+        let open = |name: &str| {
+            let access = (GENERIC_READ | GENERIC_WRITE).0;
+            let share = FILE_SHARE_READ | FILE_SHARE_WRITE;
+            CreateFileW(pcwstr(&wide(name)), access, share, None, OPEN_EXISTING, Default::default(), None).unwrap_or_default()
+        };
+        let (con, input) = (open("CONOUT$"), open("CONIN$"));
+        // cmd and PowerShell don't wait for a window program, so their prompt may be back already (cursor past
+        // column 0). Print below it, then send Enter for a new prompt after the help. Without it PowerShell 7 draws
+        // the next typed line over the help.
+        let mut info = CONSOLE_SCREEN_BUFFER_INFO::default();
+        let prompt = GetConsoleScreenBufferInfo(con, &mut info).is_ok() && info.dwCursorPosition.X > 0;
+        let text: Vec<u16> = if prompt { "\r\n" } else { "" }.encode_utf16().chain(text.encode_utf16()).collect();
+        let ok = WriteConsoleW(con, &text, None, None).is_ok();
+        if ok && prompt {
+            let key = |down: bool| INPUT_RECORD {
+                EventType: KEY_EVENT as u16,
+                Event: INPUT_RECORD_0 {
+                    KeyEvent: KEY_EVENT_RECORD {
+                        bKeyDown: down.into(),
+                        wRepeatCount: 1,
+                        wVirtualKeyCode: VK_RETURN.0,
+                        wVirtualScanCode: 0,
+                        uChar: KEY_EVENT_RECORD_0 { UnicodeChar: u16::from(b'\r') },
+                        dwControlKeyState: 0,
+                    },
+                },
+            };
+            let mut n = 0;
+            let _ = WriteConsoleInputW(input, &[key(true), key(false)], &mut n); // pressed and let go
+        }
+        let _ = CloseHandle(con);
+        let _ = CloseHandle(input);
+        let _ = FreeConsole();
+        ok
+    }
 }
 
 /// F1's help box: the main keys (qoqdir --help shows the command line).
@@ -135,13 +204,15 @@ fn main() {
     }
     #[cfg(not(feature = "selftest"))]
     if cmd.self_test {
-        cmd.error = Some("Unknown switch: --selftest".into()); // only a build with the selftest feature has it
+        cmd.error = Some("Unknown option: --selftest".into()); // only a build with the selftest feature has it
     }
     if cmd.help || cmd.error.is_some() {
-        // There is no console, so the help is a small window, with the mistake first if there was one.
-        match &cmd.error {
-            Some(error) => help_box(None, &format!("{error}\n\n{COMMAND_LINE}"), MB_ICONWARNING),
-            None => help_box(None, COMMAND_LINE, MB_ICONINFORMATION),
+        let text = match &cmd.error {
+            Some(error) => format!("{error}\n\n{COMMAND_LINE}"), // the mistake first
+            None => COMMAND_LINE.to_string(),
+        };
+        if !print_help(&text) {
+            help_box(None, &text, if cmd.error.is_some() { MB_ICONWARNING } else { MB_ICONINFORMATION });
         }
         std::process::exit(if cmd.error.is_some() { 1 } else { 0 });
     }
