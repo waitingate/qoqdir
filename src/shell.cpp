@@ -440,7 +440,18 @@ std::optional<std::wstring> shortcutTarget(const std::wstring& lnkPath, bool* fo
     WIN32_FIND_DATAW stored{};            // the target as it was when the shortcut was made
     if (link->GetPath(target.data(), int(target.size()), &stored, 0) == S_OK && target[0]) {
         *folder = (stored.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0;
-        return target.substr(0, target.find(L'\0'));
+        target.resize(target.find(L'\0'));
+        // A target gone from a local drive (a flash drive on another letter, a pair moved together) is looked for
+        // where the shortcut says it is relative to itself: Windows stores that for one made on the target's drive.
+        // No search, no box, and nothing on the network: a server that is off would freeze a drag over the tree.
+        bool onDrive = target.size() >= 3 && target[1] == L':';
+        if (onDrive && GetDriveTypeW(target.substr(0, 3).c_str()) != DRIVE_REMOTE &&
+            GetFileAttributesW(target.c_str()) == INVALID_FILE_ATTRIBUTES &&
+            link->Resolve(nullptr, SLR_NO_UI | SLR_NOSEARCH | SLR_NOTRACK | SLR_NOLINKINFO | SLR_NOUPDATE) == S_OK) {
+            std::wstring found(32768, L'\0');
+            if (link->GetPath(found.data(), int(found.size()), nullptr, 0) == S_OK) target = found.c_str();
+        }
+        return target;
     }
     // No path: This PC is the one such target this app can show itself (as ""); Windows opens the rest.
     PIDLIST_ABSOLUTE p = nullptr;

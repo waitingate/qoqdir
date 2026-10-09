@@ -12,7 +12,8 @@ use windows::Win32::Foundation::{
     WPARAM,
 };
 use windows::Win32::Storage::FileSystem::{
-    FILE_ATTRIBUTE_DIRECTORY, FILE_ATTRIBUTE_NORMAL, FILE_FLAGS_AND_ATTRIBUTES, SearchPathW, WIN32_FIND_DATAW,
+    FILE_ATTRIBUTE_DIRECTORY, FILE_ATTRIBUTE_NORMAL, FILE_FLAGS_AND_ATTRIBUTES, GetDriveTypeW, GetFileAttributesW,
+    INVALID_FILE_ATTRIBUTES, SearchPathW, WIN32_FIND_DATAW,
 };
 use windows::Win32::System::Com::{
     BIND_OPTS, CLSCTX_ALL, CLSCTX_INPROC_SERVER, COINIT_APARTMENTTHREADED, COINIT_DISABLE_OLE1DDE, CoCreateInstance,
@@ -28,6 +29,7 @@ use windows::Win32::System::Ole::{
 };
 use windows::Win32::System::SystemServices::MODIFIERKEYS_FLAGS;
 use windows::Win32::System::Threading::{CreateEventW, INFINITE, SetEvent};
+use windows::Win32::System::WindowsProgramming::DRIVE_REMOTE;
 use windows::Win32::UI::Controls::HIMAGELIST;
 use windows::Win32::UI::Input::KeyboardAndMouse::{VK_CONTROL, VK_SHIFT};
 use windows::Win32::UI::Shell::Common::ITEMIDLIST;
@@ -37,8 +39,8 @@ use windows::Win32::UI::Shell::{
     FOF_NOCONFIRMATION, FOF_WANTNUKEWARNING, FOFX_RECYCLEONDELETE, FOLDERID_ComputerFolder, FileOperation,
     GCS_VERBW, IContextMenu, IContextMenu2, IContextMenu3, IDropTargetHelper, IFileOperation,
     IFileOperationProgressSink, IFileSystemBindData, IFileSystemBindData_Impl, ILFindLastID, ILIsEqual, IShellFolder,
-    IShellItem, IShellLinkW, KF_FLAG_DEFAULT, STR_FILE_SYS_BIND_DATA,
-    SEE_MASK_FLAG_NO_UI, SHBindToParent, SHCNE_ATTRIBUTES, SHCNE_CREATE, SHCNE_DELETE, SHCNE_DRIVEADD,
+    IShellItem, IShellLinkW, KF_FLAG_DEFAULT, STR_FILE_SYS_BIND_DATA, SLR_NO_UI, SLR_NOLINKINFO, SLR_NOSEARCH,
+    SLR_NOTRACK, SLR_NOUPDATE, SEE_MASK_FLAG_NO_UI, SHBindToParent, SHCNE_ATTRIBUTES, SHCNE_CREATE, SHCNE_DELETE, SHCNE_DRIVEADD,
     SHCNE_DRIVEREMOVED, SHCNE_MEDIAINSERTED, SHCNE_MEDIAREMOVED, SHCNE_MKDIR, SHCNE_RENAMEFOLDER,
     SHCNE_RENAMEITEM, SHCNE_RMDIR, SHCNE_UPDATEDIR, SHCNE_UPDATEITEM, SHCNRF_InterruptLevel, SHCNRF_NewDelivery,
     SHCNRF_ShellLevel, SHChangeNotification_Lock, SHChangeNotification_Unlock, SHChangeNotifyDeregister,
@@ -569,7 +571,9 @@ pub fn drag_out(owner: HWND, dir: &Location, items: &[Item]) {
 // ---------------------------------------------------------------- shortcuts
 
 /// A shortcut's stored target (normalize it before use): a path, This PC, or nothing (a web link, a library),
-/// and whether it was a folder. Reads only the .lnk file, never the target, so a server that is off costs nothing.
+/// and whether it was a folder. Reads the .lnk file; a target gone from a local drive is looked for where the
+/// shortcut says it is relative to itself (a flash drive on another letter). Nothing on the network is touched:
+/// a server that is off costs nothing.
 pub fn shortcut_target(lnk: &Path) -> Option<(Location, bool)> {
     unsafe {
         let link: IShellLinkW = CoCreateInstance(&ShellLink, None, CLSCTX_INPROC_SERVER).ok()?;
@@ -579,6 +583,17 @@ pub fn shortcut_target(lnk: &Path) -> Option<(Location, bool)> {
         let mut stored = WIN32_FIND_DATAW::default(); // the target as it was when the shortcut was made
         if link.GetPath(&mut target, &mut stored, 0).is_ok() && target[0] != 0 {
             let folder = stored.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY.0 != 0;
+            // A target gone from a local drive (a flash drive on another letter, a pair moved together) is looked for
+            // where the shortcut says it is relative to itself: Windows stores that for one made on the target's drive.
+            // No search, no box, and nothing on the network: a server that is off would freeze a drag over the tree.
+            let on_drive = target[1] == u16::from(b':') && target[2] == u16::from(b'\\');
+            if on_drive
+                && GetDriveTypeW(pcwstr(&[target[0], target[1], target[2], 0])) != DRIVE_REMOTE
+                && GetFileAttributesW(pcwstr(&target)) == INVALID_FILE_ATTRIBUTES
+                && link.Resolve(HWND::default(), (SLR_NO_UI | SLR_NOSEARCH | SLR_NOTRACK | SLR_NOLINKINFO | SLR_NOUPDATE).0 as u32).is_ok()
+            {
+                let _ = link.GetPath(&mut target, std::ptr::null_mut(), 0); // the target where it is now
+            }
             return Some((Location::Dir(PathBuf::from(from_wide(&target))), folder));
         }
         // No path: This PC is the one such target this app can show itself; Windows opens the rest.

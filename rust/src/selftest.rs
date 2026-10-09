@@ -1471,6 +1471,25 @@ impl App {
             a.at(&dir()) && a.status_message().contains("no-such-folder")
         });
         s.add(
+            "a bookmark whose target moved along with it (a flash drive on a new letter) opens the target where it is \
+             now (5.6)",
+            |a| {
+                let _ = std::fs::create_dir_all(p("pack\\target"));
+                make_shortcut(&p("pack\\go.lnk"), p("pack\\target")); // on the target's drive: Windows stores the way to it
+                let _ = std::fs::rename(p("pack"), p("moved"));
+                a.open_shortcut(p("moved\\go.lnk"), false);
+            },
+            |a| a.at(&p("moved\\target")),
+        );
+        s.add("(back to the test folder)", reopen_home, move |a| a.at(&dir()));
+        s.add(
+            "(remove them)",
+            |_| {
+                let _ = std::fs::remove_dir_all(p("moved"));
+            },
+            |_| !p("moved").exists(),
+        );
+        s.add(
             "a shortcut to This PC opens This PC here (not in Explorer)",
             |a| {
                 make_shortcut(&p("pc.lnk"), "");

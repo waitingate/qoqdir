@@ -337,6 +337,11 @@ Back, Forward and Up are disabled when they can't do anything.
   (5.4): a folder opens in this tab, anything else is opened by Windows, and an
   unreachable folder gives the status message, never a Windows popup.
   Middle-click (or Open in new tab) opens a folder in a new background tab.
+- A shortcut made on the same drive as its target also remembers the way from
+  itself to the target (Windows stores that). When the full path is gone from a
+  local drive, that way is tried, so bookmarks and saved tabs on a flash drive
+  keep working when the drive gets another letter, or when the shortcut and its
+  target move together. Nothing on the network is checked (4.4).
 - The Bookmarks folder is created if missing. If it can't be created, the app
   still runs.
 
@@ -682,6 +687,8 @@ result:
     too, after the subfolders, with the shortcut's own icon and no expand arrow.
 62. With the list elsewhere, `later` deleted and `one` read again (as after a
     command from a node's own menu): the tree shows `deep`, `new`, `sub`.
+63. A shortcut to `pack\target` made in `pack`, after `pack` is renamed `moved`:
+    opening it shows `moved\target`.
 
 ### 7.3 Command-line checks
 Run on a copy of the exe in a temp folder:

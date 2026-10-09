@@ -58,7 +58,9 @@ void dragOut(HWND owner, const std::wstring& dir, const std::vector<Item>& items
 // ---------------------------------------------------------------- shortcuts
 
 // A shortcut's stored target: a path, "" for This PC, or nothing (a web link, a library); 'folder' if it
-// was one. Reads only the .lnk file, never the target, so a server that is off costs nothing.
+// was one. Reads the .lnk file; a target gone from a local drive is looked for where the shortcut says it is
+// relative to itself (a flash drive on another letter). Nothing on the network is touched: a server that is
+// off costs nothing.
 std::optional<std::wstring> shortcutTarget(const std::wstring& lnkPath, bool* folder);
 // Saved tabs: shortcuts in 'dir' (Bookmarks\Tabs), numbered in tab order ("1 logs.lnk"); "" is This PC.
 // Saving replaces the shortcuts there and leaves anything else. Worker thread: a folder may be on a server

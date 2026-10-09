@@ -866,6 +866,24 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
         });
     add(L"(the status bar names the missing folder, and the tab stays put)", nullptr,
         [=, this] { return at(dir) && statusMessage().find(L"no-such-folder") != std::wstring::npos; });
+    add(L"a bookmark whose target moved along with it (a flash drive on a new letter) opens the target where it is "
+        L"now (5.6)",
+        [=, this] {
+            CreateDirectoryW(path(L"pack").c_str(), nullptr);
+            CreateDirectoryW(path(L"pack\\target").c_str(), nullptr);
+            makeShortcut(path(L"pack\\go.lnk"), path(L"pack\\target"));   // on the target's drive: Windows stores the way to it
+            MoveFileW(path(L"pack").c_str(), path(L"moved").c_str());
+            openShortcut(path(L"moved\\go.lnk"), false);
+        },
+        [=, this] { return at(path(L"moved\\target")); });
+    backHome(L"(back to the test folder)");
+    add(L"(remove them)",
+        [=, this] {
+            DeleteFileW(path(L"moved\\go.lnk").c_str());
+            RemoveDirectoryW(path(L"moved\\target").c_str());
+            RemoveDirectoryW(path(L"moved").c_str());
+        },
+        [=, this] { return !exists(path(L"moved")); });
     add(L"a shortcut to This PC opens This PC here (not in Explorer)",
         [=, this] {
             makeShortcut(path(L"pc.lnk"), L"");
