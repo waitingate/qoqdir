@@ -68,7 +68,7 @@ rename that folder.
 | F2 | rename |
 | Ctrl+Shift+N | new folder |
 | Ctrl+C / Ctrl+X / Ctrl+V | copy / cut / paste |
-| Alt+Enter | properties |
+| Alt+Enter | properties (of the folder when nothing is selected) |
 | Esc | clear the filter |
 | F1 | the main keys |
 

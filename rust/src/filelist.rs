@@ -209,6 +209,14 @@ impl FileList {
     pub fn has_folder(&self, name: &OsStr) -> bool {
         self.model.borrow().items.iter().any(|it| it.is_dir() && equal_no_case(&it.name, name))
     }
+    /// The subfolders' names (not the hidden ones), sorted: what the tree shows.
+    pub fn subfolders(&self) -> Vec<OsString> {
+        let m = self.model.borrow();
+        let hidden = |it: &Item| it.attrs & FILE_ATTRIBUTE_HIDDEN.0 != 0;
+        let mut names: Vec<OsString> = m.items.iter().filter(|it| it.is_dir() && !hidden(it)).map(|it| it.name.clone()).collect();
+        names.sort();
+        names
+    }
     /// The item at a row, as a location of its own (for shell commands).
     pub fn item_location(&self, row: usize) -> Option<Location> {
         let m = self.model.borrow();

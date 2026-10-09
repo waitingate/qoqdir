@@ -75,7 +75,7 @@ const wchar_t kCommandLine[] =
     L"  Each run opens a new window.\n"
     L"  A .bat file waits until the window is closed. PowerShell doesn't.\n"
     L"  Don't wait in a .bat file:  start \"\" qoqdir \"D:\\logs\"\n"
-    L"  Wait in PowerShell:         Start-Process qoqdir \"D:\\logs\" -Wait\n"
+    L"  Wait in PowerShell:         Start-Process qoqdir '\"D:\\logs\"' -Wait\n"
     L"  Exit code: 0 = OK, 1 = error (such as an unknown option).\n"
     L"\n"
     L"Files next to qoqdir.exe:\n"

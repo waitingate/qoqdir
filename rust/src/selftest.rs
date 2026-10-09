@@ -1852,6 +1852,28 @@ impl App {
             move |a| a.node_texts(a.tree_child(new_node(a))) == "inside",
         );
         s.add(
+            "(open Bookmarks\\one in the list)",
+            |a| a.open(Location::dir(p("Bookmarks\\one")), Nav::New, ViewState::default()),
+            |a| a.at(&p("Bookmarks\\one")),
+        );
+        s.add(
+            "a subfolder made in the folder shown shows up in the tree by itself: its open node is read again (5.5)",
+            |_| {
+                let _ = std::fs::create_dir(p("Bookmarks\\one\\later"));
+            },
+            |a| a.node_texts(a.tree_child(a.tree_child(a.tree_root()))) == "deep,later,new",
+        );
+        s.home("(back to the test folder)");
+        s.add(
+            "a folder deleted while the list shows another leaves the tree once its parent is read again, as it is when a \
+             node's own menu closes",
+            |a| {
+                let _ = std::fs::remove_dir(p("Bookmarks\\one\\later"));
+                a.tree.refresh_folder(&Location::dir(p("Bookmarks\\one")));
+            },
+            |a| a.node_texts(a.tree_child(a.tree_child(a.tree_root()))) == "deep,new",
+        );
+        s.add(
             "This PC in the tree takes no drop",
             |a| {
                 let data = data_object_at(a.wnd, &Location::dir(p("file1.txt")));

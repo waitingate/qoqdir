@@ -109,7 +109,7 @@ Scripts:
   Each run opens a new window.
   A .bat file waits until the window is closed. PowerShell doesn't.
   Don't wait in a .bat file:  start \"\" qoqdir \"D:\\logs\"
-  Wait in PowerShell:         Start-Process qoqdir \"D:\\logs\" -Wait
+  Wait in PowerShell:         Start-Process qoqdir '\"D:\\logs\"' -Wait
   Exit code: 0 = OK, 1 = error (such as an unknown option).
 
 Files next to qoqdir.exe:

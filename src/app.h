@@ -89,9 +89,9 @@ private:
     void goBack();
     void goForward();
     void goUp();
-    void refresh(ViewState view = {});
-    // F5 and the Refresh button: the list and the tree (5.5), and the status bar says so.
-    void refreshAll() { refresh(); tree_.refresh(); setMessage(L"Refreshed"); }
+    bool refresh(ViewState view = {});   // false: a load was in progress, so none was started
+    // F5 and the Refresh button: the list (unless it is loading already) and the tree (5.5); the status bar says so.
+    void refreshAll() { bool list = refresh(); tree_.refresh(); if (list) setMessage(L"Refreshed"); }
     void goToTyped();
     void activate(bool inNewTab);   // Enter / double-click on the selection
     void openShortcut(const std::wstring& path, bool inNewTab);

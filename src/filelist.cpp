@@ -93,6 +93,14 @@ bool FileList::hasFolder(const std::wstring& name) const {
     return std::any_of(items_.begin(), items_.end(), [&](const Item& it) { return it.isDir() && samePath(it.name, name); });
 }
 
+std::vector<std::wstring> FileList::subfolders() const {
+    std::vector<std::wstring> names;
+    for (const Item& it : items_)
+        if (it.isDir() && !(it.attrs & FILE_ATTRIBUTE_HIDDEN)) names.push_back(it.name);
+    std::sort(names.begin(), names.end());
+    return names;
+}
+
 std::vector<int> FileList::selection() const {
     std::vector<int> rows;
     for (int i = ListView_GetNextItem(lv_, -1, LVNI_SELECTED); i >= 0; i = ListView_GetNextItem(lv_, i, LVNI_SELECTED))

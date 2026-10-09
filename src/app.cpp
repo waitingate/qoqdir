@@ -15,7 +15,7 @@ namespace {
 enum : int { ID_BACK = 100, ID_FORWARD, ID_UP, ID_ADDRESS, ID_FILTER, ID_TABS, ID_PLUS, ID_TREE, ID_LIST, ID_STATUS, ID_REFRESH };
 enum : UINT {
     WM_APP_LOADED = WM_APP + 1, WM_APP_CHANGED, WM_APP_CLOSETAB, WM_APP_RENAME, WM_APP_ICONS, WM_APP_TREE,
-    WM_APP_MIDDLECLICK, WM_APP_TABS_SAVED, WM_APP_TABS_READ, WM_APP_PRESSTAB, WM_APP_DRAGTAB
+    WM_APP_MIDDLECLICK, WM_APP_TABS_SAVED, WM_APP_TABS_READ, WM_APP_PRESSTAB, WM_APP_DRAGTAB, WM_APP_TREE_ICONS
 };
 
 constexpr size_t kMaxHistory = 100;
@@ -151,7 +151,7 @@ bool App::create(HINSTANCE instance, const CommandLine& cmd, bool useSettings) {
     exe.resize(GetModuleFileNameW(nullptr, exe.data(), DWORD(exe.size())));
     std::wstring bookmarks = joinPath(useSettings ? parentPath(exe) : cmd.folders.at(0), L"Bookmarks");
     CreateDirectoryW(bookmarks.c_str(), nullptr);   // fails harmlessly if it exists
-    tree_.create(wnd_, ID_TREE, WM_APP_TREE, WM_APP_ICONS, bookmarks);
+    tree_.create(wnd_, ID_TREE, WM_APP_TREE, WM_APP_TREE_ICONS, bookmarks);
     list_.create(wnd_, ID_LIST);
     status_ = make(STATUSCLASSNAMEW, L"", SBARS_SIZEGRIP, 0, ID_STATUS);
 
@@ -357,11 +357,17 @@ LRESULT App::onMessage(UINT msg, WPARAM wp, LPARAM lp) {
         acknowledgeChange(wp, lp);
         queueRefresh();
         return 0;
-    case WM_APP_ICONS: {
+    case WM_APP_ICONS: {   // the shown folder's own icons (a late batch for a folder no longer shown is of no use)
         std::unique_ptr<IconBatch> batch(reinterpret_cast<IconBatch*>(lp));
-        rememberIcons(*batch);
-        if (samePath(list_.dir(), batch->dir)) InvalidateRect(list_.hwnd(), nullptr, FALSE);
-        tree_.setIcons(*batch);   // bookmark shortcuts get their own icons the same way
+        if (samePath(list_.dir(), batch->dir)) {
+            rememberIcons(*batch);
+            InvalidateRect(list_.hwnd(), nullptr, FALSE);
+        }
+        return 0;
+    }
+    case WM_APP_TREE_ICONS: {   // bookmark shortcuts get their own icons the same way
+        std::unique_ptr<IconBatch> batch(reinterpret_cast<IconBatch*>(lp));
+        tree_.setIcons(*batch);
         return 0;
     }
     case WM_APP_TREE: {
@@ -615,6 +621,7 @@ void App::onContextMenu(HWND from, POINT pt) {
             else return false;
             return true;
         });
+        tree_.refreshFolder(parentPath(path));   // a folder deleted from its own menu leaves the tree
     }
 }
 
@@ -693,8 +700,10 @@ bool App::onKey(const Key& key) {
     if (alt && k == VK_LEFT) { goBack(); return true; }
     if (alt && k == VK_RIGHT) { goForward(); return true; }
     if (alt && k == VK_UP) { goUp(); return true; }
-    if (alt && k == VK_RETURN && focus == list) {
-        invokeVerb(wnd_, itemMenu(wnd_, list_.dir(), list_.selectedItems()).get(), "properties");
+    if (alt && k == VK_RETURN && focus == list) {   // the selection's properties, or with nothing selected the folder's own
+        std::vector<Item> items = list_.selectedItems();
+        Com<IContextMenu> menu = items.empty() ? itemMenu(wnd_, list_.dir()) : itemMenu(wnd_, list_.dir(), items);
+        invokeVerb(wnd_, menu.get(), "properties");
         return true;
     }
     if (k == VK_TAB && !ctrl && !alt) {
@@ -866,7 +875,10 @@ void App::onLoaded(Listing&& listing, UINT generation) {
     t.path = listing.path;
     t.unavailable = false;
     FILETIME written = listing.written;
+    std::vector<std::wstring> subfolders = list_.subfolders();
     list_.setListing(std::move(listing));
+    // The tree follows the folder shown: its node is read again when the subfolders changed (5.5).
+    if (p.nav == Nav::Refresh && sameFolder && subfolders != list_.subfolders()) tree_.refreshFolder(t.path);
     int row = list_.select(view.select, view.focus);
     if (row < 0 && !requested && view.focusRow >= 0 && list_.count() > 0)   // the focused item is gone (4.5):
         row = list_.focusRow(std::min(view.focusRow, list_.count() - 1));   // the item in its place takes the focus
@@ -949,7 +961,7 @@ void App::goUp() {
     if (!tab().path.empty()) open(parentPath(tab().path), Nav::New);
 }
 
-void App::refresh(ViewState view) {
+bool App::refresh(ViewState view) {
     // A load is in progress: start nothing (a held F5 would pile up stuck threads on a dead share). That load
     // may predate the caller's change, so keep what it wants selected for a queued refresh.
     if (pending_.generation) {
@@ -957,10 +969,11 @@ void App::refresh(ViewState view) {
             queuedView_ = {list_.dir(), std::move(view)};
             queueRefresh();
         }
-        return;
+        return false;
     }
     if (view.asks()) queuedView_ = {};   // newer than any request still waiting
     open(tab().path, Nav::Refresh, std::move(view));
+    return true;
 }
 
 void App::goToTyped() {

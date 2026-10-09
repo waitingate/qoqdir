@@ -128,13 +128,22 @@ void FolderTree::refreshDrives() {
 
 // Each folder whose subfolders are shown is read again, and each known to have none (it may have some now).
 void FolderTree::refresh() {
-    for (HTREEITEM n = TreeView_GetRoot(tv_); n; n = TreeView_GetNextVisible(tv_, n)) {
-        TVITEMW item{};
-        item.mask = TVIF_CHILDREN;
-        item.hItem = n;
-        TreeView_GetItem(tv_, &item);
-        if (TreeView_GetChild(tv_, n) || (!item.cChildren && !isShortcut(pathOf(n)))) startReading(n, true);
-    }
+    for (HTREEITEM n = TreeView_GetRoot(tv_); n; n = TreeView_GetNextVisible(tv_, n)) reread(n);
+}
+
+// The same for one folder's nodes: the folder shown in the list when its subfolders changed, or the parent of a node
+// whose own menu was used (the node's folder may be gone).
+void FolderTree::refreshFolder(const std::wstring& dir) {
+    for (const auto& [node, path] : paths_)
+        if (samePath(path, dir)) reread(node);
+}
+
+void FolderTree::reread(HTREEITEM n) {
+    TVITEMW item{};
+    item.mask = TVIF_CHILDREN;
+    item.hItem = n;
+    TreeView_GetItem(tv_, &item);
+    if (TreeView_GetChild(tv_, n) || (!item.cChildren && !isShortcut(pathOf(n)))) startReading(n, true);
 }
 
 HTREEITEM FolderTree::add(HTREEITEM parent, const std::wstring& path, const std::wstring& text, int icon, bool leaf,

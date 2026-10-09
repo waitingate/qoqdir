@@ -26,6 +26,7 @@ public:
     const Item& at(int row) const { return items_[view_[row]]; }
     std::wstring pathAt(int row) const { return joinPath(dir_, at(row).name); }
     bool hasFolder(const std::wstring& name) const;   // a subfolder of that name, shown or filtered out
+    std::vector<std::wstring> subfolders() const;    // the subfolders' names (not the hidden ones), sorted: what the tree shows
 
     std::vector<int> selection() const;
     std::vector<Item> selectedItems() const;   // with their attributes, size and date: see shell.h

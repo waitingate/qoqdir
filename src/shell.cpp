@@ -196,7 +196,10 @@ IconBatch readOwnIcons(const std::wstring& dir, const std::vector<std::wstring>&
     return batch;
 }
 
+// The shown folder's own icons. A batch replaces the last one: the cache never outgrows a folder, and a program
+// replaced by another gets its new icon on the next read.
 void rememberIcons(const IconBatch& batch) {
+    g_ownIcons.clear();
     for (const auto& [name, icon] : batch.icons) g_ownIcons[joinPath(batch.dir, name)] = icon;
 }
 

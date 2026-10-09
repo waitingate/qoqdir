@@ -221,13 +221,26 @@ impl FolderTree {
     pub fn refresh(&self) {
         let mut node = self.root();
         while node != 0 {
-            let mut item = TVITEMW { mask: TVIF_CHILDREN, hItem: HTREEITEM(node), ..Default::default() };
-            send(self.hwnd, TVM_GETITEMW, 0, &mut item as *mut _ as isize);
-            let none = item.cChildren.0 == 0 && !is_shortcut(&self.location_of(HTREEITEM(node)).text());
-            if send(self.hwnd, TVM_GETNEXTITEM, TVGN_CHILD as usize, node) != 0 || none {
-                self.start_reading(HTREEITEM(node), true);
-            }
+            self.reread(node);
             node = send(self.hwnd, TVM_GETNEXTITEM, TVGN_NEXTVISIBLE as usize, node);
+        }
+    }
+
+    /// The same for one folder's nodes: the folder shown in the list when its subfolders changed, or the parent of a
+    /// node whose own menu was used (the node's folder may be gone).
+    pub fn refresh_folder(&self, dir: &Location) {
+        let nodes: Vec<isize> = self.paths.borrow().iter().filter(|(_, l)| l.same(dir)).map(|(&n, _)| n).collect();
+        for node in nodes {
+            self.reread(node);
+        }
+    }
+
+    fn reread(&self, node: isize) {
+        let mut item = TVITEMW { mask: TVIF_CHILDREN, hItem: HTREEITEM(node), ..Default::default() };
+        send(self.hwnd, TVM_GETITEMW, 0, &mut item as *mut _ as isize);
+        let none = item.cChildren.0 == 0 && !is_shortcut(&self.location_of(HTREEITEM(node)).text());
+        if send(self.hwnd, TVM_GETNEXTITEM, TVGN_CHILD as usize, node) != 0 || none {
+            self.start_reading(HTREEITEM(node), true);
         }
     }
 

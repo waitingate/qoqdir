@@ -139,10 +139,12 @@ pub fn read_own_icons(dir: &Location, names: Vec<OsString>) -> IconBatch {
     IconBatch { dir: dir.clone(), icons }
 }
 
-/// UI thread: keeps the icons so they show from now on (also after refreshes).
+/// UI thread: the shown folder's own icons. A batch replaces the last one: the cache never outgrows a folder, and a
+/// program replaced by another gets its new icon on the next read.
 pub fn remember_icons(batch: &IconBatch) {
     OWN_ICONS.with(|cache| {
         let mut cache = cache.borrow_mut();
+        cache.clear();
         for (name, icon) in &batch.icons {
             cache.insert(batch.dir.join(name), *icon);
         }

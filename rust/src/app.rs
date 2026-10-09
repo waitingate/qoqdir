@@ -91,6 +91,7 @@ const WM_APP_TABS_SAVED: u32 = WM_APP + 8;
 const WM_APP_TABS_READ: u32 = WM_APP + 9;
 const WM_APP_PRESSTAB: u32 = WM_APP + 10;
 const WM_APP_DRAGTAB: u32 = WM_APP + 11;
+const WM_APP_TREE_ICONS: u32 = WM_APP + 12;
 
 pub const TIMER_REFRESH: usize = 1;
 const TIMER_STATUS: usize = 2;
@@ -420,7 +421,7 @@ impl App {
                 _ => exe.with_file_name("Bookmarks"),
             };
             let _ = std::fs::create_dir(&bookmarks); // fails harmlessly if it exists
-            let tree = FolderTree::create(wnd, ID_TREE, WM_APP_TREE, WM_APP_ICONS, Location::dir(bookmarks));
+            let tree = FolderTree::create(wnd, ID_TREE, WM_APP_TREE, WM_APP_TREE_ICONS, Location::dir(bookmarks));
             let list = FileList::create(wnd, ID_LIST);
             const SBARS_SIZEGRIP: u32 = 0x100;
             let status = make(w!("msctls_statusbar32"), w!(""), SBARS_SIZEGRIP, 0, ID_STATUS);
@@ -736,12 +737,17 @@ impl App {
                     return LRESULT(0);
                 }
                 WM_APP_ICONS => {
+                    // The shown folder's own icons (a late batch for a folder no longer shown is of no use).
                     let batch = Box::from_raw(lp.0 as *mut IconBatch);
-                    remember_icons(&batch);
                     if self.list.location().same(&batch.dir) {
+                        remember_icons(&batch);
                         let _ = InvalidateRect(Some(self.list.hwnd()), None, false);
                     }
-                    self.tree.set_icons(&batch); // bookmark shortcuts get their own icons the same way
+                    return LRESULT(0);
+                }
+                WM_APP_TREE_ICONS => {
+                    // Bookmark shortcuts get their own icons the same way.
+                    self.tree.set_icons(&Box::from_raw(lp.0 as *mut IconBatch));
                     return LRESULT(0);
                 }
                 WM_APP_TREE => {
@@ -1091,6 +1097,7 @@ impl App {
                 }
                 true
             }, None);
+            self.tree.refresh_folder(&location.parent()); // a folder deleted from its own menu leaves the tree
         }
     }
 
@@ -1252,7 +1259,10 @@ impl App {
             return true;
         }
         if alt && is(VK_RETURN) && focused == list {
-            invoke_verb(self.wnd, item_menu(self.wnd, &self.list.location(), &self.list.selected_items()), "properties");
+            // The selection's properties, or with nothing selected the folder's own.
+            let (dir, items) = (self.list.location(), self.list.selected_items());
+            let menu = if items.is_empty() { item_menu_at(self.wnd, &dir) } else { item_menu(self.wnd, &dir, &items) };
+            invoke_verb(self.wnd, menu, "properties");
             return true;
         }
         if is(VK_TAB) && !ctrl && !alt {
@@ -1520,7 +1530,12 @@ impl App {
 
         let location = listing.location.clone();
         let written = listing.written;
+        let subfolders = self.list.subfolders();
         self.list.set_listing(listing);
+        // The tree follows the folder shown: its node is read again when the subfolders changed (5.5).
+        if pending.nav == Nav::Refresh && same_folder && subfolders != self.list.subfolders() {
+            self.tree.refresh_folder(&location);
+        }
         let mut row = self.list.select(&view.select, view.focus.as_deref());
         if row.is_none() && !requested && self.list.count() > 0 {
             // The focused item is gone (4.5): the item in its place takes the focus.
@@ -1642,7 +1657,8 @@ impl App {
         }
     }
 
-    pub fn refresh(&self, view: ViewState) {
+    /// False: a load was in progress, so none was started.
+    pub fn refresh(&self, view: ViewState) -> bool {
         // A load is in progress: start nothing (a held F5 would pile up stuck threads on a dead share). That load
         // may predate the caller's change, so keep what it wants selected for a queued refresh.
         if self.is_loading() {
@@ -1651,19 +1667,22 @@ impl App {
                 self.st.borrow_mut().queued_view = Some((shown, view));
                 self.queue_refresh();
             }
-            return;
+            return false;
         }
         if view.asks() {
             self.st.borrow_mut().queued_view = None; // newer than any request still waiting
         }
         self.open(self.location(), Nav::Refresh, view);
+        true
     }
 
-    /// F5 and the Refresh button: the list and the tree (5.5), and the status bar says so.
+    /// F5 and the Refresh button: the list (unless it is loading already) and the tree (5.5); the status bar says so.
     pub fn refresh_all(&self) {
-        self.refresh(ViewState::default());
+        let list = self.refresh(ViewState::default());
         self.tree.refresh();
-        self.set_message("Refreshed");
+        if list {
+            self.set_message("Refreshed");
+        }
     }
 
     fn go_to_typed(&self) {

@@ -301,6 +301,10 @@ Back, Forward and Up are disabled when they can't do anything.
   subfolders are the same stays as it is; one whose subfolders changed shows them
   afresh, and what was open below it closes (an open list changed item by item is
   slow: Windows repaints it for each).
+- The tree follows the folder shown: when its subfolders change (made, renamed
+  or deleted, by Qoqdir or another program), its node is read again as F5
+  would. After a command from a node's own menu, the node's parent is read
+  again, so a folder deleted there leaves the tree.
 - Clicking a node, or moving to it with the keyboard, opens it in this tab, and
   clicking the selected node opens it again. Middle-click opens a new background
   tab.
@@ -404,7 +408,7 @@ Anywhere in the window:
 | Ctrl+Shift+PgUp / Ctrl+Shift+PgDn | move the tab left / right |
 | Ctrl+L, Alt+D, F4 | address bar (text selected) |
 | Ctrl+F, F3 | filter box |
-| F5, Ctrl+R | refresh the list and the tree (5.5); the status bar says "Refreshed" |
+| F5, Ctrl+R | refresh the list (unless it is loading already) and the tree (5.5); the status bar says "Refreshed" when the list was |
 | Ctrl+H | show or hide hidden files |
 | Alt+Left / Alt+Right / Alt+Up | back / forward / up |
 | Mouse back and forward buttons | back / forward |
@@ -422,7 +426,7 @@ In the file list:
 | Ctrl+Shift+N | new folder |
 | Ctrl+A | select all |
 | Ctrl+C / Ctrl+X / Ctrl+V | copy / cut / paste |
-| Alt+Enter | properties |
+| Alt+Enter | properties of the selection, or of the folder when nothing is selected |
 | Esc | clear the filter |
 | any character | start filtering |
 
@@ -677,6 +681,10 @@ result:
 59. Dragging the splitter 1000 pixels past the window's right edge sets the
     tree's width to the widest the layout allows, never one past the edge (that
     width is what gets saved); dragging it back restores the old width.
+60. With `Bookmarks\one` shown in the list and open in the tree, a folder
+    `one\later` made by another program shows up under `one` by itself.
+61. With the list elsewhere, `later` deleted and `one` read again (as after a
+    command from a node's own menu): the tree shows `deep`, `new` again.
 
 ### 7.3 Command-line checks
 Run on a copy of the exe in a temp folder:

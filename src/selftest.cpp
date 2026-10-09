@@ -1221,6 +1221,19 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
             SendMessageW(refresh_, BM_CLICK, 0, 0);
         },
         [=, this] { return nodeTexts(TreeView_GetChild(tree_.hwnd(), newNode())) == L"inside"; });
+    add(L"(open Bookmarks\\one in the list)", [=, this] { open(path(L"Bookmarks\\one"), Nav::New); },
+        [=, this] { return at(path(L"Bookmarks\\one")); });
+    add(L"a subfolder made in the folder shown shows up in the tree by itself: its open node is read again (5.5)",
+        [=, this] { CreateDirectoryW(path(L"Bookmarks\\one\\later").c_str(), nullptr); },
+        [=, this] { return nodeTexts(TreeView_GetChild(tree_.hwnd(), one())) == L"deep,later,new"; });
+    backHome(L"(back to the test folder)");
+    add(L"a folder deleted while the list shows another leaves the tree once its parent is read again, as it is when a "
+        L"node's own menu closes",
+        [=, this] {
+            RemoveDirectoryW(path(L"Bookmarks\\one\\later").c_str());
+            tree_.refreshFolder(path(L"Bookmarks\\one"));
+        },
+        [=, this] { return nodeTexts(TreeView_GetChild(tree_.hwnd(), one())) == L"deep,new"; });
     auto nodePoint = [this](HTREEITEM node) {   // the middle of a tree node, in screen coordinates
         RECT r{};
         TreeView_GetItemRect(tree_.hwnd(), node, &r, TRUE);
