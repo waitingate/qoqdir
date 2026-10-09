@@ -151,6 +151,10 @@ fn noted() -> String {
     NOTE.with(|n| n.borrow().clone())
 }
 
+fn text_of(h: HWND) -> String {
+    window_text(h).to_string_lossy().into_owned()
+}
+
 /// How long the current step has waited since its act.
 fn step_ms() -> u128 {
     RUN.with_borrow(|run| run.as_ref().and_then(|t| t.started).map_or(0, |s| s.elapsed().as_millis()))
@@ -444,14 +448,6 @@ impl App {
         row.is_some_and(|r| r >= first && r < first + page)
     }
 
-    fn filter_text(&self) -> String {
-        window_text(self.filter).to_string_lossy().into_owned()
-    }
-
-    fn address_text(&self) -> String {
-        window_text(self.address).to_string_lossy().into_owned()
-    }
-
     fn edit_text(&self) -> String {
         self.list.edit_control().map(|e| window_text(e).to_string_lossy().into_owned()).unwrap_or_default()
     }
@@ -605,8 +601,8 @@ impl App {
                 }
             },
             |a| {
-                note(format!("filter \"{}\"", a.filter_text()));
-                a.filter_text() == "\u{5831}\u{544A}" && a.list.count() == 1
+                note(format!("filter \"{}\"", text_of(a.filter)));
+                text_of(a.filter) == "\u{5831}\u{544A}" && a.list.count() == 1
             },
         );
         s.add("(Esc clears it)", |a| a.press(VK_ESCAPE, 0), |a| {
@@ -631,8 +627,8 @@ impl App {
                 a.press(VK_BACK, CTRL);
             },
             |a| {
-                note(format!("filter \"{}\"", a.filter_text()));
-                a.filter_text() == "file "
+                note(format!("filter \"{}\"", text_of(a.filter)));
+                text_of(a.filter) == "file "
             },
         );
         s.add(
@@ -644,13 +640,13 @@ impl App {
                 a.press(VK_BACK, CTRL);
             },
             |a| {
-                note(format!("address \"{}\"", a.address_text()));
-                a.address_text() == "D:\\my "
+                note(format!("address \"{}\"", text_of(a.address)));
+                text_of(a.address) == "D:\\my "
             },
         );
         s.add("(Esc puts the path back and returns to the list)", |a| a.press(VK_ESCAPE, 0), |a| {
             let st = a.st.borrow();
-            a.address_text() == st.tabs[st.active].location.text().to_string_lossy() && unsafe { GetFocus() } == a.list.hwnd()
+            text_of(a.address) == st.tabs[st.active].location.text().to_string_lossy() && unsafe { GetFocus() } == a.list.hwnd()
         });
         // The tree's width (96-DPI units) before a drag, and what a drag far past the window's edge left it at.
         let drag = Rc::new(Cell::new((0, 0)));
@@ -1311,16 +1307,16 @@ impl App {
                 a.type_text("file");
             },
             move |a| {
-                note(format!("filter \"{}\"", a.filter_text()));
-                a.at(&dir()) && a.filter_text() == "file"
+                note(format!("filter \"{}\"", text_of(a.filter)));
+                a.at(&dir()) && text_of(a.filter) == "file"
             },
         );
         s.add(
             "a folder that fails to open leaves the filter of the folder still shown",
             |a| a.open(Location::dir(p("no-such-folder")), Nav::New, ViewState::default()),
             move |a| {
-                note(format!("filter \"{}\"", a.filter_text()));
-                a.at(&dir()) && a.filter_text() == "file"
+                note(format!("filter \"{}\"", text_of(a.filter)));
+                a.at(&dir()) && text_of(a.filter) == "file"
             },
         );
         s.add(

@@ -41,6 +41,12 @@ struct Tab {
 
 void showKeys(HWND owner);   // F1's help box: the main keys (main.cpp; qoqdir --help shows the command line)
 
+inline std::wstring windowText(HWND h) {
+    std::wstring s(size_t(GetWindowTextLengthW(h)) + 1, L'\0');
+    s.resize(size_t(GetWindowTextW(h, s.data(), int(s.size()))));
+    return s;
+}
+
 class App {
 public:
     // Opens the command line's folders as tabs (or the home folder).

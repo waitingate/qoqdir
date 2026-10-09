@@ -145,16 +145,6 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
             if (list_.at(i).name == name) return true;
         return false;
     };
-    auto filterText = [this] {
-        wchar_t text[64] = {};
-        GetWindowTextW(filter_, text, 64);
-        return std::wstring(text);
-    };
-    auto addressText = [this] {
-        std::wstring s(size_t(GetWindowTextLengthW(address_)) + 1, L'\0');
-        s.resize(size_t(GetWindowTextW(address_, s.data(), int(s.size()))));
-        return s;
-    };
     auto editText = [this] {
         HWND edit = ListView_GetEditControl(list_.hwnd());
         wchar_t buf[MAX_PATH] = {};
@@ -230,8 +220,8 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
             for (wchar_t c : std::wstring(L"\u5831\u544A")) PostMessageW(list_.hwnd(), WM_CHAR, c, 1);
         },
         [=, this] {
-            selfTest_->note = L"filter \"" + filterText() + L"\"";
-            return filterText() == L"\u5831\u544A" && list_.count() == 1;
+            selfTest_->note = L"filter \"" + windowText(filter_) + L"\"";
+            return windowText(filter_) == L"\u5831\u544A" && list_.count() == 1;
         });
     add(L"(Esc clears it)", [=, this] { selfTestKey(VK_ESCAPE); },
         [=, this] { return list_.count() == 6 && GetFocus() == list_.hwnd(); });
@@ -250,8 +240,8 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
             selfTestKey(VK_BACK, true);
         },
         [=, this] {
-            selfTest_->note = L"filter \"" + filterText() + L"\"";
-            return filterText() == L"file ";
+            selfTest_->note = L"filter \"" + windowText(filter_) + L"\"";
+            return windowText(filter_) == L"file ";
         });
     add(L"Ctrl+Backspace in the address bar deletes the last word too",
         [=, this] {
@@ -261,11 +251,11 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
             selfTestKey(VK_BACK, true);
         },
         [=, this] {
-            selfTest_->note = L"address \"" + addressText() + L"\"";
-            return addressText() == L"D:\\my ";
+            selfTest_->note = L"address \"" + windowText(address_) + L"\"";
+            return windowText(address_) == L"D:\\my ";
         });
     add(L"(Esc puts the path back and returns to the list)", [=, this] { selfTestKey(VK_ESCAPE); },
-        [=, this] { return addressText() == locationText(tab().path) && GetFocus() == list_.hwnd(); });
+        [=, this] { return windowText(address_) == locationText(tab().path) && GetFocus() == list_.hwnd(); });
     // The tree's width (96-DPI units) before a drag, and what a drag far past the window's edge left it at.
     auto drag = std::make_shared<std::pair<int, int>>();
     add(L"dragging the splitter past the window's edge keeps the width shown (what is saved), not one past the edge",
@@ -764,14 +754,14 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
             selfTestType(L"file");
         },
         [=, this] {
-            selfTest_->note = L"filter \"" + filterText() + L"\"";
-            return at(dir) && filterText() == L"file";
+            selfTest_->note = L"filter \"" + windowText(filter_) + L"\"";
+            return at(dir) && windowText(filter_) == L"file";
         });
     add(L"a folder that fails to open leaves the filter of the folder still shown",
         [=, this] { open(path(L"no-such-folder"), Nav::New); },
         [=, this] {
-            selfTest_->note = L"filter \"" + filterText() + L"\"";
-            return at(dir) && filterText() == L"file";
+            selfTest_->note = L"filter \"" + windowText(filter_) + L"\"";
+            return at(dir) && windowText(filter_) == L"file";
         });
     add(L"a refresh queued just before a tab became not available waits for F5 (4.3)",
         [=, this] {

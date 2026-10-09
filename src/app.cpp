@@ -32,12 +32,6 @@ bool highContrastOn() {
 
 bool is(const std::wstring& verb, const wchar_t* name) { return _wcsicmp(verb.c_str(), name) == 0; }
 
-std::wstring windowText(HWND h) {
-    std::wstring s(size_t(GetWindowTextLengthW(h)) + 1, L'\0');
-    s.resize(size_t(GetWindowTextW(h, s.data(), int(s.size()))));
-    return s;
-}
-
 // The text cut to fit 'width' pixels on 'dc', ending in "…" if it was longer. Windows counts the two halves of an
 // emoji as one character, so the cut never splits one.
 std::wstring fitText(HDC dc, const std::wstring& text, int width) {
