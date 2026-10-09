@@ -2,8 +2,6 @@
 
 #include "shell.h"
 
-#include <thread>
-
 namespace {
 
 // The local folder a node stands for: its own, or a bookmark shortcut's target (read from the .lnk alone). None for
@@ -173,10 +171,7 @@ void FolderTree::startReading(HTREEITEM node, bool again) {
 
 void FolderTree::startWorker(HTREEITEM node, std::function<void(TreeBatch&)> reader) {
     unsigned read = reading_[node] = ++reads_;
-    HWND parent = parent_;
-    UINT msg = batchMsg_, iconMsg = iconMsg_;
-    std::thread([parent, msg, iconMsg, read, node, reader = std::move(reader)] {
-        HRESULT co = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE);
+    inBackground([parent = parent_, msg = batchMsg_, iconMsg = iconMsg_, read, node, reader = std::move(reader)] {
         auto batch = std::make_unique<TreeBatch>();
         batch->read = read;
         batch->node = node;
@@ -188,14 +183,10 @@ void FolderTree::startWorker(HTREEITEM node, std::function<void(TreeBatch&)> rea
             dir = parentPath(c.path);
             shortcuts.push_back(leafName(c.path));
         }
-        if (PostMessageW(parent, msg, 0, reinterpret_cast<LPARAM>(batch.get()))) batch.release();
+        post(parent, msg, 0, std::move(batch));
         // Then each shortcut's own icon, which asks the target (maybe a server that is off), as the list does.
-        if (!shortcuts.empty()) {
-            auto icons = std::make_unique<IconBatch>(readOwnIcons(dir, shortcuts));
-            if (PostMessageW(parent, iconMsg, 0, reinterpret_cast<LPARAM>(icons.get()))) icons.release();
-        }
-        if (SUCCEEDED(co)) CoUninitialize();
-    }).detach();
+        if (!shortcuts.empty()) post(parent, iconMsg, 0, std::make_unique<IconBatch>(readOwnIcons(dir, shortcuts)));
+    });
 }
 
 void FolderTree::addChildren(const TreeBatch& batch) {

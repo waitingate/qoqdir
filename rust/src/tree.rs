@@ -5,10 +5,9 @@ use std::collections::HashMap;
 use std::ffi::{OsStr, OsString};
 use std::os::windows::ffi::OsStrExt;
 
-use windows::Win32::Foundation::{HWND, LPARAM, POINT, WPARAM};
+use windows::Win32::Foundation::{HWND, POINT};
 use windows::Win32::Graphics::Gdi::ScreenToClient;
 use windows::Win32::Storage::FileSystem::GetDriveTypeW;
-use windows::Win32::System::Com::{COINIT_APARTMENTTHREADED, COINIT_DISABLE_OLE1DDE, CoInitializeEx, CoUninitialize};
 use windows::Win32::System::SystemInformation::GetTickCount64;
 use windows::Win32::System::WindowsProgramming::DRIVE_REMOTE;
 use windows::Win32::UI::Controls::{
@@ -25,14 +24,14 @@ use windows::Win32::UI::Shell::{
     FOLDERID_Desktop, FOLDERID_Documents, FOLDERID_Downloads, FOLDERID_Music, FOLDERID_Pictures, FOLDERID_Videos,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    CreateWindowExW, GetCursorPos, HMENU, PostMessageW, WINDOW_EX_STYLE, WINDOW_STYLE, WS_CHILD, WS_TABSTOP, WS_VISIBLE,
+    CreateWindowExW, GetCursorPos, HMENU, WINDOW_EX_STYLE, WINDOW_STYLE, WS_CHILD, WS_TABSTOP, WS_VISIBLE,
 };
 use windows::core::{PWSTR, w};
 
 use crate::folder::{Location, SortKey, is_shortcut, list_folder, normalize, sort_items};
 use crate::shell::{
-    IconBatch, describe, describe_shortcut, folder_icon, known_folder, read_own_icons, set_theme, shortcut_target,
-    system_image_list,
+    IconBatch, describe, describe_shortcut, folder_icon, in_background, known_folder, post, read_own_icons, set_theme,
+    shortcut_target, system_image_list,
 };
 use crate::util::{pcwstr, send, wide};
 
@@ -292,25 +291,15 @@ impl FolderTree {
         self.reads.set(read);
         self.reading.borrow_mut().insert(node, read);
         let (parent, msg, icon_msg) = (self.parent.0 as usize, self.batch_msg, self.icon_msg);
-        std::thread::spawn(move || unsafe {
-            let co = CoInitializeEx(None, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE);
+        in_background(move || {
             let mut batch = Box::new(TreeBatch { read, node, failed: false, children: Vec::new() });
             reader(&mut batch);
             let shortcuts: Vec<Location> = batch.children.iter().filter(|c| c.shortcut).map(|c| c.location.clone()).collect();
-            let batch = Box::into_raw(batch);
-            if PostMessageW(Some(HWND(parent as _)), msg, WPARAM(0), LPARAM(batch as isize)).is_err() {
-                drop(Box::from_raw(batch)); // the window is gone
-            }
+            post(parent, msg, 0, batch);
             // Then each shortcut's own icon, which asks the target (maybe a server that is off), as the list does.
             if let Some(first) = shortcuts.first() {
                 let names = shortcuts.iter().filter_map(|l| l.path()?.file_name().map(OsStr::to_os_string)).collect();
-                let icons = Box::into_raw(Box::new(read_own_icons(&first.parent(), names)));
-                if PostMessageW(Some(HWND(parent as _)), icon_msg, WPARAM(0), LPARAM(icons as isize)).is_err() {
-                    drop(Box::from_raw(icons));
-                }
-            }
-            if co.is_ok() {
-                CoUninitialize();
+                post(parent, icon_msg, 0, Box::new(read_own_icons(&first.parent(), names)));
             }
         });
     }

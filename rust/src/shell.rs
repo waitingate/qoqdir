@@ -15,8 +15,9 @@ use windows::Win32::Storage::FileSystem::{
     FILE_ATTRIBUTE_DIRECTORY, FILE_ATTRIBUTE_NORMAL, FILE_FLAGS_AND_ATTRIBUTES, SearchPathW, WIN32_FIND_DATAW,
 };
 use windows::Win32::System::Com::{
-    BIND_OPTS, CLSCTX_ALL, CLSCTX_INPROC_SERVER, CoCreateInstance, CoTaskMemFree, CreateBindCtx, DVASPECT_CONTENT,
-    FORMATETC, IBindCtx, IDataObject, IPersistFile, STGM_CREATE, STGM_READ, STGMEDIUM, STGMEDIUM_0, TYMED_HGLOBAL,
+    BIND_OPTS, CLSCTX_ALL, CLSCTX_INPROC_SERVER, COINIT_APARTMENTTHREADED, COINIT_DISABLE_OLE1DDE, CoCreateInstance,
+    CoInitializeEx, CoTaskMemFree, CoUninitialize, CreateBindCtx, DVASPECT_CONTENT, FORMATETC, IBindCtx, IDataObject,
+    IPersistFile, STGM_CREATE, STGM_READ, STGMEDIUM, STGMEDIUM_0, TYMED_HGLOBAL,
 };
 use windows::Win32::System::DataExchange::{IsClipboardFormatAvailable, RegisterClipboardFormatW};
 use windows::Win32::System::LibraryLoader::{GetProcAddress, LOAD_LIBRARY_SEARCH_SYSTEM32, LoadLibraryExW};
@@ -48,8 +49,8 @@ use windows::Win32::UI::Shell::{
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     AppendMenuW, CreatePopupMenu, DispatchMessageW, GetMenuItemCount, MF_GRAYED, MF_SEPARATOR, MF_STRING, MSG,
-    MsgWaitForMultipleObjects, PM_REMOVE, PeekMessageW, QS_ALLINPUT, SW_SHOWNORMAL, TPM_RETURNCMD, TPM_RIGHTBUTTON,
-    TrackPopupMenuEx, TranslateMessage,
+    MsgWaitForMultipleObjects, PM_REMOVE, PeekMessageW, PostMessageW, QS_ALLINPUT, SW_SHOWNORMAL, TPM_RETURNCMD,
+    TPM_RIGHTBUTTON, TrackPopupMenuEx, TranslateMessage,
 };
 use windows::core::{GUID, HRESULT, IUnknown, Interface, PCSTR, PCWSTR, PSTR, Ref, Result, implement, s, w};
 
@@ -635,6 +636,26 @@ pub fn saved_folders(dir: &Path) -> Vec<Location> {
             this_pc => this_pc,
         })
         .collect()
+}
+
+/// Runs `work` on a thread of its own, with COM set up for the shell calls it makes.
+pub fn in_background(work: impl FnOnce() + Send + 'static) {
+    std::thread::spawn(move || unsafe {
+        let co = CoInitializeEx(None, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE);
+        work();
+        if co.is_ok() {
+            CoUninitialize();
+        }
+    });
+}
+
+/// Hands `object` to a window (its handle as a number: a thread only posts to it) by a posted message; the handler
+/// then owns it, through `Box::from_raw`. Freed here if the window is gone.
+pub fn post<T>(wnd: usize, msg: u32, wp: usize, object: Box<T>) {
+    let raw = Box::into_raw(object);
+    if unsafe { PostMessageW(Some(HWND(wnd as _)), msg, WPARAM(wp), LPARAM(raw as isize)) }.is_err() {
+        drop(unsafe { Box::from_raw(raw) });
+    }
 }
 
 /// Posts `msg` to `owner` when something in `dir` changes, or `dir` itself goes; stops when dropped.

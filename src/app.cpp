@@ -8,7 +8,6 @@
 #include <algorithm>
 #include <atomic>
 #include <optional>
-#include <thread>
 
 namespace {
 
@@ -786,22 +785,16 @@ void App::open(const std::wstring& path, Nav nav, ViewState view, Origin origin)
         showLocation(nav);
         showStatus();
     }
-    HWND wnd = wnd_;
-    std::thread([wnd, generation, path] {
-        HRESULT co = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE);
+    inBackground([wnd = wnd_, generation, path] {
         auto replaced = [generation] { return g_newestLoad != generation; };
         auto result = std::make_unique<Listing>(listFolder(path, true, replaced));
         std::vector<std::wstring> own;
         for (const Item& it : result->items)
             if (hasOwnIcon(it)) own.push_back(it.name);
-        if (PostMessageW(wnd, WM_APP_LOADED, generation, reinterpret_cast<LPARAM>(result.get()))) result.release();
+        post(wnd, WM_APP_LOADED, generation, std::move(result));
         // Then the icons that need a disk (or network) lookup, so they never hold up the list.
-        if (!own.empty() && !replaced()) {
-            auto icons = std::make_unique<IconBatch>(readOwnIcons(path, own));
-            if (PostMessageW(wnd, WM_APP_ICONS, 0, reinterpret_cast<LPARAM>(icons.get()))) icons.release();
-        }
-        if (SUCCEEDED(co)) CoUninitialize();
-    }).detach();
+        if (!own.empty() && !replaced()) post(wnd, WM_APP_ICONS, 0, std::make_unique<IconBatch>(readOwnIcons(path, own)));
+    });
 }
 
 void App::onLoaded(Listing&& listing, UINT generation) {
@@ -1087,10 +1080,8 @@ Tab App::makeTab(const std::wstring& path) {
 // (open, showLocation), so only the tab functions that don't switch show them.
 void App::newTab(std::wstring path, bool switchTo) {
     tabs_.push_back(makeTab(path));
-    if (!switchTo) return showTabs();
-    rememberView();
-    active_ = int(tabs_.size()) - 1;
-    open(path, Nav::Switch);
+    if (switchTo) switchTab(int(tabs_.size()) - 1);
+    else showTabs();
 }
 
 void App::closeTab(int index) {
@@ -1152,21 +1143,15 @@ void App::dragTab(int over, int x) {
 void App::saveTabs() {
     std::vector<std::wstring> folders;
     for (const Tab& t : tabs_) folders.push_back(t.path);
-    std::thread([wnd = wnd_, dir = joinPath(tree_.bookmarks(), L"Tabs"), folders = std::move(folders)] {
-        HRESULT co = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE);
-        bool ok = saveFolderShortcuts(dir, folders);
-        if (SUCCEEDED(co)) CoUninitialize();
-        PostMessageW(wnd, WM_APP_TABS_SAVED, ok, 0);
-    }).detach();
+    inBackground([wnd = wnd_, dir = joinPath(tree_.bookmarks(), L"Tabs"), folders = std::move(folders)] {
+        PostMessageW(wnd, WM_APP_TABS_SAVED, saveFolderShortcuts(dir, folders), 0);
+    });
 }
 
 void App::openSavedTabs() {
-    std::thread([wnd = wnd_, dir = joinPath(tree_.bookmarks(), L"Tabs")] {
-        HRESULT co = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE);
-        auto folders = std::make_unique<std::vector<std::wstring>>(savedFolders(dir));
-        if (SUCCEEDED(co)) CoUninitialize();
-        if (PostMessageW(wnd, WM_APP_TABS_READ, 0, reinterpret_cast<LPARAM>(folders.get()))) folders.release();
-    }).detach();
+    inBackground([wnd = wnd_, dir = joinPath(tree_.bookmarks(), L"Tabs")] {
+        post(wnd, WM_APP_TABS_READ, 0, std::make_unique<std::vector<std::wstring>>(savedFolders(dir)));
+    });
 }
 
 // After the open tabs, each folder that isn't open yet; the first of them is shown.

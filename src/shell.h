@@ -57,6 +57,14 @@ std::optional<std::wstring> shortcutTarget(const std::wstring& lnkPath, bool* fo
 bool saveFolderShortcuts(const std::wstring& dir, const std::vector<std::wstring>& folders);
 std::vector<std::wstring> savedFolders(const std::wstring& dir);   // the folders they lead to, in order
 
+// Runs `work` on a thread of its own, with COM set up for the shell calls it makes.
+void inBackground(std::function<void()> work);
+// Hands `object` to `window` by a posted message; the handler then owns it. Freed here if the window is gone.
+template <class T>
+void post(HWND window, UINT msg, WPARAM wp, std::unique_ptr<T> object) {
+    if (PostMessageW(window, msg, wp, reinterpret_cast<LPARAM>(object.get()))) object.release();
+}
+
 // Posts 'msg' to 'owner' when something in 'dir' changes, or 'dir' itself goes; stops when destroyed.
 class FolderWatch {
 public:

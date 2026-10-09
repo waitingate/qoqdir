@@ -18,7 +18,6 @@ use windows::Win32::Graphics::Gdi::{
 };
 use windows::Win32::Storage::FileSystem::CreateDirectoryW;
 use windows::Win32::System::Diagnostics::Debug::MessageBeep;
-use windows::Win32::System::Com::{COINIT_APARTMENTTHREADED, COINIT_DISABLE_OLE1DDE, CoInitializeEx, CoUninitialize};
 use windows::Win32::System::LibraryLoader::GetModuleFileNameW;
 use windows::Win32::System::Ole::{IDropTarget, RegisterDragDrop, RevokeDragDrop};
 use windows::Win32::System::SystemServices::MK_LBUTTON;
@@ -62,8 +61,8 @@ use crate::folder::{
 };
 use crate::shell::{
     FolderWatch, IconBatch, acknowledge_change, has_own_icon, read_own_icons, remember_icons, background_menu, copy_to_clipboard, delete_items, drag_out,
-    shortcut_target, forward_menu_message, invoke_verb, item_menu, item_menu_at, known_folder, new_drop_target, open_file,
-    paste_into, rename_item, run_command, save_folder_shortcuts, saved_folders, show_menu,
+    shortcut_target, forward_menu_message, in_background, invoke_verb, item_menu, item_menu_at, known_folder, new_drop_target, open_file,
+    paste_into, post, rename_item, run_command, save_folder_shortcuts, saved_folders, show_menu,
 };
 use crate::tree::{FolderTree, TreeBatch};
 use crate::util::{Font, OwnedMenu, focus, from_wide, key_down, pcwstr, scale, send, set_text, wide, window_text};
@@ -1421,25 +1420,15 @@ impl App {
             self.show_status();
         }
         let wnd = self.wnd.0 as usize; // HWND is just a handle; the thread only posts to it
-        std::thread::spawn(move || unsafe {
-            let co = CoInitializeEx(None, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE);
+        in_background(move || {
             let replaced = || NEWEST_LOAD.load(Ordering::SeqCst) != generation;
             // Hidden items too: Ctrl+H only shows or hides them.
             let listing = list_folder(&location, true, Some(&replaced));
             let own: Vec<OsString> = listing.items.iter().filter(|it| has_own_icon(it)).map(|it| it.name.clone()).collect();
-            let result = Box::into_raw(Box::new(listing));
-            if PostMessageW(Some(HWND(wnd as _)), WM_APP_LOADED, WPARAM(generation as usize), LPARAM(result as isize)).is_err() {
-                drop(Box::from_raw(result)); // the window is gone
-            }
+            post(wnd, WM_APP_LOADED, generation as usize, Box::new(listing));
             // Then the icons that need a disk (or network) lookup, so they never hold up the list.
             if !own.is_empty() && !replaced() {
-                let icons = Box::into_raw(Box::new(read_own_icons(&location, own)));
-                if PostMessageW(Some(HWND(wnd as _)), WM_APP_ICONS, WPARAM(0), LPARAM(icons as isize)).is_err() {
-                    drop(Box::from_raw(icons));
-                }
-            }
-            if co.is_ok() {
-                CoUninitialize();
+                post(wnd, WM_APP_ICONS, 0, Box::new(read_own_icons(&location, own)));
             }
         });
     }
@@ -1840,22 +1829,13 @@ impl App {
     /// New tabs go at the end, so the newest is always the last one. Switching to a tab shows the tabs anew by itself
     /// (`open`, `show_location`), so only the tab functions that don't switch show them.
     pub fn new_tab(&self, location: Location, switch_to: bool) {
-        if switch_to {
-            self.remember_view();
-        }
-        {
+        let last = {
             let mut st = self.st.borrow_mut();
-            let tab = Self::make_tab(&mut st, location.clone());
+            let tab = Self::make_tab(&mut st, location);
             st.tabs.push(tab);
-            if switch_to {
-                st.active = st.tabs.len() - 1;
-            }
-        }
-        if switch_to {
-            self.open(location, Nav::Switch, ViewState::default());
-        } else {
-            self.show_tabs();
-        }
+            st.tabs.len() - 1
+        };
+        if switch_to { self.switch_tab(last) } else { self.show_tabs() }
     }
 
     pub fn close_tab(&self, index: usize) {
@@ -1957,13 +1937,9 @@ impl App {
         let folders: Vec<Location> = self.st.borrow().tabs.iter().map(|t| t.location.clone()).collect();
         let Some(dir) = self.tree.bookmarks().path().map(|p| p.join("Tabs")) else { return };
         let wnd = self.wnd.0 as usize;
-        std::thread::spawn(move || unsafe {
-            let co = CoInitializeEx(None, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE);
+        in_background(move || {
             let ok = save_folder_shortcuts(&dir, &folders);
-            if co.is_ok() {
-                CoUninitialize();
-            }
-            let _ = PostMessageW(Some(HWND(wnd as _)), WM_APP_TABS_SAVED, WPARAM(usize::from(ok)), LPARAM(0));
+            let _ = unsafe { PostMessageW(Some(HWND(wnd as _)), WM_APP_TABS_SAVED, WPARAM(usize::from(ok)), LPARAM(0)) };
         });
     }
 
@@ -1971,16 +1947,7 @@ impl App {
     fn open_saved_tabs(&self) {
         let Some(dir) = self.tree.bookmarks().path().map(|p| p.join("Tabs")) else { return };
         let wnd = self.wnd.0 as usize;
-        std::thread::spawn(move || unsafe {
-            let co = CoInitializeEx(None, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE);
-            let folders = Box::into_raw(Box::new(saved_folders(&dir)));
-            if co.is_ok() {
-                CoUninitialize();
-            }
-            if PostMessageW(Some(HWND(wnd as _)), WM_APP_TABS_READ, WPARAM(0), LPARAM(folders as isize)).is_err() {
-                drop(Box::from_raw(folders)); // the window is gone
-            }
-        });
+        in_background(move || post(wnd, WM_APP_TABS_READ, 0, Box::new(saved_folders(&dir))));
     }
 
     /// After the open tabs, each folder that isn't open yet; the first of them is shown.

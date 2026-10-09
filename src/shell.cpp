@@ -3,6 +3,7 @@
 #include <shellapi.h>
 
 #include <algorithm>
+#include <thread>
 #include <unordered_map>
 
 namespace {
@@ -482,6 +483,14 @@ std::vector<std::wstring> savedFolders(const std::wstring& dir) {
         if (target && folder) folders.push_back(normalizePath(*target));
     }
     return folders;
+}
+
+void inBackground(std::function<void()> work) {
+    std::thread([work = std::move(work)] {
+        HRESULT co = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE);
+        work();
+        if (SUCCEEDED(co)) CoUninitialize();
+    }).detach();
 }
 
 namespace {
