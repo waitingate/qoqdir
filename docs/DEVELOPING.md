@@ -1,6 +1,6 @@
 # Developing Qoqdir
 
-Notes for working on the code. `QOQDIR-SPEC.md` decides what is right: section 4
+Notes for working on the code. `SPEC.md` decides what is right: section 4
 (behavior) and section 7 (tests). Section 6 lists what not to build.
 `BUILDING.md` says how to build and test.
 
@@ -22,7 +22,7 @@ Notes for working on the code. `QOQDIR-SPEC.md` decides what is right: section 4
 
 ### C++ (`src/`)
 
-- `common.h`: owners for Windows resources (`Com<T>`, `Pidl`, `Menu`, `Font`)
+- `util.h`: owners for Windows resources (`Com<T>`, `Pidl`, `Menu`, `Font`)
   and `kAppName`. Nothing is freed by hand.
 - `folder.cpp` (library `core`): paths, command line, `listFolder`, sorting,
   filtering. No UI and no COM, so it is all unit-tested. `""` means This PC. Only
@@ -42,9 +42,10 @@ Notes for working on the code. `QOQDIR-SPEC.md` decides what is right: section 4
   so the start folder can still be renamed or ejected.
 - `crashlog.cpp`: writes `%TEMP%\qoqdir-crash.log` on a crash, a failed library
   check or `abort()`.
-- `app.rc`, `app.manifest`, `qoqdir.ico`: the manifest (modern controls, high
-  DPI, long paths), the version block and the icon, which `scripts/make-icon.ps1`
-  draws (`BUILDING.md`, section 4).
+- `res/qoqdir.rc`, `res/qoqdir.manifest`, `res/qoqdir.ico` (next to `src/`): the
+  manifest (modern controls, high DPI, long paths), the version block and the
+  icon, which `scripts/make-icon.ps1` draws (`BUILDING.md`, section 4). The Rust
+  build takes the icon from there too.
 - `version.h`: the version, shown in the exe's Properties, the help box and each
   crash-log line. The Rust version keeps its own in `rust/Cargo.toml`.
 
@@ -60,7 +61,7 @@ The same parts, file for file, written with Microsoft's `windows` crate:
 - `src/selftest.rs`: the self-test (only in a build with the `selftest` feature)
 - `src/main.rs`, `src/crashlog.rs`: as in C++
 - `src/util.rs`: UTF-16 strings, and owners that free Windows resources
-- `build.rs`, `icon.rc`: embed the manifest, and `../src/qoqdir.ico` through
+- `build.rs`, `icon.rc`: embed the manifest, and `../res/qoqdir.ico` through
   `windres`
 
 Shared state is never borrowed across a call into Windows, because Windows can

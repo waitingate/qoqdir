@@ -209,7 +209,7 @@ pub fn resolve_argument(arg: &OsStr) -> Location {
     normalize(std::path::absolute(&arg).as_deref().map_or(arg.as_os_str(), |p| p.as_os_str()))
 }
 
-/// The command line: qoqdir [switches] [folders...] (see 5.10 in docs/QOQDIR-SPEC.md).
+/// The command line: qoqdir [switches] [folders...] (see 5.10 in docs/SPEC.md).
 #[derive(Default, Debug)]
 pub struct CommandLine {
     pub folders: Vec<Location>, // -t= / --tab= folders and plain folders, in order, each once

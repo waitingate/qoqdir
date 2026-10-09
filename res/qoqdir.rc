@@ -1,8 +1,8 @@
 #include <winuser.h>
 #include <winver.h>
-#include "version.h"
+#include "../src/version.h"
 
-CREATEPROCESS_MANIFEST_RESOURCE_ID RT_MANIFEST "app.manifest"
+CREATEPROCESS_MANIFEST_RESOURCE_ID RT_MANIFEST "qoqdir.manifest"
 1 ICON "qoqdir.ico"   // the window's, the taskbar's and Explorer's icon for the exe (drawn by make-icon.ps1)
 
 // What the exe's Properties show (Details tab), and Task Manager's name for the process.

@@ -111,13 +111,13 @@ rest: setting up the tools, the Rust version, the tests, `scripts\build.ps1`
 
 ## Source
 
-- `src/` the program, with its manifest, version and icon
+- `src/` the program, `res/` its manifest and icon
 - `rust/` the same program in Rust
 - `tests/` the unit tests and the two check scripts
 - `scripts/` `build.ps1` builds and checks both versions, `release.ps1` makes a
   release, `make-icon.ps1` draws the icon
 - `docs/` `BUILDING.md` (tools, building, testing, releases), `DEVELOPING.md`
-  (notes for working on the code) and `QOQDIR-SPEC.md` (what Qoqdir must do and
+  (notes for working on the code) and `SPEC.md` (what Qoqdir must do and
   how it must behave)
 
 ## License

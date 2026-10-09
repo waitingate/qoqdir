@@ -1,4 +1,4 @@
-# Draws src\qoqdir.ico: a folder in the flat style of Windows' own icons, so it sits in with the system's, with a Q
+# Draws res\qoqdir.ico: a folder in the flat style of Windows' own icons, so it sits in with the system's, with a Q
 # on its front the way the special folders carry their mark: a pink ring with a leaf for its tail, which still shows
 # on the taskbar. Each size is drawn afresh from the same shapes, laid out on a 256 grid; at 48 and below the folder
 # is snapped to whole pixels so its edges stay sharp, and the Q is drawn from 24 pixels up, where it can be read.
@@ -64,6 +64,6 @@ foreach ($img in $images) {
 }
 foreach ($img in $images) { $bw.Write([byte[]]$img.bytes) }
 $bw.Flush()
-$path = Join-Path (Split-Path $PSScriptRoot) 'src\qoqdir.ico'
+$path = Join-Path (Split-Path $PSScriptRoot) 'res\qoqdir.ico'
 [IO.File]::WriteAllBytes($path, $ms.ToArray())
 "wrote $path, $((Get-Item $path).Length) bytes"

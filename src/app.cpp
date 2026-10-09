@@ -116,7 +116,7 @@ bool App::create(HINSTANCE instance, const CommandLine& cmd, bool useSettings) {
     wc.lpfnWndProc = wndProc;
     wc.hInstance = instance;
     wc.hCursor = LoadCursorW(nullptr, IDC_ARROW);
-    wc.hIcon = LoadIconW(instance, MAKEINTRESOURCEW(1));   // app.rc; Windows takes the title bar's small one from it too
+    wc.hIcon = LoadIconW(instance, MAKEINTRESOURCEW(1));   // qoqdir.rc; Windows takes the title bar's small one from it too
     wc.lpszClassName = kAppName;
     RegisterClassExW(&wc);
 

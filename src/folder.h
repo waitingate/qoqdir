@@ -2,7 +2,7 @@
 // Folder contents and path rules, with no UI, so all of it is unit-tested. Paths are plain Win32 paths
 // ("C:\Users", "\\server\share\dir"); "" is This PC, the list of drives.
 
-#include "common.h"
+#include "util.h"
 
 #include <cstdint>
 #include <functional>
@@ -44,7 +44,7 @@ std::wstring normalizePath(std::wstring text);
 std::wstring expandVars(const std::wstring& text);     // only for what the user typed (5.3)
 std::wstring resolveArgument(const std::wstring& arg); // a command-line folder, relative to the current one
 
-// The command line: qoqdir [switches] [folders...] (see 5.10 in docs/QOQDIR-SPEC.md).
+// The command line: qoqdir [switches] [folders...] (see 5.10 in docs/SPEC.md).
 struct CommandLine {
     std::vector<std::wstring> folders;   // -t= / --tab= folders and plain folders, in order, each once
     bool help = false;                   // -h or -?

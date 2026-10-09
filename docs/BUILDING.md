@@ -102,12 +102,12 @@ winlibs) goes in a folder of its own:
 ### The C++ version with GCC alone
 
 On a PC with just the compiler, no CMake or Ninja: `windres` and `g++` come with
-any MinGW-w64 GCC. It needs only the 18 files in `src\` (not `selftest.cpp`,
-which goes into the test version only). In `src\`, with `C:\mingw64\bin` on the
-PATH:
+any MinGW-w64 GCC. It needs only the files in `src\` (not `selftest.cpp`, which
+goes into the test version only) and `res\`. In `src\`, with `C:\mingw64\bin` on
+the PATH:
 
 ```powershell
-windres app.rc -O coff -o app_res.o
+windres ..\res\qoqdir.rc -O coff -o app_res.o
 g++ -std=c++20 -O2 -DNDEBUG -DUNICODE -D_UNICODE -DNOMINMAX -D_WIN32_WINNT=0x0A00 -DWINVER=0x0A00 -D_GLIBCXX_ASSERTIONS -fsanitize=signed-integer-overflow -fsanitize-undefined-trap-on-error -ffunction-sections -fdata-sections -mwindows -municode -static '-Wl,--gc-sections' -s main.cpp app.cpp filelist.cpp tree.cpp shell.cpp folder.cpp crashlog.cpp app_res.o -o qoqdir.exe -lole32 -loleaut32 -lshell32 -lshlwapi -lcomctl32 -luuid
 ```
 
@@ -149,7 +149,7 @@ It takes about ten minutes, most of it the two self-tests.
 What each one is:
 
 - Unit tests: paths, the command line, sorting, filtering and reading folders.
-  The C++ ones (`tests\tests.cpp`) are one `main()` of `CHECK` macros that prints
+  The C++ ones (`tests\unit-tests.cpp`) are one `main()` of `CHECK` macros that prints
   `FAIL line N` and keeps going; the Rust ones are at the end of
   `rust\src\folder.rs`.
 - The self-test drives the real program through every scenario in section 7.2 of
@@ -218,7 +218,7 @@ settings" has "Override high DPI scaling behavior" ticked, scaled by System.
 
 ## 4. The icon
 
-`src\qoqdir.ico` is drawn by `scripts\make-icon.ps1`: a flat folder in Windows'
+`res\qoqdir.ico` is drawn by `scripts\make-icon.ps1`: a flat folder in Windows'
 own style with a Q on it. After changing the drawing, run
 `powershell -File scripts\make-icon.ps1`; the next build of either version takes
 the new icon in.

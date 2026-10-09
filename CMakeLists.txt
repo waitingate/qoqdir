@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-# The app's name. (In the code it is kAppName in src/common.h.)
+# The app's name. (In the code it is kAppName in src/util.h.)
 project(qoqdir LANGUAGES CXX RC)
 
 set(CMAKE_CXX_STANDARD 20)
@@ -35,21 +35,21 @@ target_link_libraries(core PUBLIC ${WIN_LIBS})
 add_library(app OBJECT src/crashlog.cpp src/app.cpp src/filelist.cpp src/tree.cpp src/shell.cpp)
 target_link_libraries(app PUBLIC core)
 
-# windres reports no dependencies, so name what app.rc pulls in: a new version, manifest or icon then rebuilds it.
-set_source_files_properties(src/app.rc PROPERTIES OBJECT_DEPENDS
-  "${CMAKE_CURRENT_SOURCE_DIR}/src/version.h;${CMAKE_CURRENT_SOURCE_DIR}/src/app.manifest;${CMAKE_CURRENT_SOURCE_DIR}/src/qoqdir.ico")
+# windres reports no dependencies, so name what qoqdir.rc pulls in: a new version, manifest or icon then rebuilds it.
+set_source_files_properties(res/qoqdir.rc PROPERTIES OBJECT_DEPENDS
+  "${CMAKE_CURRENT_SOURCE_DIR}/src/version.h;${CMAKE_CURRENT_SOURCE_DIR}/res/qoqdir.manifest;${CMAKE_CURRENT_SOURCE_DIR}/res/qoqdir.ico")
 
-add_executable(${PROJECT_NAME} WIN32 src/main.cpp src/app.rc)
+add_executable(${PROJECT_NAME} WIN32 src/main.cpp res/qoqdir.rc)
 target_link_libraries(${PROJECT_NAME} PRIVATE app)
 target_link_options(${PROJECT_NAME} PRIVATE -municode)
 
-add_executable(${PROJECT_NAME}-test WIN32 src/main.cpp src/selftest.cpp src/app.rc)
+add_executable(${PROJECT_NAME}-test WIN32 src/main.cpp src/selftest.cpp res/qoqdir.rc)
 target_compile_definitions(${PROJECT_NAME}-test PRIVATE QOQDIR_SELFTEST)
 target_link_libraries(${PROJECT_NAME}-test PRIVATE app)
 target_link_options(${PROJECT_NAME}-test PRIVATE -municode)
 
 enable_testing()
-add_executable(unit_tests tests/tests.cpp)
+add_executable(unit_tests tests/unit-tests.cpp)
 target_link_libraries(unit_tests PRIVATE core)
 target_include_directories(unit_tests PRIVATE src)
 add_test(NAME unit_tests COMMAND unit_tests)
