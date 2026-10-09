@@ -57,8 +57,8 @@ use windows::core::{PCWSTR, PWSTR, w};
 use crate::filelist::FileList;
 use crate::APP_NAME;
 use crate::folder::{
-    CommandLine, Listing, Location, SortKey, byte_size, expand_vars, extension_of, folder_written, is_relative_path,
-    is_shortcut, list_folder, normalize, row_after_deleting,
+    CommandLine, Listing, Location, SortKey, byte_size, expand_vars, extension_of, folder_written, is_absolute_path,
+    is_relative_path, is_shortcut, list_folder, normalize, row_after_deleting,
 };
 use crate::shell::{
     FolderWatch, IconBatch, acknowledge_change, has_own_icon, read_own_icons, remember_icons, background_menu, copy_to_clipboard, delete_items, drag_out,
@@ -288,7 +288,7 @@ fn delete_word_before(edit: HWND) {
 
 /// A shortcut's target that opens in a tab: a folder path, or This PC. Anything else is for Windows.
 fn opens_in_tab(target: &Location) -> bool {
-    target.path().is_none_or(|p| p.is_absolute())
+    target.path().is_none_or(|p| is_absolute_path(p.as_os_str()))
 }
 
 /// The tab bar. A press is handled here, not by the control: it makes the tab current at once and starts a drag along
@@ -1553,9 +1553,12 @@ impl App {
             self.list.rename(row);
         }
 
-        let watch = FolderWatch::new(self.wnd, WM_APP_CHANGED, &location);
-        let old_watch = self.st.borrow_mut().watch.replace(watch);
-        drop(old_watch);
+        // The watch stays while the folder shown stays: setting one up costs 25-75 ms, and a reload is not a change.
+        if !same_folder {
+            let watch = FolderWatch::new(self.wnd, WM_APP_CHANGED, &location);
+            let old_watch = self.st.borrow_mut().watch.replace(watch);
+            drop(old_watch);
+        }
         // A change during the read, before the watch was there, is missed by both: the folder's own time tells.
         if location.path().is_some_and(|p| folder_written(p) != written) {
             self.queue_refresh();
@@ -1698,7 +1701,7 @@ impl App {
                 location = normalize(here.join(typed.as_os_str()).as_os_str()); // GetFullPathName folds "." and ".." away
             }
         }
-        if location.path().is_none_or(|p| p.is_absolute()) {
+        if location.path().is_none_or(|p| is_absolute_path(p.as_os_str())) {
             // Checked on the loader's thread, so a dead share cannot freeze the window; a file opens then.
             self.open_from(location, Nav::New, ViewState::default(), Origin::AddressBar);
             self.focus_list();

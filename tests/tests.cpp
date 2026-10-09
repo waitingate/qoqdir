@@ -122,6 +122,9 @@ int main() {
     CHECK(!isRelativePath(L"C:\\Windows"));
     CHECK(!isRelativePath(L"\\\\server\\share"));
     CHECK(!isRelativePath(L""));
+    // A server without a share is a (bad) network path, not a place here: the same rule in both versions.
+    CHECK(isAbsolutePath(L"\\\\server") && !isRelativePath(L"\\\\server") && isAbsolutePath(L"C:\\"));
+    CHECK(!isAbsolutePath(L"C:a") && !isAbsolutePath(L"\\a") && !isAbsolutePath(L"cmd") && !isAbsolutePath(L""));
 
     // parseCommandLine: switches, plus plain folders
     {

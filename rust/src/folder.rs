@@ -57,10 +57,18 @@ impl Location {
 
     pub fn parent(&self) -> Location {
         match self {
-            Location::Dir(p) => match p.parent() {
-                Some(q) if !q.as_os_str().is_empty() => Location::dir(q),
-                _ => Location::ThisPc,
-            },
+            Location::Dir(p) => {
+                // "\\server" alone (no share) is the top of a network path, as in the C++ version; std would say "\".
+                let w: Vec<u16> = p.as_os_str().encode_wide().collect();
+                let sep = u16::from(b'\\');
+                if w.len() > 2 && w[0] == sep && w[1] == sep && !w[2..].contains(&sep) {
+                    return Location::ThisPc;
+                }
+                match p.parent() {
+                    Some(q) if !q.as_os_str().is_empty() => Location::dir(q),
+                    _ => Location::ThisPc,
+                }
+            }
             Location::ThisPc => Location::ThisPc,
         }
     }
@@ -255,10 +263,18 @@ pub fn exists(path: &Path) -> bool {
     unsafe { GetFileAttributesW(pcwstr(&wide(path))) != INVALID_FILE_ATTRIBUTES }
 }
 
+/// "C:\..." or "\\server\...", not a command like "cmd" (the same rule as the C++ version: a drive letter with a
+/// backslash, or two backslashes, so "\\server" alone counts too and opens with Windows' own error).
+pub fn is_absolute_path(text: &OsStr) -> bool {
+    let w: Vec<u16> = text.encode_wide().take(3).collect();
+    let (colon, sep) = (u16::from(b':'), u16::from(b'\\'));
+    (w.len() >= 3 && w[1] == colon && w[2] == sep) || (w.len() > 2 && w[0] == sep && w[1] == sep)
+}
+
 /// Typed text that means a place in the current folder (".", "..\x", "sub\deeper"), not a command.
 pub fn is_relative_path(text: &OsStr) -> bool {
     let w: Vec<u16> = text.encode_wide().collect();
-    if w.is_empty() || Path::new(text).is_absolute() {
+    if w.is_empty() || is_absolute_path(text) {
         return false;
     }
     if w[0] == b'.' as u16 {
@@ -637,6 +653,7 @@ mod tests {
         assert!(matches!(Location::ThisPc.parent(), Location::ThisPc));
         assert_eq!(text(&dir("\\\\server\\share\\dir").parent()), "\\\\server\\share");
         assert!(matches!(dir("\\\\server\\share").parent(), Location::ThisPc));
+        assert!(matches!(dir("\\\\server").parent(), Location::ThisPc)); // a server alone: as the C++ version
     }
 
     #[test]
@@ -681,6 +698,10 @@ mod tests {
         assert!(!rel("cmd") && !typed("cmd /c dir") && !rel("notepad a\\b.txt"));
         assert!(!typed("https://example.com") && !rel("shell:Downloads"));
         assert!(!rel("C:\\Windows") && !rel("\\\\server\\share") && !rel(""));
+        // A server without a share is a (bad) network path, not a place here: as in the C++ version.
+        let abs = |s: &str| is_absolute_path(OsStr::new(s));
+        assert!(abs("\\\\server") && !rel("\\\\server") && abs("C:\\") && abs("\\\\server\\share\\x"));
+        assert!(!abs("C:a") && !abs("\\a") && !abs("cmd") && !abs("") && !abs("sub\\deeper"));
     }
 
     #[test]

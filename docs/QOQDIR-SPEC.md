@@ -145,9 +145,10 @@ These describe what the user sees. Each must hold in every situation.
 ### 4.5 Live but calm
 - Changes made by other programs (files created, deleted, renamed, changed) show
   up by themselves within about half a second, keeping the selection, focus and
-  scroll position. A burst of changes causes one refresh, not hundreds. A change
-  made while the folder was still being read is caught too: the folder's own
-  modified time is compared once the watch is in place.
+  scroll position. A burst of changes causes one refresh, not hundreds, and the
+  watch stays while the folder shown stays (setting one up costs 25-75 ms). A
+  change made while the folder was still being read is caught too: the folder's
+  own modified time is compared once the watch is in place.
 - If the shown folder itself is deleted or renamed by another program, the tab
   notices and shows the "not available" state (4.3).
 - Plugging in or removing a drive updates the tree and This PC.
