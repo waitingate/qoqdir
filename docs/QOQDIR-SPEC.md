@@ -302,8 +302,9 @@ Back, Forward and Up are disabled when they can't do anything.
   subfolders are the same stays as it is; one whose subfolders changed shows them
   afresh, and what was open below it closes (an open list changed item by item is
   slow: Windows repaints it for each).
-- The tree follows the folder shown: when its subfolders change, by Qoqdir or
-  another program, its node is read again as F5 would. After a command from a
+- The tree follows the folder shown: when its subfolders (or, under Bookmarks,
+  its shortcuts) change, by Qoqdir or another program, its node is read again as
+  F5 would. After a command from a
   node's menu, the node's parent is read again, so a folder deleted there leaves
   the tree.
 - Clicking a node, or moving to it with the keyboard, opens it in this tab, and
@@ -677,10 +678,10 @@ result:
     width is what gets saved); dragging it back restores the old width.
 60. With `Bookmarks\one` shown in the list and open in the tree, a folder
     `one\later` made by another program shows up under `one` by itself.
-61. With the list elsewhere, `later` deleted and `one` read again (as after a
-    command from a node's own menu): the tree shows `deep`, `new` again.
-62. A shortcut to `sub` made in `one`, once `one` is read again, shows under it
-    after the subfolders, with the shortcut's own icon and no expand arrow.
+61. A shortcut to `sub` made in `one` the same way shows up under it by itself
+    too, after the subfolders, with the shortcut's own icon and no expand arrow.
+62. With the list elsewhere, `later` deleted and `one` read again (as after a
+    command from a node's own menu): the tree shows `deep`, `new`, `sub`.
 
 ### 7.3 Command-line checks
 Run on a copy of the exe in a temp folder:

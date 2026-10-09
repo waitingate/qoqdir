@@ -1216,6 +1216,22 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
     add(L"a subfolder made in the folder shown shows up in the tree by itself: its open node is read again (5.5)",
         [=, this] { CreateDirectoryW(path(L"Bookmarks\\one\\later").c_str(), nullptr); },
         [=, this] { return nodeTexts(TreeView_GetChild(tree_.hwnd(), one())) == L"deep,later,new"; });
+    add(L"a shortcut made in the folder shown shows up in the tree by itself too, after the subfolders, with its own icon "
+        L"and no arrow (5.6)",
+        [=, this] { makeShortcut(path(L"Bookmarks\\one\\sub.lnk"), path(L"sub")); },
+        [=, this] {
+            if (nodeTexts(TreeView_GetChild(tree_.hwnd(), one())) != L"deep,later,new,sub") return false;
+            SHFILEINFOW own{};
+            SHGetFileInfoW(path(L"Bookmarks\\one\\sub.lnk").c_str(), 0, &own, sizeof own,
+                           SHGFI_SYSICONINDEX | SHGFI_SMALLICON);
+            HTREEITEM sub = TreeView_GetChild(tree_.hwnd(), one());   // the last child
+            while (HTREEITEM after = TreeView_GetNextSibling(tree_.hwnd(), sub)) sub = after;
+            TVITEMW item{};
+            item.mask = TVIF_IMAGE | TVIF_CHILDREN;
+            item.hItem = sub;
+            TreeView_GetItem(tree_.hwnd(), &item);
+            return item.iImage == own.iIcon && !item.cChildren;
+        });
     backHome(L"(back to the test folder)");
     add(L"a folder deleted while the list shows another leaves the tree once its parent is read again, as it is when a "
         L"node's own menu closes",
@@ -1223,24 +1239,7 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
             RemoveDirectoryW(path(L"Bookmarks\\one\\later").c_str());
             tree_.refreshFolder(path(L"Bookmarks\\one"));
         },
-        [=, this] { return nodeTexts(TreeView_GetChild(tree_.hwnd(), one())) == L"deep,new"; });
-    add(L"a shortcut in a folder inside Bookmarks shows there too, after the subfolders, with its own icon and no arrow "
-        L"(5.6)",
-        [=, this] {
-            makeShortcut(path(L"Bookmarks\\one\\sub.lnk"), path(L"sub"));
-            tree_.refreshFolder(path(L"Bookmarks\\one"));
-        },
-        [=, this] {
-            if (nodeTexts(TreeView_GetChild(tree_.hwnd(), one())) != L"deep,new,sub") return false;
-            SHFILEINFOW own{};
-            SHGetFileInfoW(path(L"Bookmarks\\one\\sub.lnk").c_str(), 0, &own, sizeof own,
-                           SHGFI_SYSICONINDEX | SHGFI_SMALLICON);
-            TVITEMW item{};
-            item.mask = TVIF_IMAGE | TVIF_CHILDREN;
-            item.hItem = TreeView_GetNextSibling(tree_.hwnd(), newNode());   // "sub"
-            TreeView_GetItem(tree_.hwnd(), &item);
-            return item.iImage == own.iIcon && !item.cChildren;
-        });
+        [=, this] { return nodeTexts(TreeView_GetChild(tree_.hwnd(), one())) == L"deep,new,sub"; });
     auto nodePoint = [this](HTREEITEM node) {   // the middle of a tree node, in screen coordinates
         RECT r{};
         TreeView_GetItemRect(tree_.hwnd(), node, &r, TRUE);

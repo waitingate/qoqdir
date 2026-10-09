@@ -862,10 +862,10 @@ void App::onLoaded(Listing&& listing, UINT generation) {
     t.path = listing.path;
     t.unavailable = false;
     FILETIME written = listing.written;
-    std::vector<std::wstring> subfolders = list_.subfolders();
+    std::vector<std::wstring> treeNames = list_.treeNames();
     list_.setListing(std::move(listing));
-    // The tree follows the folder shown: its node is read again when the subfolders changed (5.5).
-    if (p.nav == Nav::Refresh && sameFolder && subfolders != list_.subfolders()) tree_.refreshFolder(t.path);
+    // The tree follows the folder shown: its node is read again when the subfolders or shortcuts changed (5.5).
+    if (p.nav == Nav::Refresh && sameFolder && treeNames != list_.treeNames()) tree_.refreshFolder(t.path);
     int row = list_.select(view.select, view.focus);
     if (row < 0 && !requested && view.focusRow >= 0 && list_.count() > 0)   // the focused item is gone (4.5):
         row = list_.focusRow(std::min(view.focusRow, list_.count() - 1));   // the item in its place takes the focus

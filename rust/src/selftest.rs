@@ -1859,6 +1859,27 @@ impl App {
             },
             |a| a.node_texts(a.tree_child(a.tree_child(a.tree_root()))) == "deep,later,new",
         );
+        s.add(
+            "a shortcut made in the folder shown shows up in the tree by itself too, after the subfolders, with its own icon \
+             and no arrow (5.6)",
+            |_| make_shortcut(&p("Bookmarks\\one\\sub.lnk"), p("sub")),
+            |a| {
+                let one = a.tree_child(a.tree_root());
+                if a.node_texts(a.tree_child(one)) != "deep,later,new,sub" {
+                    return false;
+                }
+                let mut own = SHFILEINFOW::default();
+                unsafe {
+                    SHGetFileInfoW(pcwstr(&wide(p("Bookmarks\\one\\sub.lnk"))), FILE_FLAGS_AND_ATTRIBUTES(0), Some(&mut own), size_of::<SHFILEINFOW>() as u32, SHGFI_SYSICONINDEX | SHGFI_SMALLICON);
+                }
+                let mut sub = a.tree_child(one); // the last child
+                while a.tree_next(sub) != 0 {
+                    sub = a.tree_next(sub);
+                }
+                let item = a.tree_item(sub, TVIF_IMAGE | TVIF_CHILDREN);
+                item.iImage == own.iIcon && item.cChildren.0 == 0
+            },
+        );
         s.home("(back to the test folder)");
         s.add(
             "a folder deleted while the list shows another leaves the tree once its parent is read again, as it is when a \
@@ -1867,28 +1888,7 @@ impl App {
                 let _ = std::fs::remove_dir(p("Bookmarks\\one\\later"));
                 a.tree.refresh_folder(&Location::dir(p("Bookmarks\\one")));
             },
-            |a| a.node_texts(a.tree_child(a.tree_child(a.tree_root()))) == "deep,new",
-        );
-        s.add(
-            "a shortcut in a folder inside Bookmarks shows there too, after the subfolders, with its own icon and no arrow \
-             (5.6)",
-            |a| {
-                make_shortcut(&p("Bookmarks\\one\\sub.lnk"), p("sub"));
-                a.tree.refresh_folder(&Location::dir(p("Bookmarks\\one")));
-            },
-            |a| {
-                let one = a.tree_child(a.tree_root());
-                if a.node_texts(a.tree_child(one)) != "deep,new,sub" {
-                    return false;
-                }
-                let mut own = SHFILEINFOW::default();
-                unsafe {
-                    SHGetFileInfoW(pcwstr(&wide(p("Bookmarks\\one\\sub.lnk"))), FILE_FLAGS_AND_ATTRIBUTES(0), Some(&mut own), size_of::<SHFILEINFOW>() as u32, SHGFI_SYSICONINDEX | SHGFI_SMALLICON);
-                }
-                let sub = a.tree_next(a.tree_next(a.tree_child(one)));
-                let item = a.tree_item(sub, TVIF_IMAGE | TVIF_CHILDREN);
-                item.iImage == own.iIcon && item.cChildren.0 == 0
-            },
+            |a| a.node_texts(a.tree_child(a.tree_child(a.tree_root()))) == "deep,new,sub",
         );
         s.add(
             "This PC in the tree takes no drop",

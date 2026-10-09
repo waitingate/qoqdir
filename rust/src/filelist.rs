@@ -28,7 +28,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
 
 use windows::core::w;
 
-use crate::folder::{Item, Listing, Location, SortKey, equal_no_case, matches_filter, sort_items, to_lower, format_size, format_time};
+use crate::folder::{Item, Listing, Location, SortKey, equal_no_case, is_shortcut, matches_filter, sort_items, to_lower, format_size, format_time};
 use crate::shell::{icon_for, set_theme, system_image_list, type_name};
 use crate::util::{copy_to, focus, send, wide};
 
@@ -209,11 +209,11 @@ impl FileList {
     pub fn has_folder(&self, name: &OsStr) -> bool {
         self.model.borrow().items.iter().any(|it| it.is_dir() && equal_no_case(&it.name, name))
     }
-    /// The subfolders' names (not the hidden ones), sorted: what the tree shows.
-    pub fn subfolders(&self) -> Vec<OsString> {
+    /// The subfolders' and shortcuts' names (not the hidden ones), sorted: what the tree may show.
+    pub fn tree_names(&self) -> Vec<OsString> {
         let m = self.model.borrow();
-        let hidden = |it: &Item| it.attrs & FILE_ATTRIBUTE_HIDDEN.0 != 0;
-        let mut names: Vec<OsString> = m.items.iter().filter(|it| it.is_dir() && !hidden(it)).map(|it| it.name.clone()).collect();
+        let shown = |it: &Item| (it.is_dir() || is_shortcut(&it.name)) && it.attrs & FILE_ATTRIBUTE_HIDDEN.0 == 0;
+        let mut names: Vec<OsString> = m.items.iter().filter(|it| shown(it)).map(|it| it.name.clone()).collect();
         names.sort();
         names
     }

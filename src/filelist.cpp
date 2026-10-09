@@ -93,10 +93,10 @@ bool FileList::hasFolder(const std::wstring& name) const {
     return std::any_of(items_.begin(), items_.end(), [&](const Item& it) { return it.isDir() && samePath(it.name, name); });
 }
 
-std::vector<std::wstring> FileList::subfolders() const {
+std::vector<std::wstring> FileList::treeNames() const {
     std::vector<std::wstring> names;
     for (const Item& it : items_)
-        if (it.isDir() && !(it.attrs & FILE_ATTRIBUTE_HIDDEN)) names.push_back(it.name);
+        if ((it.isDir() || isShortcut(it.name)) && !(it.attrs & FILE_ATTRIBUTE_HIDDEN)) names.push_back(it.name);
     std::sort(names.begin(), names.end());
     return names;
 }

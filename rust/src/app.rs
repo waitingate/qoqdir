@@ -1519,10 +1519,10 @@ impl App {
 
         let location = listing.location.clone();
         let written = listing.written;
-        let subfolders = self.list.subfolders();
+        let tree_names = self.list.tree_names();
         self.list.set_listing(listing);
-        // The tree follows the folder shown: its node is read again when the subfolders changed (5.5).
-        if pending.nav == Nav::Refresh && same_folder && subfolders != self.list.subfolders() {
+        // The tree follows the folder shown: its node is read again when the subfolders or shortcuts changed (5.5).
+        if pending.nav == Nav::Refresh && same_folder && tree_names != self.list.tree_names() {
             self.tree.refresh_folder(&location);
         }
         let mut row = self.list.select(&view.select, view.focus.as_deref());
