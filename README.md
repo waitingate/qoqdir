@@ -27,15 +27,13 @@ qoqdir [options] [folder ...]
 ```
 
 Each folder opens once, and the first one is shown. With no folders you get the
-home folder. `D:` means `D:\`. After `-t=` or `--tab=`, all after `=` is the
-folder, even a name that starts with `-`, so use them in scripts. Always quote
-the folder after `-t=`: PowerShell (5.1 and 7) takes an unquoted `-t=` for a
-switch of its own, splits `-t=my.folder` at the dot and leaves `-t=$HOME` as
-typed. `--tab=` works the same in cmd, PowerShell and Git Bash, quoted or not
-(but Git Bash leaves `~` after `=` as it is, so write `"$HOME"`). Don't end a
-quoted folder with `\`: cmd and Windows PowerShell 5.1 read `\"` as a quote, so
-write `-t="D:\My Files"`. Put `qoqdir.exe` in a folder on your PATH to type just
-`qoqdir`.
+home folder. `D:` means `D:\`. All after `-t=` or `--tab=` is the folder, even
+a name that starts with `-`. Quote the folder after `-t=`: PowerShell reads an
+unquoted `-t=` as a switch of its own and splits `-t=my.folder` at the dot.
+`--tab=` works unquoted in cmd, PowerShell and Git Bash (Git Bash leaves `~` as
+it is, so write `"$HOME"`). Don't end a quoted folder with `\`: cmd and Windows
+PowerShell 5.1 read `\"` as a quote. Put `qoqdir.exe` in a folder on your PATH
+to type just `qoqdir`.
 
 ## Bookmarks
 

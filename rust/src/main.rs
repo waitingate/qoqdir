@@ -148,14 +148,14 @@ fn print_help(text: &str) -> bool {
             CreateFileW(pcwstr(&wide(name)), access, share, None, OPEN_EXISTING, Default::default(), None).unwrap_or_default()
         };
         let (con, input) = (open("CONOUT$"), open("CONIN$"));
-        // cmd and PowerShell don't wait for a window program, so their prompt may be back already (cursor past
-        // column 0). Print below it, then send Enter for a new prompt after the help. Without it PowerShell 7 draws
-        // the next typed line over the help.
+        // cmd and PowerShell don't wait for a window program, so they may be waiting for the next command already,
+        // the cursor past column 0. Print below that line, then send Enter so a fresh input line follows the help.
+        // Without it PowerShell 7 draws the next typed line over the help.
         let mut info = CONSOLE_SCREEN_BUFFER_INFO::default();
-        let prompt = GetConsoleScreenBufferInfo(con, &mut info).is_ok() && info.dwCursorPosition.X > 0;
-        let text: Vec<u16> = if prompt { "\r\n" } else { "" }.encode_utf16().chain(text.encode_utf16()).collect();
+        let mid_line = GetConsoleScreenBufferInfo(con, &mut info).is_ok() && info.dwCursorPosition.X > 0;
+        let text: Vec<u16> = if mid_line { "\r\n" } else { "" }.encode_utf16().chain(text.encode_utf16()).collect();
         let ok = WriteConsoleW(con, &text, None, None).is_ok();
-        if ok && prompt {
+        if ok && mid_line {
             let key = |down: bool| INPUT_RECORD {
                 EventType: KEY_EVENT as u16,
                 Event: INPUT_RECORD_0 {

@@ -106,14 +106,14 @@ bool printHelp(std::wstring text) {
                            OPEN_EXISTING, 0, nullptr);
     };
     HANDLE con = open(L"CONOUT$"), in = open(L"CONIN$");
-    // cmd and PowerShell don't wait for a window program, so their prompt may be back already (cursor past column 0).
-    // Print below it, then send Enter for a new prompt after the help. Without it PowerShell 7 draws the next typed
-    // line over the help.
+    // cmd and PowerShell don't wait for a window program, so they may be waiting for the next command already, the
+    // cursor past column 0. Print below that line, then send Enter so a fresh input line follows the help. Without
+    // it PowerShell 7 draws the next typed line over the help.
     CONSOLE_SCREEN_BUFFER_INFO info{};
-    bool prompt = GetConsoleScreenBufferInfo(con, &info) && info.dwCursorPosition.X > 0;
-    if (prompt) text = L"\r\n" + text;
+    bool midLine = GetConsoleScreenBufferInfo(con, &info) && info.dwCursorPosition.X > 0;
+    if (midLine) text = L"\r\n" + text;
     bool ok = WriteConsoleW(con, text.c_str(), DWORD(text.size()), &n, nullptr);
-    if (ok && prompt) {
+    if (ok && midLine) {
         INPUT_RECORD enter[2] = {};
         for (int i = 0; i < 2; ++i) {   // pressed and let go
             enter[i].EventType = KEY_EVENT;

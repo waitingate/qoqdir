@@ -146,9 +146,9 @@ These describe what the user sees. Each must hold in every situation.
 - Changes made by other programs (files created, deleted, renamed, changed) show
   up by themselves within about half a second, keeping the selection, focus and
   scroll position. A burst of changes causes one refresh, not hundreds, and the
-  watch stays while the folder shown stays (setting one up costs 25-75 ms). A
-  change made while the folder was still being read is caught too: the folder's
-  own modified time is compared once the watch is in place.
+  watch stays while the folder shown stays. A change made while the folder was
+  still being read is caught too: the folder's own modified time is compared
+  once the watch is in place.
 - If the shown folder itself is deleted or renamed by another program, the tab
   notices and shows the "not available" state (4.3).
 - Plugging in or removing a drive updates the tree and This PC.
@@ -250,8 +250,8 @@ Back, Forward and Up are disabled when they can't do anything.
   - A path that doesn't work stays selected in the box, so it can be fixed.
 - Folder names autocomplete as you type (Windows' own autocomplete).
 - Esc in the address bar puts the current path back and returns to the list.
-- Ctrl+Backspace deletes the word before the cursor, in the address bar and in
-  the filter box (an edit box on its own types a box character instead).
+- Ctrl+Backspace deletes the word before the cursor, in the address bar and the
+  filter box.
 
 ### 5.4 File list
 - Detail view with Name, Date modified, Type and Size (size right aligned, empty
@@ -302,10 +302,10 @@ Back, Forward and Up are disabled when they can't do anything.
   subfolders are the same stays as it is; one whose subfolders changed shows them
   afresh, and what was open below it closes (an open list changed item by item is
   slow: Windows repaints it for each).
-- The tree follows the folder shown: when its subfolders change (made, renamed
-  or deleted, by Qoqdir or another program), its node is read again as F5
-  would. After a command from a node's own menu, the node's parent is read
-  again, so a folder deleted there leaves the tree.
+- The tree follows the folder shown: when its subfolders change, by Qoqdir or
+  another program, its node is read again as F5 would. After a command from a
+  node's menu, the node's parent is read again, so a folder deleted there leaves
+  the tree.
 - Clicking a node, or moving to it with the keyboard, opens it in this tab, and
   clicking the selected node opens it again. Middle-click opens a new background
   tab.
@@ -409,7 +409,7 @@ Anywhere in the window:
 | Ctrl+Shift+PgUp / Ctrl+Shift+PgDn | move the tab left / right |
 | Ctrl+L, Alt+D, F4 | address bar (text selected) |
 | Ctrl+F, F3 | filter box |
-| F5, Ctrl+R | refresh the list (unless it is loading already) and the tree (5.5); the status bar says "Refreshed" when the list was |
+| F5, Ctrl+R | refresh the list and the tree (5.5); the status bar says "Refreshed" |
 | Ctrl+H | show or hide hidden files |
 | Alt+Left / Alt+Right / Alt+Up | back / forward / up |
 | Mouse back and forward buttons | back / forward |
@@ -448,17 +448,13 @@ qoqdir [options] [folder ...]
 ```
 
 - `-t=` and `--tab=` are the safe forms for scripts: all after `=` is the
-  folder, even a name that starts with `-`. Tested in cmd, Windows PowerShell
-  5.1, PowerShell 7.6 and Git Bash: `--tab=` arrives whole in all four, with
-  PowerShell's variables filled in (`--tab=$HOME`); only Git Bash leaves `~`
-  after `=` as it is (`--tab="$HOME"` works). `-t=` does too when the folder is
-  quoted. Unquoted, PowerShell (5.1 and 7.6 alike) reads `-t=...` as a switch of
-  its own (a word that starts with `-` and a letter): a dot ends the switch's
-  name, so `-t=my.folder` and `-t=.` arrive as two arguments (unless a colon
-  came first, as in `-t=D:\my.folder`), and a variable in the name isn't filled
-  in (`-t=$HOME`). Quotes make the word plain text, and so do two dashes. Git
-  Bash turns an argument that starts with `/` into a path (`/t` arrives as
-  `T:/`), so there is no `/t`.
+  folder, even a name that starts with `-`. `--tab=` arrives whole in cmd,
+  Windows PowerShell 5.1, PowerShell 7 and Git Bash, with PowerShell's variables
+  filled in; Git Bash leaves `~` after `=` as it is (`"$HOME"` works). `-t=`
+  does too when the folder is quoted. Unquoted, PowerShell reads `-t=...` as a
+  switch of its own: a dot ends the switch's name (`-t=my.folder` arrives as two
+  arguments) and a variable in it isn't filled in. Git Bash turns an argument
+  that starts with `/` into a path, so there is no `/t`.
 
 - Each folder opens once, in the given order (the same folder twice, in any
   letter case or with a trailing backslash, gives one tab). The first is shown.
@@ -468,30 +464,26 @@ qoqdir [options] [folder ...]
   (4.3). That helps with network drives that connect later.
 - `-h`, `--help` and `-?` print the command-line help and exit with 0. An
   unknown option prints "Unknown option: -x" above the help and exits with 1.
-  The help goes wherever the output is sent (a file, a pipe, `nul`), else to the
-  terminal it was typed in, else (shortcut, Run) to a box titled with the
-  version. cmd and PowerShell don't wait for a window program, so their prompt
-  can be back before the help. Then the help goes below it and Qoqdir sends the
-  terminal an Enter for a new prompt (without it PowerShell 7 draws the next
-  typed line over the help). No Enter when the cursor is at column 0, as in a
-  `.bat` file, which waits. PowerShell 7 closes the pipe at once for
-  `$h = qoqdir -h`, so a failed pipe write goes to the terminal. Checked by hand
-  in a pseudo console with cmd, PowerShell 5.1 and 7.6.
+  The help goes to the output if it was sent somewhere (a file, a pipe, `nul`),
+  else to the terminal it was typed in, else (a shortcut, Run) to a box titled
+  with the version. cmd and PowerShell don't wait for a window program, so they
+  may be waiting for the next command before the help: then the help goes below
+  that line and Qoqdir sends the terminal an Enter, so a fresh input line
+  follows the help. No Enter when the cursor is at the start of a line, as in a
+  `.bat` file, which waits.
 - The command-line help is short, in plain words, at most 72 columns: version,
-  usage, options, examples, notes on quotes, scripts (a `.bat` file waits for
-  the window, PowerShell doesn't; exit codes) and the files next to the exe.
-- F1 shows the keys help over the window. It is short and in plain words. It
-  lists the main keys of 5.9 in groups (navigation, tabs, files), the most
-  helpful first in each: what Explorer users wouldn't guess (typing to filter,
-  Backspace for up, Alt+drag onto Bookmarks, saving tabs, Ctrl+H) before what
-  they know. One action a line, named as in the menus where there is one, with
-  its main key ("Save tabs: Ctrl+S"); "or" adds a key only when it does what the
-  main one can't (Ctrl+F filters from anywhere). Explorer's other keys for the
-  same things (Alt+Up, Alt+D, F4, F3, Ctrl+R) work but aren't listed, nor are
-  Enter and Ctrl+C. No tab stops: a message box sets them by the font's average
-  letter width, so columns would line up in one font only. Last, the command
-  line by example (`-t=`, then `--tab=`, each with a quoted folder: quotes are
-  safe in every shell) and "More detail: type qoqdir --help in a terminal".
+  usage, options, examples, notes on quotes and scripts, and the files next to
+  the exe.
+- F1 shows the keys help over the window: the main keys of 5.9 in three groups
+  (navigation, tabs, files), the most helpful first in each, so what Explorer
+  users wouldn't guess (typing to filter, Backspace for up, Alt+drag onto
+  Bookmarks, saving tabs, Ctrl+H) comes before what they know. One action a
+  line, named as in the menus, with its main key; "or" adds a second key only
+  when it does what the first can't (Ctrl+F filters from anywhere). Explorer's
+  other keys for the same things work but aren't listed, nor are Enter and
+  Ctrl+C. No tab stops: a message box lines up columns in one font only. It
+  ends with the command line by example and "More detail: type qoqdir --help in
+  a terminal".
 - `--selftest` runs the self-test (7.2) in `qoqdir-test.exe`; the exe users get
   treats it as an unknown option. It isn't in the help.
 
@@ -557,10 +549,10 @@ and exits with code 0 only if every step passed. It must:
 - give each step a timeout and carry on after a failed step;
 - share the clipboard with whatever else runs, so the user can go on copying and
   pasting: a step that copies does it again while its files aren't there, and a
-  paste step first puts its file back if another program has taken the
-  clipboard (it never pastes anything else). Windows reads the clipboard a
-  moment after a paste starts, so a copy at that very moment can still make a
-  paste step fail, as it would make Explorer's paste do nothing;
+  paste step first puts its file back if another program took the clipboard.
+  Windows reads the clipboard a moment after a paste starts, so a copy at that
+  moment can still fail a paste step, as it would make Explorer's paste do
+  nothing;
 - leave nothing behind but the test folder and log in `%TEMP%` (one small file in
   the Recycle Bin from the delete test is fine). It may replace the clipboard.
 
@@ -697,13 +689,13 @@ Run on a copy of the exe in a temp folder:
 - With its output sent to a pipe, `--help` writes the command-line help (the
   version first) and exits with code 0; `-x` writes the error, then the help, and
   exits with code 1.
-- Started with no terminal in reach (by a cmd that has no console, as from a
-  shortcut), `-x` shows the error and the help in a box titled with the version,
+- Started without a terminal (as from a shortcut), `-x` shows the error and the
+  help in a box titled with the version,
   and exits with code 1.
 - F1 in the window (a key press posted to the file list, nothing global) shows
   the keys help, which points to `qoqdir --help`.
-- Printing in a terminal itself (the prompt and the Enter, 5.10) is checked by
-  hand in a pseudo console; these checks don't type into a terminal.
+- Printing in a terminal (5.10) is checked by hand; these checks don't type
+  into one.
 - With a damaged `qoqdir.ini` (a window position far off any screen) it starts
   with the defaults.
 - From a folder it can't write to (as Program Files is for most users), it runs,
