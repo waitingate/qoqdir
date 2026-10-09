@@ -27,6 +27,132 @@ const wchar_t* extPtr(const std::wstring& name) {
     return dot == std::wstring::npos ? name.c_str() + name.size() : name.c_str() + dot;
 }
 
+}  // namespace
+
+// ---------------------------------------------------------------- paths
+
+std::wstring joinPath(const std::wstring& dir, const std::wstring& name) {
+    if (dir.empty()) return name;
+    if (isSep(dir.back())) return dir + name;
+    return dir + L'\\' + name;
+}
+
+std::wstring parentPath(const std::wstring& path) {
+    if (path.empty() || isDriveRoot(path)) return L"";
+    size_t pos = path.find_last_of(L'\\');
+    if (pos == std::wstring::npos) return L"";
+    if (isUnc(path)) {
+        // "\\server\share" is the top of a network path.
+        size_t shareSep = path.find(L'\\', 2);
+        if (shareSep == std::wstring::npos || pos <= shareSep) return L"";
+        return path.substr(0, pos);
+    }
+    std::wstring parent = path.substr(0, pos);
+    if (parent.size() == 2 && parent[1] == L':') parent += L'\\';
+    return parent;
+}
+
+std::wstring leafName(const std::wstring& path) {
+    if (path.empty() || isDriveRoot(path)) return path;
+    size_t pos = path.find_last_of(L'\\');
+    return pos == std::wstring::npos ? path : path.substr(pos + 1);
+}
+
+std::wstring displayName(const std::wstring& path) {
+    return path.empty() ? L"This PC" : leafName(path);
+}
+
+std::wstring locationText(const std::wstring& path) {
+    return path.empty() ? L"This PC" : path;
+}
+
+std::wstring childToward(const std::wstring& ancestor, const std::wstring& descendant) {
+    if (ancestor.empty()) {
+        if (descendant.size() >= 3 && descendant[1] == L':') return descendant.substr(0, 3);
+        return L"";
+    }
+    std::wstring prefix = ancestor;
+    if (!isSep(prefix.back())) prefix += L'\\';
+    int n = int(prefix.size());
+    if (descendant.size() <= prefix.size() || !equalNoCase(descendant.c_str(), n, prefix.c_str(), n))
+        return L"";
+    size_t end = descendant.find(L'\\', prefix.size());
+    return descendant.substr(prefix.size(), end == std::wstring::npos ? std::wstring::npos : end - prefix.size());
+}
+
+bool samePath(const std::wstring& a, const std::wstring& b) {
+    return equalNoCase(a.c_str(), int(a.size()), b.c_str(), int(b.size()));
+}
+
+bool isDirectory(const std::wstring& path) {
+    DWORD a = GetFileAttributesW(path.c_str());
+    return a != INVALID_FILE_ATTRIBUTES && (a & FILE_ATTRIBUTE_DIRECTORY);
+}
+
+bool isAbsolutePath(const std::wstring& path) {
+    return (path.size() >= 3 && path[1] == L':' && path[2] == L'\\') || isUnc(path);
+}
+
+bool isRelativePath(const std::wstring& text) {
+    if (text.empty() || isAbsolutePath(text)) return false;
+    if (text[0] == L'.') return true;   // ".", ".\sub", "..\other", "..\"
+    // Only the first word counts ("notepad a\b.txt" stays a command); a colon marks a web address ("https:\\x").
+    size_t end = text.find_first_of(L" \t");   // npos when the text is one word
+    return text.find(L'\\') < end && text.find(L':') >= end;
+}
+
+std::wstring normalizePath(std::wstring p) {
+    auto junk = [](wchar_t c) { return c == L' ' || c == L'\t' || c == L'"'; };
+    while (!p.empty() && junk(p.back())) p.pop_back();
+    size_t start = 0;
+    while (start < p.size() && junk(p[start])) ++start;
+    p.erase(0, start);
+    if (p.empty() || equalNoCase(p.c_str(), -1, L"This PC", -1)) return L"";
+    std::replace(p.begin(), p.end(), L'/', L'\\');
+    if (p.size() == 2 && p[1] == L':') p += L'\\';
+    if (isAbsolutePath(p)) p = fullPath(p);   // resolves "." and ".."
+    while (p.size() > 3 && p.back() == L'\\') p.pop_back();
+    if (p.size() >= 2 && p[1] == L':') p[0] = towupper(p[0]);
+    return p;
+}
+
+// ---------------------------------------------------------------- typed text and the command line
+
+std::wstring expandVars(const std::wstring& text) {
+    std::wstring buf(32768, L'\0');
+    DWORD n = ExpandEnvironmentStringsW(text.c_str(), buf.data(), DWORD(buf.size()));
+    return n > 0 && n <= buf.size() ? std::wstring(buf.c_str()) : text;
+}
+
+std::wstring resolveArgument(const std::wstring& arg) {
+    // "D:" alone means the drive's root (as in Explorer), not Windows' "current folder on D:".
+    return normalizePath(fullPath(arg.size() == 2 && arg[1] == L':' ? arg + L'\\' : arg));
+}
+
+CommandLine parseCommandLine(const std::vector<std::wstring>& args) {
+    CommandLine cmd;
+    auto addFolder = [&](const std::wstring& text) {
+        std::wstring folder = resolveArgument(text);
+        bool known = std::any_of(cmd.folders.begin(), cmd.folders.end(), [&](auto& f) { return samePath(f, folder); });
+        if (!folder.empty() && !known) cmd.folders.push_back(folder);   // each folder once
+    };
+    for (const std::wstring& arg : args) {
+        if (arg.empty() || arg[0] != L'-') addFolder(arg);   // a plain folder
+        else if (arg == L"--selftest") cmd.selfTest = true;
+        else if (arg == L"-h" || arg == L"-?" || arg == L"--help") cmd.help = true;
+        // All after "=" is the folder, even a name that starts with "-". "-t=" is short for "--tab=", but Windows
+        // PowerShell takes "-t=" for a switch of its own: unquoted, it splits "-t=my.folder" at the dot and keeps
+        // "-t=$HOME" as typed, so there the folder after "-t=" needs quotes (5.10).
+        else if (arg.rfind(L"--tab=", 0) == 0 || arg.rfind(L"-t=", 0) == 0) addFolder(arg.substr(arg.find(L'=') + 1));
+        else cmd.error = L"Unknown option: " + arg;
+        if (!cmd.error.empty()) break;
+    }
+    return cmd;
+}
+
+// ---------------------------------------------------------------- reading a folder
+
+namespace {
 void listDrives(Listing& r) {
     DWORD mask = GetLogicalDrives();
     for (int i = 0; i < 26; ++i) {
@@ -47,7 +173,6 @@ void listDrives(Listing& r) {
         r.items.push_back(std::move(it));
     }
 }
-
 }  // namespace
 
 Listing listFolder(const std::wstring& path, bool showHidden, const std::function<bool()>& stop) {
@@ -96,6 +221,8 @@ FILETIME folderWritten(const std::wstring& path) {
     GetFileAttributesExW(path.c_str(), GetFileExInfoStandard, &data);   // leaves the zeros if it fails
     return data.ftLastWriteTime;
 }
+
+// ---------------------------------------------------------------- sorting and filtering
 
 namespace {
 // A string's sort key: comparing two keys byte by byte orders them exactly as StrCmpLogicalW (Explorer) does,
@@ -188,123 +315,6 @@ bool matchesFilter(const Item& item, const std::wstring& filter) {
     return false;
 }
 
-std::wstring normalizePath(std::wstring p) {
-    auto junk = [](wchar_t c) { return c == L' ' || c == L'\t' || c == L'"'; };
-    while (!p.empty() && junk(p.back())) p.pop_back();
-    size_t start = 0;
-    while (start < p.size() && junk(p[start])) ++start;
-    p.erase(0, start);
-    if (p.empty() || equalNoCase(p.c_str(), -1, L"This PC", -1)) return L"";
-    std::replace(p.begin(), p.end(), L'/', L'\\');
-    if (p.size() == 2 && p[1] == L':') p += L'\\';
-    if (isAbsolutePath(p)) p = fullPath(p);   // resolves "." and ".."
-    while (p.size() > 3 && p.back() == L'\\') p.pop_back();
-    if (p.size() >= 2 && p[1] == L':') p[0] = towupper(p[0]);
-    return p;
-}
-
-std::wstring expandVars(const std::wstring& text) {
-    std::wstring buf(32768, L'\0');
-    DWORD n = ExpandEnvironmentStringsW(text.c_str(), buf.data(), DWORD(buf.size()));
-    return n > 0 && n <= buf.size() ? std::wstring(buf.c_str()) : text;
-}
-
-std::wstring resolveArgument(const std::wstring& arg) {
-    // "D:" alone means the drive's root (as in Explorer), not Windows' "current folder on D:".
-    return normalizePath(fullPath(arg.size() == 2 && arg[1] == L':' ? arg + L'\\' : arg));
-}
-
-CommandLine parseCommandLine(const std::vector<std::wstring>& args) {
-    CommandLine cmd;
-    auto addFolder = [&](const std::wstring& text) {
-        std::wstring folder = resolveArgument(text);
-        bool known = std::any_of(cmd.folders.begin(), cmd.folders.end(), [&](auto& f) { return samePath(f, folder); });
-        if (!folder.empty() && !known) cmd.folders.push_back(folder);   // each folder once
-    };
-    for (const std::wstring& arg : args) {
-        if (arg.empty() || arg[0] != L'-') addFolder(arg);   // a plain folder
-        else if (arg == L"--selftest") cmd.selfTest = true;
-        else if (arg == L"-h" || arg == L"-?" || arg == L"--help") cmd.help = true;
-        // All after "=" is the folder, even a name that starts with "-". "-t=" is short for "--tab=", but Windows
-        // PowerShell takes "-t=" for a switch of its own: unquoted, it splits "-t=my.folder" at the dot and keeps
-        // "-t=$HOME" as typed, so there the folder after "-t=" needs quotes (5.10).
-        else if (arg.rfind(L"--tab=", 0) == 0 || arg.rfind(L"-t=", 0) == 0) addFolder(arg.substr(arg.find(L'=') + 1));
-        else cmd.error = L"Unknown option: " + arg;
-        if (!cmd.error.empty()) break;
-    }
-    return cmd;
-}
-
-std::wstring joinPath(const std::wstring& dir, const std::wstring& name) {
-    if (dir.empty()) return name;
-    if (isSep(dir.back())) return dir + name;
-    return dir + L'\\' + name;
-}
-
-std::wstring parentPath(const std::wstring& path) {
-    if (path.empty() || isDriveRoot(path)) return L"";
-    size_t pos = path.find_last_of(L'\\');
-    if (pos == std::wstring::npos) return L"";
-    if (isUnc(path)) {
-        // "\\server\share" is the top of a network path.
-        size_t shareSep = path.find(L'\\', 2);
-        if (shareSep == std::wstring::npos || pos <= shareSep) return L"";
-        return path.substr(0, pos);
-    }
-    std::wstring parent = path.substr(0, pos);
-    if (parent.size() == 2 && parent[1] == L':') parent += L'\\';
-    return parent;
-}
-
-std::wstring leafName(const std::wstring& path) {
-    if (path.empty() || isDriveRoot(path)) return path;
-    size_t pos = path.find_last_of(L'\\');
-    return pos == std::wstring::npos ? path : path.substr(pos + 1);
-}
-
-std::wstring displayName(const std::wstring& path) {
-    return path.empty() ? L"This PC" : leafName(path);
-}
-
-std::wstring locationText(const std::wstring& path) {
-    return path.empty() ? L"This PC" : path;
-}
-
-std::wstring childToward(const std::wstring& ancestor, const std::wstring& descendant) {
-    if (ancestor.empty()) {
-        if (descendant.size() >= 3 && descendant[1] == L':') return descendant.substr(0, 3);
-        return L"";
-    }
-    std::wstring prefix = ancestor;
-    if (!isSep(prefix.back())) prefix += L'\\';
-    int n = int(prefix.size());
-    if (descendant.size() <= prefix.size() || !equalNoCase(descendant.c_str(), n, prefix.c_str(), n))
-        return L"";
-    size_t end = descendant.find(L'\\', prefix.size());
-    return descendant.substr(prefix.size(), end == std::wstring::npos ? std::wstring::npos : end - prefix.size());
-}
-
-bool samePath(const std::wstring& a, const std::wstring& b) {
-    return equalNoCase(a.c_str(), int(a.size()), b.c_str(), int(b.size()));
-}
-
-bool isDirectory(const std::wstring& path) {
-    DWORD a = GetFileAttributesW(path.c_str());
-    return a != INVALID_FILE_ATTRIBUTES && (a & FILE_ATTRIBUTE_DIRECTORY);
-}
-
-bool isAbsolutePath(const std::wstring& path) {
-    return (path.size() >= 3 && path[1] == L':' && path[2] == L'\\') || isUnc(path);
-}
-
-bool isRelativePath(const std::wstring& text) {
-    if (text.empty() || isAbsolutePath(text)) return false;
-    if (text[0] == L'.') return true;   // ".", ".\sub", "..\other", "..\"
-    // Only the first word counts ("notepad a\b.txt" stays a command); a colon marks a web address ("https:\\x").
-    size_t end = text.find_first_of(L" \t");   // npos when the text is one word
-    return text.find(L'\\') < end && text.find(L':') >= end;
-}
-
 int rowAfterDeleting(const std::vector<int>& rows, int count) {
     if (rows.empty()) return -1;
     int next = rows.front();
@@ -314,6 +324,8 @@ int rowAfterDeleting(const std::vector<int>& rows, int count) {
     }
     return next < count ? next : rows.front() - 1;   // nothing after them: the one before, or -1
 }
+
+// ---------------------------------------------------------------- text
 
 std::wstring toLower(std::wstring s) {
     if (!s.empty()) CharLowerBuffW(s.data(), DWORD(s.size()));

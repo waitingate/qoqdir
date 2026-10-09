@@ -39,6 +39,8 @@ use windows::Win32::UI::WindowsAndMessaging::{
 
 use crate::util::{from_wide, pcwstr, wide};
 
+// ---------------------------------------------------------------- help
+
 // F1: the main keys in groups, the most helpful first in each: what Explorer users wouldn't guess comes first. One
 // action a line, in plain words (the menus' own where there is one), with its main key: Explorer's other keys for the
 // same thing work but aren't listed (Alt+Up, F4, Ctrl+R), nor are Enter and Ctrl+C. The command line last, by
@@ -183,6 +185,8 @@ fn print_help(text: &str) -> bool {
 pub fn show_keys(owner: HWND) {
     help_box(Some(owner), KEYS, MB_ICONINFORMATION);
 }
+
+// ---------------------------------------------------------------- start
 
 fn main() {
     // DLLs that Windows loads by name come from System32 only, never from the exe's folder: a planted

@@ -1137,33 +1137,6 @@ void App::dragTab(int over, int x) {
     if (over > active_ ? x >= std::max(to.right - width, middle) : x < std::min(to.left + width, middle)) moveTab(over);
 }
 
-// ---------------------------------------------------------------- saved tabs (Bookmarks\Tabs)
-
-// Both work on a worker thread: a tab's folder may be on a server that is off, and so may Bookmarks.
-void App::saveTabs() {
-    std::vector<std::wstring> folders;
-    for (const Tab& t : tabs_) folders.push_back(t.path);
-    inBackground([wnd = wnd_, dir = joinPath(tree_.bookmarks(), L"Tabs"), folders = std::move(folders)] {
-        PostMessageW(wnd, WM_APP_TABS_SAVED, saveFolderShortcuts(dir, folders), 0);
-    });
-}
-
-void App::openSavedTabs() {
-    inBackground([wnd = wnd_, dir = joinPath(tree_.bookmarks(), L"Tabs")] {
-        post(wnd, WM_APP_TABS_READ, 0, std::make_unique<std::vector<std::wstring>>(savedFolders(dir)));
-    });
-}
-
-// After the open tabs, each folder that isn't open yet; the first of them is shown.
-void App::addSavedTabs(const std::vector<std::wstring>& folders) {
-    int first = int(tabs_.size());
-    for (const std::wstring& f : folders)
-        if (std::none_of(tabs_.begin(), tabs_.end(), [&](const Tab& t) { return samePath(t.path, f); }))
-            tabs_.push_back(makeTab(f));
-    if (first < int(tabs_.size())) switchTab(first);
-    else setMessage(folders.empty() ? L"No saved tabs in Bookmarks\\Tabs" : L"The saved tabs are open already");
-}
-
 // The folder of the tab under the cursor, for a drop. That tab shows as the current one while hovered (plain tabs
 // take no highlight); the current tab's name keeps its bullet.
 std::optional<std::wstring> App::tabDropTarget(const POINT* screenPt) {
@@ -1209,6 +1182,33 @@ void App::showTabs() {
     SelectObject(dc, old);
     ReleaseDC(tabBar_, dc);
     TabCtrl_SetCurSel(tabBar_, active_);
+}
+
+// ---------------------------------------------------------------- saved tabs (Bookmarks\Tabs)
+
+// Both work on a worker thread: a tab's folder may be on a server that is off, and so may Bookmarks.
+void App::saveTabs() {
+    std::vector<std::wstring> folders;
+    for (const Tab& t : tabs_) folders.push_back(t.path);
+    inBackground([wnd = wnd_, dir = joinPath(tree_.bookmarks(), L"Tabs"), folders = std::move(folders)] {
+        PostMessageW(wnd, WM_APP_TABS_SAVED, saveFolderShortcuts(dir, folders), 0);
+    });
+}
+
+void App::openSavedTabs() {
+    inBackground([wnd = wnd_, dir = joinPath(tree_.bookmarks(), L"Tabs")] {
+        post(wnd, WM_APP_TABS_READ, 0, std::make_unique<std::vector<std::wstring>>(savedFolders(dir)));
+    });
+}
+
+// After the open tabs, each folder that isn't open yet; the first of them is shown.
+void App::addSavedTabs(const std::vector<std::wstring>& folders) {
+    int first = int(tabs_.size());
+    for (const std::wstring& f : folders)
+        if (std::none_of(tabs_.begin(), tabs_.end(), [&](const Tab& t) { return samePath(t.path, f); }))
+            tabs_.push_back(makeTab(f));
+    if (first < int(tabs_.size())) switchTab(first);
+    else setMessage(folders.empty() ? L"No saved tabs in Bookmarks\\Tabs" : L"The saved tabs are open already");
 }
 
 // ---------------------------------------------------------------- file commands

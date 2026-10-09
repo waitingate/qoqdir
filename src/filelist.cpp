@@ -10,6 +10,8 @@ const wchar_t* const kColumns[] = {L"Name", L"Date modified", L"Type", L"Size"};
 constexpr int kColumnCount = 4;
 }  // namespace
 
+// ---------------------------------------------------------------- contents
+
 void FileList::create(HWND parent, int id) {
     lv_ = CreateWindowExW(0, WC_LISTVIEWW, L"",
                           WS_CHILD | WS_VISIBLE | WS_TABSTOP | LVS_REPORT | LVS_OWNERDATA | LVS_SHOWSELALWAYS |
@@ -89,6 +91,8 @@ void FileList::update(bool keepSelection, const std::function<void()>& change) {
     select(names, focus);
 }
 
+// ---------------------------------------------------------------- what is shown
+
 bool FileList::hasFolder(const std::wstring& name) const {
     return std::any_of(items_.begin(), items_.end(), [&](const Item& it) { return it.isDir() && samePath(it.name, name); });
 }
@@ -129,6 +133,8 @@ std::wstring FileList::focusedName() const {
     int row = focused();
     return row >= 0 ? at(row).name : L"";
 }
+
+// ---------------------------------------------------------------- selection and scrolling
 
 int FileList::select(const std::vector<std::wstring>& names, const std::wstring& focus) {
     ListView_SetItemState(lv_, -1, 0, LVIS_SELECTED | LVIS_FOCUSED);
@@ -172,6 +178,8 @@ void FileList::ensureVisible(int row) {
     if (row >= 0 && row < count()) ListView_EnsureVisible(lv_, row, FALSE);
 }
 
+// ---------------------------------------------------------------- renaming and columns
+
 void FileList::rename(int row) {
     if (row < 0 || row >= count() || dir_.empty()) return;
     SetFocus(lv_);
@@ -201,6 +209,8 @@ void FileList::showSortArrow() {
         Header_SetItem(header, i, &hd);
     }
 }
+
+// ---------------------------------------------------------------- notifications
 
 bool FileList::onNotify(NMHDR* nm, LRESULT* result) {
     switch (nm->code) {

@@ -6,6 +6,8 @@
 #include <thread>
 #include <unordered_map>
 
+// ---------------------------------------------------------------- shell objects
+
 namespace {
 
 Pidl pidlFromPath(const std::wstring& path) {
@@ -142,6 +144,8 @@ Com<IContextMenu3> g_menu3;
 
 }  // namespace
 
+// ---------------------------------------------------------------- icons and types
+
 HIMAGELIST systemImageList() {
     SHFILEINFOW sfi{};
     return reinterpret_cast<HIMAGELIST>(SHGetFileInfoW(L"x", FILE_ATTRIBUTE_NORMAL, &sfi, sizeof sfi,
@@ -229,6 +233,8 @@ std::wstring knownFolder(REFKNOWNFOLDERID id) {
     CoTaskMemFree(p);
     return r;
 }
+
+// ---------------------------------------------------------------- menus
 
 Com<IDataObject> dataObject(HWND owner, const std::wstring& path) { return shellObject<IDataObject>(owner, path); }
 
@@ -320,6 +326,8 @@ bool invokeVerb(HWND owner, IContextMenu* cm, const char* verb) {
     ici.nShow = SW_SHOWNORMAL;
     return SUCCEEDED(cm->InvokeCommand(reinterpret_cast<CMINVOKECOMMANDINFO*>(&ici)));
 }
+
+// ---------------------------------------------------------------- file operations
 
 bool copyToClipboard(HWND owner, const std::wstring& dir, const std::vector<Item>& items, bool cut) {
     Com<IDataObject> obj = shellObject<IDataObject>(owner, dir, items);
@@ -418,6 +426,8 @@ void dragOut(HWND owner, const std::wstring& dir, const std::vector<Item>& items
     SHDoDragDrop(owner, obj.get(), nullptr, DROPEFFECT_COPY | DROPEFFECT_MOVE | DROPEFFECT_LINK, &effect);
 }
 
+// ---------------------------------------------------------------- shortcuts
+
 std::optional<std::wstring> shortcutTarget(const std::wstring& lnkPath, bool* folder) {
     *folder = false;
     Com<IShellLinkW> link;
@@ -485,6 +495,8 @@ std::vector<std::wstring> savedFolders(const std::wstring& dir) {
     return folders;
 }
 
+// ---------------------------------------------------------------- background work
+
 void inBackground(std::function<void()> work) {
     std::thread([work = std::move(work)] {
         HRESULT co = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE);
@@ -492,6 +504,8 @@ void inBackground(std::function<void()> work) {
         if (SUCCEEDED(co)) CoUninitialize();
     }).detach();
 }
+
+// ---------------------------------------------------------------- folder watch
 
 namespace {
 ULONG watch(HWND owner, UINT msg, const std::wstring& dir, LONG events) {
@@ -533,6 +547,8 @@ void acknowledgeChange(WPARAM wp, LPARAM lp) {
     HANDLE lock = SHChangeNotification_Lock(reinterpret_cast<HANDLE>(wp), DWORD(lp), &pidls, &event);
     if (lock) SHChangeNotification_Unlock(lock);
 }
+
+// ---------------------------------------------------------------- drag and drop
 
 namespace {
 
@@ -628,6 +644,8 @@ private:
 IDropTarget* newDropTarget(HWND owner, DropTargetFn target) {
     return new DropTarget(owner, std::move(target));
 }
+
+// ---------------------------------------------------------------- shell process
 
 ShellProcessRef::ShellProcessRef() : done_(CreateEventW(nullptr, TRUE, FALSE, nullptr)) {
     SHSetInstanceExplorer(this);

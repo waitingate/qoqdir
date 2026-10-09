@@ -126,3 +126,5 @@ instead of corrupting data, and the crash log says where.
   in the working folder).
 - 4-space indent, lines up to about 120 columns, members end in `_`. Comments
   say why, not what.
+- Each file pair has the same section headers (`// ---- name`) in the same
+  order, so a function sits at the same place in both versions.

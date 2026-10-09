@@ -59,6 +59,22 @@ public:
     int exitCode() const { return exitCode_; }
 
 private:
+    // Setup
+    static LRESULT CALLBACK wndProc(HWND, UINT, WPARAM, LPARAM);
+    void applyFont();
+    void applyColors(bool highContrast);
+    void layout();
+
+    // Messages
+    LRESULT onMessage(UINT msg, WPARAM wp, LPARAM lp);
+    void queueRefresh();   // one coalesced refresh of the current tab, once no rename or load is in progress
+    void onTimer(UINT_PTR id);
+    void onMiddleClick(HWND from, POINT screenPt);
+    LRESULT onNotify(NMHDR* nm);
+    void onContextMenu(HWND from, POINT pt);
+    void onTabMenu();
+
+    // Keyboard
     struct Key {
         UINT message;   // WM_KEYDOWN, WM_SYSKEYDOWN or WM_CHAR
         WPARAM code;    // virtual key, or the character
@@ -66,25 +82,7 @@ private:
         bool ctrl, shift, alt;
     };
     bool onKey(const Key& key);
-
-    struct SelfTest;
-    std::shared_ptr<SelfTest> selfTest_;   // shared_ptr: it can be destroyed where SelfTest isn't defined
-    void selfTestTick();
-    void selfTestLog(const std::wstring& line);   // appends to the log file at once
-    void selfTestKey(WPARAM vk, bool ctrl = false, bool shift = false, bool alt = false);
-    void selfTestType(const std::wstring& text);
-    static constexpr UINT_PTR kRefreshTimer = 1, kStatusTimer = 2, kLoadingTimer = 3, kSelfTestTimer = 50;
-    int exitCode_ = 1;   // a run that never finishes (closed by hand, no window) has not passed
-    bool useSettings_ = true;
-
-    static LRESULT CALLBACK wndProc(HWND, UINT, WPARAM, LPARAM);
-    LRESULT onMessage(UINT msg, WPARAM wp, LPARAM lp);
-    LRESULT onNotify(NMHDR* nm);
-    void onContextMenu(HWND from, POINT pt);
-    void onTabMenu();
-    void onTimer(UINT_PTR id);
-    void queueRefresh();   // one coalesced refresh of the current tab, once no rename or load is in progress
-    void onMiddleClick(HWND from, POINT screenPt);
+    void focusList();
 
     // Navigation
     void open(const std::wstring& path, Nav nav, ViewState view = {}, Origin origin = {});
@@ -101,8 +99,8 @@ private:
     void goToTyped();
     void activate(bool inNewTab);   // Enter / double-click on the selection
     void openShortcut(const std::wstring& path, bool inNewTab);
-    void openNode(const std::wstring& path, bool inNewTab);   // a tree node: folder or bookmark
     void renameNode(const std::wstring& path);                // a tree node's Rename, done in the file list
+    void openNode(const std::wstring& path, bool inNewTab);   // a tree node: folder or bookmark
     ViewState currentView() const;
     void rememberView();   // the tab leaves the screen: keep its selection and scroll for when it comes back
 
@@ -115,26 +113,36 @@ private:
     void switchTab(int index);
     void moveTab(int to);   // the current tab: Ctrl+Shift+PgUp / PgDn, or dragged along the bar
     void dragTab(int over, int x);
+    std::optional<std::wstring> tabDropTarget(const POINT* screenPt);
     void showTabs();
+
+    // Saved tabs (Bookmarks\Tabs)
     void saveTabs();       // Ctrl+S: a shortcut per tab in Bookmarks\Tabs
     void openSavedTabs();  // Ctrl+O: their folders as tabs after the open ones
     void addSavedTabs(const std::vector<std::wstring>& folders);
-    std::optional<std::wstring> tabDropTarget(const POINT* screenPt);
 
     // File commands
     void deleteSelection(bool permanently);
     void newFolder();
-    void focusList();
 
-    // Window
-    void applyFont();
-    void applyColors(bool highContrast);
-    void layout();
+    // Status and settings
     void showStatus();
     void setMessage(const std::wstring& text);
     void warn();                    // error beep
     void loadSettings(const CommandLine& cmd);
     void saveSettings();
+
+    // Self-test (selftest.cpp)
+    struct SelfTest;
+    std::shared_ptr<SelfTest> selfTest_;   // shared_ptr: it can be destroyed where SelfTest isn't defined
+    void selfTestTick();
+    void selfTestLog(const std::wstring& line);   // appends to the log file at once
+    void selfTestKey(WPARAM vk, bool ctrl = false, bool shift = false, bool alt = false);
+    void selfTestType(const std::wstring& text);
+
+    static constexpr UINT_PTR kRefreshTimer = 1, kStatusTimer = 2, kLoadingTimer = 3, kSelfTestTimer = 50;
+    int exitCode_ = 1;   // a run that never finishes (closed by hand, no window) has not passed
+    bool useSettings_ = true;
 
     HWND wnd_ = nullptr, back_ = nullptr, forward_ = nullptr, up_ = nullptr, refresh_ = nullptr, address_ = nullptr,
          filter_ = nullptr, tabBar_ = nullptr, plus_ = nullptr, status_ = nullptr, lastFocus_ = nullptr;

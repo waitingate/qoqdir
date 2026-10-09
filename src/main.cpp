@@ -5,6 +5,8 @@
 
 #include <shellapi.h>
 
+// ---------------------------------------------------------------- help
+
 namespace {
 
 // F1: the main keys in groups, the most helpful first in each: what Explorer users wouldn't guess comes first. One
@@ -130,6 +132,8 @@ bool printHelp(std::wstring text) {
 }  // namespace
 
 void showKeys(HWND owner) { helpBox(owner, kKeys, MB_ICONINFORMATION); }
+
+// ---------------------------------------------------------------- start
 
 int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int) {
     // DLLs that Windows loads by name come from System32 only, never from the exe's folder: a planted

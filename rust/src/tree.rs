@@ -64,6 +64,8 @@ pub struct FolderTree {
     drop_folder: RefCell<Option<Location>>,   // and where a drop on that node goes
 }
 
+// ---------------------------------------------------------------- reading, on a worker thread
+
 /// Subfolders of a location (This PC: the drives), and its shortcuts if asked, into `batch`. Worker thread: may block.
 fn read_children(batch: &mut TreeBatch, location: &Location, shortcuts: bool) {
     match location {
@@ -134,6 +136,8 @@ fn read_user_folders(batch: &mut TreeBatch) {
 }
 
 impl FolderTree {
+    // ------------------------------------------------------------ the tree
+
     /// Posts `batch_msg` (a `Box<TreeBatch>`, for `add_children`) and `icon_msg` (a `Box<IconBatch>`, for
     /// `set_icons`) to `parent`. `bookmarks` is the first root, open, with its shortcuts as well as its folders.
     pub fn create(parent: HWND, id: i32, batch_msg: u32, icon_msg: u32, bookmarks: Location) -> FolderTree {
@@ -384,6 +388,8 @@ impl FolderTree {
         }
     }
 
+    // ------------------------------------------------------------ the mouse: paths and drops
+
     /// The location under a screen point, or of the selected node for (-1, -1).
     pub fn location_at(&self, pt: POINT) -> Option<Location> {
         let node = if pt.x == -1 && pt.y == -1 {
@@ -422,6 +428,8 @@ impl FolderTree {
         }
         self.drop_folder.borrow().clone()
     }
+
+    // ------------------------------------------------------------ notifications
 
     /// Returns the folder to open when the user chose one.
     ///

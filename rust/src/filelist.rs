@@ -52,6 +52,8 @@ pub struct FileList {
 }
 
 impl FileList {
+    // ------------------------------------------------------------ contents
+
     pub fn create(parent: HWND, id: i32) -> FileList {
         let style = WS_CHILD.0 | WS_VISIBLE.0 | WS_TABSTOP.0 | LVS_REPORT | LVS_OWNERDATA | LVS_SHOWSELALWAYS
             | LVS_EDITLABELS | LVS_SHAREIMAGELISTS;
@@ -205,6 +207,9 @@ impl FileList {
         let m = self.model.borrow();
         m.view.get(row).map(|&i| m.items[i].clone())
     }
+
+    // ------------------------------------------------------------ what is shown
+
     /// A subfolder of that name, shown or filtered out.
     pub fn has_folder(&self, name: &OsStr) -> bool {
         self.model.borrow().items.iter().any(|it| it.is_dir() && equal_no_case(&it.name, name))
@@ -257,6 +262,8 @@ impl FileList {
     pub fn focused_name(&self) -> Option<OsString> {
         self.focused().and_then(|r| self.item(r)).map(|it| it.name)
     }
+
+    // ------------------------------------------------------------ selection and scrolling
 
     /// Selects the named items (case-insensitive) and returns the row of `focus`.
     pub fn select(&self, names: &[OsString], focus: Option<&OsStr>) -> Option<usize> {
@@ -324,6 +331,8 @@ impl FileList {
         }
     }
 
+    // ------------------------------------------------------------ renaming and columns
+
     pub fn rename(&self, row: Option<usize>) {
         let Some(row) = row.filter(|&r| r < self.count()) else { return };
         if matches!(self.location(), Location::ThisPc) {
@@ -366,6 +375,8 @@ impl FileList {
             send(header, HDM_SETITEMW, i, &hd as *const _ as isize);
         }
     }
+
+    // ------------------------------------------------------------ notifications
 
     /// Handles display-only notifications. Returns None for ones the app handles.
     ///

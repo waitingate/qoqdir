@@ -1929,47 +1929,6 @@ impl App {
         }
     }
 
-    // ------------------------------------------------------------ saved tabs (Bookmarks\Tabs)
-
-    /// Ctrl+S: a shortcut per tab in Bookmarks\Tabs. This and `open_saved_tabs` work on a worker thread: a tab's
-    /// folder may be on a server that is off, and so may Bookmarks.
-    fn save_tabs(&self) {
-        let folders: Vec<Location> = self.st.borrow().tabs.iter().map(|t| t.location.clone()).collect();
-        let Some(dir) = self.tree.bookmarks().path().map(|p| p.join("Tabs")) else { return };
-        let wnd = self.wnd.0 as usize;
-        in_background(move || {
-            let ok = save_folder_shortcuts(&dir, &folders);
-            let _ = unsafe { PostMessageW(Some(HWND(wnd as _)), WM_APP_TABS_SAVED, WPARAM(usize::from(ok)), LPARAM(0)) };
-        });
-    }
-
-    /// Ctrl+O: the saved tabs' folders as tabs after the open ones.
-    fn open_saved_tabs(&self) {
-        let Some(dir) = self.tree.bookmarks().path().map(|p| p.join("Tabs")) else { return };
-        let wnd = self.wnd.0 as usize;
-        in_background(move || post(wnd, WM_APP_TABS_READ, 0, Box::new(saved_folders(&dir))));
-    }
-
-    /// After the open tabs, each folder that isn't open yet; the first of them is shown.
-    fn add_saved_tabs(&self, folders: &[Location]) {
-        let (first, added) = {
-            let mut st = self.st.borrow_mut();
-            let first = st.tabs.len();
-            for folder in folders {
-                if !st.tabs.iter().any(|t| t.location.same(folder)) {
-                    let tab = Self::make_tab(&mut st, folder.clone());
-                    st.tabs.push(tab);
-                }
-            }
-            (first, st.tabs.len() > first)
-        };
-        if added {
-            self.switch_tab(first);
-        } else {
-            self.set_message(if folders.is_empty() { "No saved tabs in Bookmarks\\Tabs" } else { "The saved tabs are open already" });
-        }
-    }
-
     /// The folder of the tab under the cursor, for a drop. That tab shows as the current one while hovered (plain tabs
     /// take no highlight); the current tab's name keeps its bullet.
     fn tab_drop_target(&self, pt: Option<POINT>) -> Option<Location> {
@@ -2025,6 +1984,47 @@ impl App {
             ReleaseDC(Some(self.tab_bar), dc);
         }
         send(self.tab_bar, TCM_SETCURSEL, active, 0);
+    }
+
+    // ------------------------------------------------------------ saved tabs (Bookmarks\Tabs)
+
+    /// Ctrl+S: a shortcut per tab in Bookmarks\Tabs. This and `open_saved_tabs` work on a worker thread: a tab's
+    /// folder may be on a server that is off, and so may Bookmarks.
+    fn save_tabs(&self) {
+        let folders: Vec<Location> = self.st.borrow().tabs.iter().map(|t| t.location.clone()).collect();
+        let Some(dir) = self.tree.bookmarks().path().map(|p| p.join("Tabs")) else { return };
+        let wnd = self.wnd.0 as usize;
+        in_background(move || {
+            let ok = save_folder_shortcuts(&dir, &folders);
+            let _ = unsafe { PostMessageW(Some(HWND(wnd as _)), WM_APP_TABS_SAVED, WPARAM(usize::from(ok)), LPARAM(0)) };
+        });
+    }
+
+    /// Ctrl+O: the saved tabs' folders as tabs after the open ones.
+    fn open_saved_tabs(&self) {
+        let Some(dir) = self.tree.bookmarks().path().map(|p| p.join("Tabs")) else { return };
+        let wnd = self.wnd.0 as usize;
+        in_background(move || post(wnd, WM_APP_TABS_READ, 0, Box::new(saved_folders(&dir))));
+    }
+
+    /// After the open tabs, each folder that isn't open yet; the first of them is shown.
+    fn add_saved_tabs(&self, folders: &[Location]) {
+        let (first, added) = {
+            let mut st = self.st.borrow_mut();
+            let first = st.tabs.len();
+            for folder in folders {
+                if !st.tabs.iter().any(|t| t.location.same(folder)) {
+                    let tab = Self::make_tab(&mut st, folder.clone());
+                    st.tabs.push(tab);
+                }
+            }
+            (first, st.tabs.len() > first)
+        };
+        if added {
+            self.switch_tab(first);
+        } else {
+            self.set_message(if folders.is_empty() { "No saved tabs in Bookmarks\\Tabs" } else { "The saved tabs are open already" });
+        }
     }
 
     // ------------------------------------------------------------ file commands

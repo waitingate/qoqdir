@@ -7,6 +7,8 @@
 #include <functional>
 #include <optional>
 
+// ---------------------------------------------------------------- icons and types
+
 HIMAGELIST systemImageList();                          // small icons, shared by the whole process
 void setTheme(HWND control, const wchar_t* name);     // "Explorer": Explorer's look for a list or tree; "": plain
 int iconFor(const std::wstring& path, const Item& it); // UI thread only; never touches the disk
@@ -22,6 +24,8 @@ void rememberIcons(const IconBatch& batch);                                     
 int folderIcon();
 const std::wstring& typeName(const Item& it);          // UI thread only (cached)
 std::wstring knownFolder(REFKNOWNFOLDERID id);
+
+// ---------------------------------------------------------------- menus
 
 // One item, given by its full path, as a shell data object (what copy, drag and drop hand around).
 Com<IDataObject> dataObject(HWND owner, const std::wstring& path);
@@ -39,6 +43,8 @@ void showMenu(HWND owner, IContextMenu* menu, POINT screenPt,
 bool forwardMenuMessage(UINT msg, WPARAM wp, LPARAM lp, LRESULT* result);
 bool invokeVerb(HWND owner, IContextMenu* menu, const char* verb);
 
+// ---------------------------------------------------------------- file operations
+
 // False when the clipboard could not be set: a path too long for the shell, or another program holds it.
 bool copyToClipboard(HWND owner, const std::wstring& dir, const std::vector<Item>& items, bool cut);
 void pasteInto(HWND owner, const std::wstring& dir, bool shortcuts = false);   // shortcuts: "Paste shortcut"
@@ -48,6 +54,9 @@ HRESULT renameItem(HWND owner, const std::wstring& path, const std::wstring& new
 void openFile(HWND owner, const std::wstring& path);
 bool runCommand(HWND owner, const std::wstring& command, const std::wstring& workDir);
 void dragOut(HWND owner, const std::wstring& dir, const std::vector<Item>& items);
+
+// ---------------------------------------------------------------- shortcuts
+
 // A shortcut's stored target: a path, "" for This PC, or nothing (a web link, a library); 'folder' if it
 // was one. Reads only the .lnk file, never the target, so a server that is off costs nothing.
 std::optional<std::wstring> shortcutTarget(const std::wstring& lnkPath, bool* folder);
@@ -57,6 +66,8 @@ std::optional<std::wstring> shortcutTarget(const std::wstring& lnkPath, bool* fo
 bool saveFolderShortcuts(const std::wstring& dir, const std::vector<std::wstring>& folders);
 std::vector<std::wstring> savedFolders(const std::wstring& dir);   // the folders they lead to, in order
 
+// ---------------------------------------------------------------- background work
+
 // Runs `work` on a thread of its own, with COM set up for the shell calls it makes.
 void inBackground(std::function<void()> work);
 // Hands `object` to `window` by a posted message; the handler then owns it. Freed here if the window is gone.
@@ -64,6 +75,8 @@ template <class T>
 void post(HWND window, UINT msg, WPARAM wp, std::unique_ptr<T> object) {
     if (PostMessageW(window, msg, wp, reinterpret_cast<LPARAM>(object.get()))) object.release();
 }
+
+// ---------------------------------------------------------------- folder watch
 
 // Posts 'msg' to 'owner' when something in 'dir' changes, or 'dir' itself goes; stops when destroyed.
 class FolderWatch {
@@ -81,9 +94,13 @@ private:
 };
 void acknowledgeChange(WPARAM wp, LPARAM lp);
 
+// ---------------------------------------------------------------- drag and drop
+
 // Drops go to the folder 'target' returns for the cursor (none: refused); nullptr means the drag left or ended.
 using DropTargetFn = std::function<std::optional<std::wstring>(const POINT* screenPt)>;
 IDropTarget* newDropTarget(HWND owner, DropTargetFn target);
+
+// ---------------------------------------------------------------- shell process
 
 // Keeps the process alive while Windows finishes background copies started from the app.
 class ShellProcessRef final : public IUnknown {

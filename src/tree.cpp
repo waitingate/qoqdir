@@ -2,18 +2,9 @@
 
 #include "shell.h"
 
-namespace {
+// ---------------------------------------------------------------- reading, on a worker thread
 
-// The local folder a node stands for: its own, or a bookmark shortcut's target (read from the .lnk alone). None for
-// This PC, a link to a file or a web page, and anything on the network: asking Windows about a server that is off
-// would freeze the drag.
-std::optional<std::wstring> localFolder(std::wstring path) {
-    bool folder = true;
-    if (isShortcut(path)) path = normalizePath(shortcutTarget(path, &folder).value_or(L""));
-    bool local = folder && path.size() >= 3 && path[1] == L':' &&
-                 GetDriveTypeW(path.substr(0, 3).c_str()) != DRIVE_REMOTE;
-    return local ? std::optional(path) : std::nullopt;
-}
+namespace {
 
 // Subfolders of `dir` ("" = the drives), and its shortcuts if asked, into `batch`. Worker thread: may block.
 void readChildren(TreeBatch& batch, const std::wstring& dir, bool shortcuts) {
@@ -51,6 +42,17 @@ void readChildren(TreeBatch& batch, const std::wstring& dir, bool shortcuts) {
     }
 }
 
+// The local folder a node stands for: its own, or a bookmark shortcut's target (read from the .lnk alone). None for
+// This PC, a link to a file or a web page, and anything on the network: asking Windows about a server that is off
+// would freeze the drag.
+std::optional<std::wstring> localFolder(std::wstring path) {
+    bool folder = true;
+    if (isShortcut(path)) path = normalizePath(shortcutTarget(path, &folder).value_or(L""));
+    bool local = folder && path.size() >= 3 && path[1] == L':' &&
+                 GetDriveTypeW(path.substr(0, 3).c_str()) != DRIVE_REMOTE;
+    return local ? std::optional(path) : std::nullopt;
+}
+
 // The user folders that exist, as roots, into `batch`. Worker thread: one on a dead server can take 20-60 s.
 void readUserFolders(TreeBatch& batch) {
     const KNOWNFOLDERID* folders[] = {&FOLDERID_Desktop, &FOLDERID_Downloads, &FOLDERID_Documents,
@@ -66,6 +68,8 @@ void readUserFolders(TreeBatch& batch) {
 }
 
 }  // namespace
+
+// ---------------------------------------------------------------- the tree
 
 void FolderTree::create(HWND parent, int id, UINT batchMsg, UINT iconMsg, const std::wstring& bookmarks) {
     parent_ = parent;
@@ -97,21 +101,6 @@ void FolderTree::fill() {
     HTREEITEM thisPc = add(TVI_ROOT, L"", L"This PC", pc.iIcon);
     TreeView_Expand(tv_, bookmarksNode, TVE_EXPAND);
     TreeView_Expand(tv_, thisPc, TVE_EXPAND);
-}
-
-// The shortcuts' own icons, read after their node was shown (startWorker). The node may be gone by now.
-void FolderTree::setIcons(HTREEITEM node, const IconBatch& batch) {
-    if (!paths_.count(node)) return;
-    for (HTREEITEM c = TreeView_GetChild(tv_, node); c; c = TreeView_GetNextSibling(tv_, c)) {
-        for (const auto& [name, icon] : batch.icons) {
-            if (!samePath(pathOf(c), joinPath(batch.dir, name))) continue;
-            TVITEMW item{};
-            item.mask = TVIF_IMAGE | TVIF_SELECTEDIMAGE;
-            item.hItem = c;
-            item.iImage = item.iSelectedImage = icon;
-            TreeView_SetItem(tv_, &item);
-        }
-    }
 }
 
 // Drives came or went: re-read This PC only, so expanded folders stay open (4.5); its read in flight is dropped.
@@ -228,6 +217,23 @@ void FolderTree::addChildren(const TreeBatch& batch) {
     TreeView_Expand(tv_, batch.node, TVE_EXPAND);
 }
 
+// The shortcuts' own icons, read after their node was shown (startWorker). The node may be gone by now.
+void FolderTree::setIcons(HTREEITEM node, const IconBatch& batch) {
+    if (!paths_.count(node)) return;
+    for (HTREEITEM c = TreeView_GetChild(tv_, node); c; c = TreeView_GetNextSibling(tv_, c)) {
+        for (const auto& [name, icon] : batch.icons) {
+            if (!samePath(pathOf(c), joinPath(batch.dir, name))) continue;
+            TVITEMW item{};
+            item.mask = TVIF_IMAGE | TVIF_SELECTEDIMAGE;
+            item.hItem = c;
+            item.iImage = item.iSelectedImage = icon;
+            TreeView_SetItem(tv_, &item);
+        }
+    }
+}
+
+// ---------------------------------------------------------------- the mouse: paths and drops
+
 bool FolderTree::pathAt(POINT pt, std::wstring* path) const {
     HTREEITEM node = nullptr;
     if (pt.x == -1 && pt.y == -1) {
@@ -263,6 +269,8 @@ std::optional<std::wstring> FolderTree::dropTarget(const POINT* screenPt) {
     }
     return dropFolder_;
 }
+
+// ---------------------------------------------------------------- notifications
 
 bool FolderTree::onNotify(NMHDR* nm, std::wstring* open) {
     switch (nm->code) {

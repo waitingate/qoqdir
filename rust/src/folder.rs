@@ -29,6 +29,8 @@ use windows::core::PCWSTR;
 
 use crate::util::{from_wide, pcwstr, wide};
 
+// ---------------------------------------------------------------- paths
+
 /// Where a tab is. "This PC" (the drive list) is its own case, not a magic path.
 #[derive(Clone, Debug, Default)]
 pub enum Location {
@@ -141,18 +143,35 @@ impl Location {
     }
 }
 
-pub fn equal_no_case(a: &OsStr, b: &OsStr) -> bool {
-    let a: Vec<u16> = a.encode_wide().collect();
-    let b: Vec<u16> = b.encode_wide().collect();
-    unsafe { CompareStringOrdinal(&a, &b, true) == CSTR_EQUAL }
+pub fn is_directory(path: &Path) -> bool {
+    let a = unsafe { GetFileAttributesW(pcwstr(&wide(path))) };
+    a != INVALID_FILE_ATTRIBUTES && (a & FILE_ATTRIBUTE_DIRECTORY.0) != 0
 }
 
-pub fn to_lower(s: &OsStr) -> Vec<u16> {
-    let mut w: Vec<u16> = s.encode_wide().collect();
-    if !w.is_empty() {
-        unsafe { CharLowerBuffW(&mut w) };
+pub fn exists(path: &Path) -> bool {
+    unsafe { GetFileAttributesW(pcwstr(&wide(path))) != INVALID_FILE_ATTRIBUTES }
+}
+
+/// "C:\..." or "\\server\...", not a command like "cmd" (the same rule as the C++ version: a drive letter with a
+/// backslash, or two backslashes, so "\\server" alone counts too and opens with Windows' own error).
+pub fn is_absolute_path(text: &OsStr) -> bool {
+    let w: Vec<u16> = text.encode_wide().take(3).collect();
+    let (colon, sep) = (u16::from(b':'), u16::from(b'\\'));
+    (w.len() >= 3 && w[1] == colon && w[2] == sep) || (w.len() > 2 && w[0] == sep && w[1] == sep)
+}
+
+/// Typed text that means a place in the current folder (".", "..\x", "sub\deeper"), not a command.
+pub fn is_relative_path(text: &OsStr) -> bool {
+    let w: Vec<u16> = text.encode_wide().collect();
+    if w.is_empty() || is_absolute_path(text) {
+        return false;
     }
-    w
+    if w[0] == b'.' as u16 {
+        return true; // ".", ".\sub", "..\other", "..\"
+    }
+    // Only the first word counts ("notepad a\b.txt" stays a command); a colon marks a web address ("https:\\x").
+    let end = w.iter().position(|&c| c == b' ' as u16 || c == b'\t' as u16).unwrap_or(w.len());
+    w[..end].contains(&(b'\\' as u16)) && !w[..end].contains(&(b':' as u16))
 }
 
 /// Cleans up a path (typed, or from a shortcut). Leaves %VARS% alone: a folder may really be named "%TEMP%".
@@ -191,6 +210,8 @@ pub fn normalize(text: &OsStr) -> Location {
     }
     Location::dir(OsString::from_wide(&w))
 }
+
+// ---------------------------------------------------------------- typed text and the command line
 
 /// Expands %VARS%, only in what the user typed (5.3).
 pub fn expand_vars(text: &OsStr) -> OsString {
@@ -254,50 +275,7 @@ pub fn parse_command_line(args: &[OsString]) -> CommandLine {
     cmd
 }
 
-pub fn is_directory(path: &Path) -> bool {
-    let a = unsafe { GetFileAttributesW(pcwstr(&wide(path))) };
-    a != INVALID_FILE_ATTRIBUTES && (a & FILE_ATTRIBUTE_DIRECTORY.0) != 0
-}
-
-pub fn exists(path: &Path) -> bool {
-    unsafe { GetFileAttributesW(pcwstr(&wide(path))) != INVALID_FILE_ATTRIBUTES }
-}
-
-/// "C:\..." or "\\server\...", not a command like "cmd" (the same rule as the C++ version: a drive letter with a
-/// backslash, or two backslashes, so "\\server" alone counts too and opens with Windows' own error).
-pub fn is_absolute_path(text: &OsStr) -> bool {
-    let w: Vec<u16> = text.encode_wide().take(3).collect();
-    let (colon, sep) = (u16::from(b':'), u16::from(b'\\'));
-    (w.len() >= 3 && w[1] == colon && w[2] == sep) || (w.len() > 2 && w[0] == sep && w[1] == sep)
-}
-
-/// Typed text that means a place in the current folder (".", "..\x", "sub\deeper"), not a command.
-pub fn is_relative_path(text: &OsStr) -> bool {
-    let w: Vec<u16> = text.encode_wide().collect();
-    if w.is_empty() || is_absolute_path(text) {
-        return false;
-    }
-    if w[0] == b'.' as u16 {
-        return true; // ".", ".\sub", "..\other", "..\"
-    }
-    // Only the first word counts ("notepad a\b.txt" stays a command); a colon marks a web address ("https:\\x").
-    let end = w.iter().position(|&c| c == b' ' as u16 || c == b'\t' as u16).unwrap_or(w.len());
-    w[..end].contains(&(b'\\' as u16)) && !w[..end].contains(&(b':' as u16))
-}
-
-/// After deleting `rows` (ascending), the row of the item that takes the first one's place, else the one before.
-pub fn row_after_deleting(rows: &[usize], count: usize) -> Option<usize> {
-    let first = *rows.first()?;
-    let mut next = first;
-    for &row in rows {
-        // past the block of selected rows that starts at the first one
-        if row != next {
-            break;
-        }
-        next += 1;
-    }
-    if next < count { Some(next) } else { first.checked_sub(1) }
-}
+// ---------------------------------------------------------------- reading a folder
 
 #[derive(Clone, Debug, Default)]
 pub struct Item {
@@ -446,6 +424,8 @@ fn list_drives(r: &mut Listing) {
     }
 }
 
+// ---------------------------------------------------------------- sorting and filtering
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SortKey {
     Name = 0,
@@ -533,25 +513,6 @@ pub fn sort_items(items: &mut Vec<Item>, key: SortKey, ascending: bool) {
     items.extend(order.into_iter().filter_map(|i| slots[i].take()));
 }
 
-/// The extension part of a NUL-terminated wide name (".txt"), without the NUL.
-fn ext(name: &[u16]) -> &[u16] {
-    let name = &name[..name.len().saturating_sub(1)];
-    match name.iter().rposition(|&c| c == b'.' as u16) {
-        Some(dot) => &name[dot..],
-        None => &[],
-    }
-}
-
-/// Lower-case extension with the dot (".txt"), empty if none.
-pub fn extension_of(name: &OsStr) -> String {
-    String::from_utf16_lossy(&to_lower(&OsString::from_wide(ext(&wide(name)))))
-}
-
-/// A .lnk or .url file.
-pub fn is_shortcut(name: &OsStr) -> bool {
-    matches!(extension_of(name).as_str(), ".lnk" | ".url")
-}
-
 /// Case-insensitive substring match, or a wildcard match when the filter has * or ?, in one pattern or several
 /// separated by ';' ("*.jpg; *.png"). `filter` ends in a NUL.
 pub fn matches_filter(item: &Item, filter: &[u16]) -> bool {
@@ -590,6 +551,55 @@ fn wildcard_match(name: &[u16], pattern: &[u16]) -> bool {
         }
     }
     pattern[p..].iter().all(|&c| c == star)
+}
+
+/// After deleting `rows` (ascending), the row of the item that takes the first one's place, else the one before.
+pub fn row_after_deleting(rows: &[usize], count: usize) -> Option<usize> {
+    let first = *rows.first()?;
+    let mut next = first;
+    for &row in rows {
+        // past the block of selected rows that starts at the first one
+        if row != next {
+            break;
+        }
+        next += 1;
+    }
+    if next < count { Some(next) } else { first.checked_sub(1) }
+}
+
+// ---------------------------------------------------------------- text
+
+pub fn equal_no_case(a: &OsStr, b: &OsStr) -> bool {
+    let a: Vec<u16> = a.encode_wide().collect();
+    let b: Vec<u16> = b.encode_wide().collect();
+    unsafe { CompareStringOrdinal(&a, &b, true) == CSTR_EQUAL }
+}
+
+pub fn to_lower(s: &OsStr) -> Vec<u16> {
+    let mut w: Vec<u16> = s.encode_wide().collect();
+    if !w.is_empty() {
+        unsafe { CharLowerBuffW(&mut w) };
+    }
+    w
+}
+
+/// The extension part of a NUL-terminated wide name (".txt"), without the NUL.
+fn ext(name: &[u16]) -> &[u16] {
+    let name = &name[..name.len().saturating_sub(1)];
+    match name.iter().rposition(|&c| c == b'.' as u16) {
+        Some(dot) => &name[dot..],
+        None => &[],
+    }
+}
+
+/// Lower-case extension with the dot (".txt"), empty if none.
+pub fn extension_of(name: &OsStr) -> String {
+    String::from_utf16_lossy(&to_lower(&OsString::from_wide(ext(&wide(name)))))
+}
+
+/// A .lnk or .url file.
+pub fn is_shortcut(name: &OsStr) -> bool {
+    matches!(extension_of(name).as_str(), ".lnk" | ".url")
 }
 
 pub fn format_size(bytes: u64) -> OsString {
