@@ -126,6 +126,17 @@ void FolderTree::refreshDrives() {
     if (expanded) TreeView_Expand(tv_, pc, TVE_EXPAND);
 }
 
+// Each folder whose subfolders are shown is read again, and each known to have none (it may have some now).
+void FolderTree::refresh() {
+    for (HTREEITEM n = TreeView_GetRoot(tv_); n; n = TreeView_GetNextVisible(tv_, n)) {
+        TVITEMW item{};
+        item.mask = TVIF_CHILDREN;
+        item.hItem = n;
+        TreeView_GetItem(tv_, &item);
+        if (TreeView_GetChild(tv_, n) || (!item.cChildren && !isShortcut(pathOf(n)))) startReading(n, true);
+    }
+}
+
 HTREEITEM FolderTree::add(HTREEITEM parent, const std::wstring& path, const std::wstring& text, int icon, bool leaf,
                           HTREEITEM after) {
     TVINSERTSTRUCTW ins{};
@@ -144,8 +155,8 @@ const std::wstring& FolderTree::pathOf(HTREEITEM node) const {
     return paths_.at(node);   // a node that is not there is a dead handle: stop loudly (4.10)
 }
 
-void FolderTree::startReading(HTREEITEM node) {
-    if (TreeView_GetChild(tv_, node) || reading_.count(node)) return;   // already read, or being read
+void FolderTree::startReading(HTREEITEM node, bool again) {
+    if ((!again && TreeView_GetChild(tv_, node)) || reading_.count(node)) return;   // already read, or being read
     std::wstring dir = pathOf(node);
     bool shortcuts = node == TreeView_GetRoot(tv_);   // the Bookmarks node
     startWorker(node, [dir, shortcuts](TreeBatch& batch) { readChildren(batch, dir, shortcuts); });
@@ -188,9 +199,18 @@ void FolderTree::addChildren(const TreeBatch& batch) {
         for (const auto& c : batch.children) after = add(TVI_ROOT, c.path, c.text, c.icon, false, after);
         return;
     }
+    if (batch.failed) return;   // keep what is shown, and the arrow: expanding again tries again
+    // Read again (refresh): a folder whose subfolders are the same stays as it is. Otherwise they are put in afresh,
+    // and what was open below closes (an open list changed item by item is slow: Windows repaints it for each).
+    if (HTREEITEM c = TreeView_GetChild(tv_, batch.node)) {
+        auto next = batch.children.begin();
+        for (; c && next != batch.children.end() && pathOf(c) == next->path; c = TreeView_GetNextSibling(tv_, c)) ++next;
+        if (!c && next == batch.children.end()) return;
+        TreeView_Expand(tv_, batch.node, TVE_COLLAPSE | TVE_COLLAPSERESET);
+    }
     if (batch.children.empty()) {
-        // Keep the arrow when the read failed, and on Bookmarks (filled later, 5.6); others have no subfolders.
-        if (batch.failed || batch.node == TreeView_GetRoot(tv_)) return;
+        // Keep the arrow on Bookmarks (filled later, 5.6); others have no subfolders.
+        if (batch.node == TreeView_GetRoot(tv_)) return;
         TVITEMW item{};
         item.mask = TVIF_CHILDREN;
         item.hItem = batch.node;

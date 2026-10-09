@@ -200,10 +200,10 @@ pub fn resolve_argument(arg: &OsStr) -> Location {
     normalize(std::path::absolute(&arg).as_deref().map_or(arg.as_os_str(), |p| p.as_os_str()))
 }
 
-/// The command line, 7z style: qoqdir [switches] [folders...] (see USAGE in main.rs).
+/// The command line: qoqdir [switches] [folders...] (see 5.10 in docs/QOQDIR-SPEC.md).
 #[derive(Default, Debug)]
 pub struct CommandLine {
-    pub folders: Vec<Location>, // -t{folder} and plain folders, in order, each once
+    pub folders: Vec<Location>, // -t= / --tab= folders and plain folders, in order, each once
     pub help: bool,             // -h or -?
     pub self_test: bool,        // --selftest
     pub error: Option<String>,  // a mistake to show with the help
@@ -213,19 +213,20 @@ pub fn parse_command_line(args: &[OsString]) -> CommandLine {
     let mut cmd = CommandLine::default();
     for arg in args {
         let text = arg.to_string_lossy();
-        // "-t:D:\x" is -tD:\x, as other tools write switches: no folder name starts with a colon.
-        let at = if text.starts_with("-t:") { 3 } else { 2 };
         if !text.starts_with('-') {
             cmd.folders.push(resolve_argument(arg)); // a plain folder
-        } else if text.len() > at && text.starts_with("-t") {
-            // The folder part, taken from the original argument so any file name survives.
+        } else if text.starts_with("--tab=") || text.starts_with("-t=") {
+            // All after "=" is the folder, even a name that starts with "-". "-t=" is short for "--tab=", but Windows
+            // PowerShell takes "-t=" for a switch of its own: unquoted, it splits "-t=my.folder" at the dot and keeps
+            // "-t=$HOME" as typed, so there the folder after "-t=" needs quotes (5.10). The folder is taken from the
+            // original argument so any name survives.
+            let at = if text.starts_with("-t=") { 3 } else { 6 };
             let folder: Vec<u16> = arg.encode_wide().skip(at).collect();
             cmd.folders.push(resolve_argument(&OsString::from_wide(&folder)));
         } else {
             match text.as_ref() {
                 "--selftest" => cmd.self_test = true,
                 "-h" | "-?" | "--help" => cmd.help = true,
-                "-t" | "-t:" => cmd.error = Some("-t needs a folder right after it, with no space: -tD:\\logs".into()),
                 _ => cmd.error = Some(format!("Unknown switch: {text}")),
             }
         }
@@ -776,7 +777,7 @@ mod tests {
     fn command_line() {
         let args = |list: &[&str]| list.iter().map(OsString::from).collect::<Vec<_>>();
         let cwd = std::env::current_dir().unwrap();
-        let c = parse_command_line(&args(&[".", "-tC:\\A", "-tc:\\a", "-tC:\\My Files\\"]));
+        let c = parse_command_line(&args(&[".", "--tab=C:\\A", "--tab=c:\\a", "-t=C:\\My Files\\"]));
         assert!(c.error.is_none() && !c.help && !c.self_test); // c:\a is C:\A again: kept once
         let texts: Vec<String> = c.folders.iter().map(text).collect();
         assert_eq!(texts.len(), 3);
@@ -786,13 +787,14 @@ mod tests {
         assert!(parse_command_line(&args(&["-h"])).help && parse_command_line(&args(&["-?"])).help);
         assert!(parse_command_line(&args(&["--selftest"])).self_test);
         assert_eq!(parse_command_line(&args(&["-x"])).error.as_deref(), Some("Unknown switch: -x"));
-        assert!(parse_command_line(&args(&["-t"])).error.is_some()); // -t without a folder
-        // A network folder comes out as itself; "-t:" with a colon, as the user typed it, means the same as -t.
-        assert_eq!(parse_command_line(&args(&["-t\\\\nas\\share\\"])).folders.iter().map(text).collect::<Vec<_>>(), ["\\\\nas\\share"]);
-        assert_eq!(parse_command_line(&args(&["-t:\\\\nas\\share"])).folders.iter().map(text).collect::<Vec<_>>(), ["\\\\nas\\share"]);
-        assert!(parse_command_line(&args(&["-t:"])).error.is_some());
-        assert!(parse_command_line(&args(&["-tC:\\A", "-q"])).error.is_some());
+        // A network folder comes out as itself, and a name that starts with "-" is a folder too.
+        assert_eq!(parse_command_line(&args(&["--tab=\\\\nas\\share\\"])).folders.iter().map(text).collect::<Vec<_>>(), ["\\\\nas\\share"]);
+        let dash = parse_command_line(&args(&["--tab=-h"]));
+        assert!(dash.error.is_none() && !dash.help && dash.folders.len() == 1);
+        assert!(dash.folders[0].same(&Location::dir(std::env::current_dir().unwrap().join("-h"))));
+        assert!(parse_command_line(&args(&["--tab=C:\\A", "-q"])).error.is_some());
         assert!(parse_command_line(&args(&["-n"])).error.is_some()); // -n no longer exists
+        assert!(parse_command_line(&args(&["-tC:\\A"])).error.is_some()); // nor -t without "="
     }
 
     #[test]

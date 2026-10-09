@@ -13,9 +13,9 @@ use windows::Win32::System::SystemInformation::GetTickCount64;
 use windows::Win32::System::WindowsProgramming::DRIVE_REMOTE;
 use windows::Win32::UI::Controls::{
     HTREEITEM, NM_CLICK, NMHDR, NMTREEVIEWW, TVE_COLLAPSE, TVE_COLLAPSERESET, TVE_EXPAND, TVGN_CARET,
-    TVGN_CHILD, TVGN_DROPHILITE, TVGN_NEXT, TVGN_ROOT, TVHITTESTINFO, TVHT_ONITEM, TVHT_ONITEMRIGHT, TVI_FIRST, TVI_LAST, TVI_ROOT,
+    TVGN_CHILD, TVGN_DROPHILITE, TVGN_NEXT, TVGN_NEXTVISIBLE, TVGN_ROOT, TVHITTESTINFO, TVHT_ONITEM, TVHT_ONITEMRIGHT, TVI_FIRST, TVI_LAST, TVI_ROOT,
     TVIF_CHILDREN, TVIF_IMAGE, TVIF_SELECTEDIMAGE, TVIF_TEXT, TVINSERTSTRUCTW, TVINSERTSTRUCTW_0, TVIS_EXPANDED, TVITEMEXW,
-    TVITEMEXW_CHILDREN, TVITEMW, TVM_DELETEITEM, TVM_EXPAND, TVM_GETITEMSTATE, TVM_GETNEXTITEM, TVM_HITTEST,
+    TVITEMEXW_CHILDREN, TVITEMW, TVM_DELETEITEM, TVM_EXPAND, TVM_GETITEMSTATE, TVM_GETITEMW, TVM_GETNEXTITEM, TVM_HITTEST,
     TVM_INSERTITEMW, TVM_SELECTITEM, TVM_SETEXTENDEDSTYLE, TVM_SETIMAGELIST, TVM_SETITEMW, TVN_DELETEITEMW, TVN_ITEMEXPANDEDW,
     TVN_ITEMEXPANDINGW, TVN_SELCHANGEDW, TVS_EX_DOUBLEBUFFER, TVS_EX_FADEINOUTEXPANDOS, TVS_FULLROWSELECT,
     TVS_HASBUTTONS, TVS_LINESATROOT, TVS_NOHSCROLL, TVS_SHOWSELALWAYS, TVS_TRACKSELECT, TVSIL_NORMAL, TVC_BYKEYBOARD,
@@ -217,6 +217,20 @@ impl FolderTree {
         }
     }
 
+    /// F5: each folder whose subfolders are shown is read again, and each known to have none (it may have some now).
+    pub fn refresh(&self) {
+        let mut node = self.root();
+        while node != 0 {
+            let mut item = TVITEMW { mask: TVIF_CHILDREN, hItem: HTREEITEM(node), ..Default::default() };
+            send(self.hwnd, TVM_GETITEMW, 0, &mut item as *mut _ as isize);
+            let none = item.cChildren.0 == 0 && !is_shortcut(&self.location_of(HTREEITEM(node)).text());
+            if send(self.hwnd, TVM_GETNEXTITEM, TVGN_CHILD as usize, node) != 0 || none {
+                self.start_reading(HTREEITEM(node), true);
+            }
+            node = send(self.hwnd, TVM_GETNEXTITEM, TVGN_NEXTVISIBLE as usize, node);
+        }
+    }
+
     fn add(&self, parent: HTREEITEM, location: Location, text: &OsStr, icon: i32, leaf: bool, after: HTREEITEM) -> HTREEITEM {
         let text = wide(text);
         let ins = TVINSERTSTRUCTW {
@@ -248,8 +262,10 @@ impl FolderTree {
         self.paths.borrow()[&node.0].clone() // a node that is not there is a dead handle: stop loudly (4.10)
     }
 
-    fn start_reading(&self, node: HTREEITEM) {
-        if send(self.hwnd, TVM_GETNEXTITEM, TVGN_CHILD as usize, node.0) != 0 || self.reading.borrow().contains_key(&node.0) {
+    /// `again`: also when its subfolders are shown.
+    fn start_reading(&self, node: HTREEITEM, again: bool) {
+        let shown = send(self.hwnd, TVM_GETNEXTITEM, TVGN_CHILD as usize, node.0) != 0;
+        if (shown && !again) || self.reading.borrow().contains_key(&node.0) {
             return; // already read, or being read
         }
         let location = self.location_of(node);
@@ -301,9 +317,26 @@ impl FolderTree {
             return;
         }
         let node = HTREEITEM(batch.node);
+        if batch.failed {
+            return; // keep what is shown, and the arrow: expanding again tries again
+        }
+        // Read again (refresh): a folder whose subfolders are the same stays as it is. Otherwise they are put in afresh,
+        // and what was open below closes (an open list changed item by item is slow: Windows repaints it for each).
+        let mut shown = Vec::new();
+        let mut c = send(self.hwnd, TVM_GETNEXTITEM, TVGN_CHILD as usize, node.0);
+        while c != 0 {
+            shown.push(self.location_of(HTREEITEM(c)).text());
+            c = send(self.hwnd, TVM_GETNEXTITEM, TVGN_NEXT as usize, c);
+        }
+        if !shown.is_empty() {
+            if shown.into_iter().eq(batch.children.iter().map(|c| c.location.text())) {
+                return;
+            }
+            send(self.hwnd, TVM_EXPAND, (TVE_COLLAPSE.0 | TVE_COLLAPSERESET.0) as usize, node.0);
+        }
         if batch.children.is_empty() {
-            // Keep the arrow when the read failed, and on Bookmarks (filled later, 5.6); others have no subfolders.
-            if !batch.failed && batch.node != self.root() {
+            // Keep the arrow on Bookmarks (filled later, 5.6); others have no subfolders.
+            if batch.node != self.root() {
                 let item = TVITEMW { mask: TVIF_CHILDREN, hItem: node, cChildren: TVITEMEXW_CHILDREN(0), ..Default::default() };
                 send(self.hwnd, TVM_SETITEMW, 0, &item as *const _ as isize);
             }
@@ -389,7 +422,7 @@ impl FolderTree {
             TVN_ITEMEXPANDINGW => {
                 let tv = unsafe { &*(nm as *const NMTREEVIEWW) };
                 if tv.action.0 & TVE_EXPAND.0 != 0 {
-                    self.start_reading(tv.itemNew.hItem);
+                    self.start_reading(tv.itemNew.hItem, false);
                 }
                 None
             }

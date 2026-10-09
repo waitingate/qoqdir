@@ -44,9 +44,9 @@ std::wstring normalizePath(std::wstring text);
 std::wstring expandVars(const std::wstring& text);     // only for what the user typed (5.3)
 std::wstring resolveArgument(const std::wstring& arg); // a command-line folder, relative to the current one
 
-// The command line, 7z style: qoqdir [switches] [folders...] (see kUsage in main.cpp).
+// The command line: qoqdir [switches] [folders...] (see 5.10 in docs/QOQDIR-SPEC.md).
 struct CommandLine {
-    std::vector<std::wstring> folders;   // -t{folder} and plain folders, in order, each once
+    std::vector<std::wstring> folders;   // -t= / --tab= folders and plain folders, in order, each once
     bool help = false;                   // -h or -?
     bool selfTest = false;               // --selftest
     std::wstring error;                  // a mistake to show with the help

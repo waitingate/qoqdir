@@ -39,6 +39,8 @@ struct Tab {
     bool unavailable = true;        // not loaded here yet, or failed: no drops onto it (asking Windows could freeze)
 };
 
+void showHelp(HWND owner, const std::wstring& error = {});   // the help box, for -h and F1 (main.cpp)
+
 class App {
 public:
     // Opens the command line's folders as tabs (or the home folder).
@@ -88,6 +90,8 @@ private:
     void goForward();
     void goUp();
     void refresh(ViewState view = {});
+    // F5 and the Refresh button: the list and the tree (5.5), and the status bar says so.
+    void refreshAll() { refresh(); tree_.refresh(); setMessage(L"Refreshed"); }
     void goToTyped();
     void activate(bool inNewTab);   // Enter / double-click on the selection
     void openShortcut(const std::wstring& path, bool inNewTab);
@@ -126,8 +130,8 @@ private:
     void loadSettings(const CommandLine& cmd);
     void saveSettings();
 
-    HWND wnd_ = nullptr, back_ = nullptr, forward_ = nullptr, up_ = nullptr, address_ = nullptr, filter_ = nullptr,
-         tabBar_ = nullptr, plus_ = nullptr, status_ = nullptr, lastFocus_ = nullptr;
+    HWND wnd_ = nullptr, back_ = nullptr, forward_ = nullptr, up_ = nullptr, refresh_ = nullptr, address_ = nullptr,
+         filter_ = nullptr, tabBar_ = nullptr, plus_ = nullptr, status_ = nullptr, lastFocus_ = nullptr;
     FileList list_;
     FolderTree tree_;
     Com<IDropTarget> tabDrop_;      // files dropped on a tab go to its folder

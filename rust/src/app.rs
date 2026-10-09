@@ -33,8 +33,8 @@ use windows::Win32::UI::Controls::{
 use windows::Win32::UI::HiDpi::{GetDpiForSystem, GetDpiForWindow, SystemParametersInfoForDpi};
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     EnableWindow, GetCapture, GetFocus, ReleaseCapture, SetCapture, VIRTUAL_KEY, VK_BACK, VK_CONTROL, VK_DELETE,
-    VK_DOWN, VK_ESCAPE, VK_F2, VK_F3, VK_F4, VK_F5, VK_LEFT, VK_MENU, VK_NEXT, VK_PRIOR, VK_RETURN, VK_RIGHT, VK_SHIFT,
-    VK_TAB, VK_UP,
+    VK_DOWN, VK_ESCAPE, VK_F1, VK_F2, VK_F3, VK_F4, VK_F5, VK_LEFT, VK_MENU, VK_NEXT, VK_PRIOR, VK_RETURN, VK_RIGHT,
+    VK_SHIFT, VK_TAB, VK_UP,
 };
 use windows::Win32::UI::Shell::{DefSubclassProc, FOLDERID_Profile, SHACF_FILESYS_DIRS, SHAutoComplete, SetWindowSubclass};
 use windows::Win32::UI::WindowsAndMessaging::{
@@ -78,6 +78,7 @@ const ID_PLUS: i32 = 106;
 const ID_TREE: i32 = 107;
 const ID_LIST: i32 = 108;
 const ID_STATUS: i32 = 109;
+const ID_REFRESH: i32 = 110;
 
 const WM_APP_LOADED: u32 = WM_APP + 1;
 const WM_APP_CHANGED: u32 = WM_APP + 2;
@@ -189,6 +190,7 @@ pub struct App {
     back: HWND,
     forward: HWND,
     up: HWND,
+    pub refresh: HWND,
     pub address: HWND,
     pub filter: HWND,
     pub tab_bar: HWND,
@@ -400,6 +402,7 @@ impl App {
             let back = make(w!("BUTTON"), w!("\u{E72B}"), 0, 0, ID_BACK); // Explorer's arrow icons (apply_font)
             let forward = make(w!("BUTTON"), w!("\u{E72A}"), 0, 0, ID_FORWARD);
             let up = make(w!("BUTTON"), w!("\u{E74A}"), 0, 0, ID_UP);
+            let refresh = make(w!("BUTTON"), w!("\u{E72C}"), 0, 0, ID_REFRESH);
             let address = make(w!("EDIT"), w!(""), ES_AUTOHSCROLL | WS_TABSTOP.0, WS_EX_CLIENTEDGE.0, ID_ADDRESS);
             let filter = make(w!("EDIT"), w!(""), ES_AUTOHSCROLL | WS_TABSTOP.0, WS_EX_CLIENTEDGE.0, ID_FILTER);
             const TCS_FOCUSNEVER: u32 = 0x8000;
@@ -430,6 +433,7 @@ impl App {
                 back,
                 forward,
                 up,
+                refresh,
                 address,
                 filter,
                 tab_bar,
@@ -554,14 +558,14 @@ impl App {
                 dpi,
             );
             let font = Font(CreateFontIndirectW(&ncm.lfMessageFont));
-            let mut icons = ncm.lfMessageFont; // Back, Forward and Up: Explorer's arrows, as tall as the text
+            let mut icons = ncm.lfMessageFont; // Back, Forward, Up and Refresh: Explorer's icons, as tall as the text
             let face = wide("Segoe MDL2 Assets");
             icons.lfFaceName[..face.len()].copy_from_slice(&face);
             let arrows = Font(CreateFontIndirectW(&icons));
             for h in [self.address, self.filter, self.tab_bar, self.plus, self.tree.hwnd(), self.list.hwnd(), self.status] {
                 send(h, WM_SETFONT, font.0.0 as usize, 1);
             }
-            for h in [self.back, self.forward, self.up] {
+            for h in [self.back, self.forward, self.up, self.refresh] {
                 send(h, WM_SETFONT, arrows.0.0 as usize, 1);
             }
             let dc = GetDC(Some(self.wnd));
@@ -612,7 +616,7 @@ impl App {
             let gap = scale(2, dpi);
             let filter_w = scale(120, dpi).min(w / 3);
             let (mut x, mut y) = (pad, pad);
-            for b in [self.back, self.forward, self.up] {
+            for b in [self.back, self.forward, self.up, self.refresh] {
                 place(b, x, y, btn, row);
                 x += btn + gap;
             }
@@ -672,7 +676,7 @@ impl App {
                 }
                 WM_SYSCOLORCHANGE => {
                     // E.g. a high-contrast theme came or went: the controls hear of it only from here.
-                    for h in [self.back, self.forward, self.up, self.address, self.filter, self.tab_bar, self.plus, self.tree.hwnd(), self.list.hwnd(), self.status] {
+                    for h in [self.back, self.forward, self.up, self.refresh, self.address, self.filter, self.tab_bar, self.plus, self.tree.hwnd(), self.list.hwnd(), self.status] {
                         send(h, WM_SYSCOLORCHANGE, wp.0, lp.0);
                     }
                     self.apply_colors(high_contrast_on());
@@ -701,6 +705,7 @@ impl App {
                         ID_BACK => self.go_back(),
                         ID_FORWARD => self.go_forward(),
                         ID_UP => self.go_up(),
+                        ID_REFRESH => self.refresh_all(),
                         ID_PLUS => self.new_tab(self.location(), true),
                         _ => {}
                     }
@@ -802,7 +807,7 @@ impl App {
                     match hiword(lp.0 as usize) & !0xF000 {
                         1 => self.go_back(),
                         2 => self.go_forward(),
-                        3 => self.refresh(ViewState::default()),
+                        3 => self.refresh_all(),
                         _ => return DefWindowProcW(self.wnd, msg, wp, lp),
                     }
                     return LRESULT(1);
@@ -1218,7 +1223,11 @@ impl App {
             return true;
         }
         if is(VK_F5) || (ctrl && letter(b'R')) {
-            self.refresh(ViewState::default());
+            self.refresh_all();
+            return true;
+        }
+        if is(VK_F1) {
+            crate::show_help(Some(self.wnd), None);
             return true;
         }
         if ctrl && letter(b'H') {
@@ -1641,6 +1650,13 @@ impl App {
             self.st.borrow_mut().queued_view = None; // newer than any request still waiting
         }
         self.open(self.location(), Nav::Refresh, view);
+    }
+
+    /// F5 and the Refresh button: the list and the tree (5.5), and the status bar says so.
+    pub fn refresh_all(&self) {
+        self.refresh(ViewState::default());
+        self.tree.refresh();
+        self.set_message("Refreshed");
     }
 
     fn go_to_typed(&self) {

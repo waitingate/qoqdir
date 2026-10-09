@@ -208,14 +208,13 @@ CommandLine parseCommandLine(const std::vector<std::wstring>& args) {
         if (!folder.empty() && !known) cmd.folders.push_back(folder);   // each folder once
     };
     for (const std::wstring& arg : args) {
-        // "-t:D:\x" is -tD:\x, as other tools write switches: no folder name starts with a colon.
-        size_t at = arg.rfind(L"-t:", 0) == 0 ? 3 : 2;
         if (arg.empty() || arg[0] != L'-') addFolder(arg);   // a plain folder
         else if (arg == L"--selftest") cmd.selfTest = true;
         else if (arg == L"-h" || arg == L"-?" || arg == L"--help") cmd.help = true;
-        else if (arg.size() > at && arg[1] == L't') addFolder(arg.substr(at));
-        else if (arg == L"-t" || arg == L"-t:")
-            cmd.error = L"-t needs a folder right after it, with no space: -tD:\\logs";
+        // All after "=" is the folder, even a name that starts with "-". "-t=" is short for "--tab=", but Windows
+        // PowerShell takes "-t=" for a switch of its own: unquoted, it splits "-t=my.folder" at the dot and keeps
+        // "-t=$HOME" as typed, so there the folder after "-t=" needs quotes (5.10).
+        else if (arg.rfind(L"--tab=", 0) == 0 || arg.rfind(L"-t=", 0) == 0) addFolder(arg.substr(arg.find(L'=') + 1));
         else cmd.error = L"Unknown switch: " + arg;
         if (!cmd.error.empty()) break;
     }

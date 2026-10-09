@@ -14,6 +14,7 @@ mod util;
 
 use std::ffi::OsString;
 
+use windows::Win32::Foundation::HWND;
 use windows::Win32::System::Diagnostics::Debug::{SEM_FAILCRITICALERRORS, SetErrorMode};
 use windows::Win32::System::LibraryLoader::{GetModuleHandleW, LOAD_LIBRARY_SEARCH_SYSTEM32, SetDefaultDllDirectories};
 use windows::Win32::System::Ole::{OleFlushClipboard, OleInitialize, OleUninitialize};
@@ -28,26 +29,55 @@ use windows::Win32::UI::WindowsAndMessaging::{
 
 use crate::util::{from_wide, pcwstr, wide};
 
-// The line breaks are the text's own: a \ at a line end would also drop the next line's indent.
-const USAGE: &str = concat!("Version ", env!("CARGO_PKG_VERSION"), "
+// The main keys in groups, the most helpful first in each: what Explorer users wouldn't guess comes first. One action
+// a line, in plain words (the menus' own where there is one), with its main key: Explorer's other keys for the same
+// thing work but aren't listed (Alt+Up, F4, Ctrl+R), nor are Enter and Ctrl+C. The command line last, by example.
+// The line breaks are the text's own: a \ at a line end would also drop the next line's indent. No tab stops: a
+// message box puts them by the font's average letter width, so columns line up in one font only.
+const USAGE: &str = "Navigation
+  Filter: type in the list, or Ctrl+F
+  Clear the filter: Esc
+  Up: Backspace
+  Bookmark a folder: Alt+drag it onto Bookmarks in the tree
+  Address bar: Ctrl+L
+  Back: Alt+Left
+  Forward: Alt+Right
+  Refresh: F5
 
-Usage: qoqdir [switches] [folders...]
+Tabs
+  New tab: Ctrl+T
+  Close tab: Ctrl+W
+  Save tabs: Ctrl+S
+  Open saved tabs: Ctrl+O
+  Open in new tab: Ctrl+Enter or middle-click
+  Switch tab: Ctrl+Tab or Ctrl+1 to 9
+  Move tab: Ctrl+Shift+PgUp or Ctrl+Shift+PgDn
 
-  {folder}\tOpen the folder in a tab (relative paths work: qoqdir .)
-  -t{folder}\tThe same, as a switch: -tD:\\logs  -t\"C:\\My Files\"
-\t(quote folders with spaces, but don't end them with \\ before the closing quote)
-  -h, -?\tShow this help
+Files
+  Show or hide hidden files: Ctrl+H
+  New folder: Ctrl+Shift+N
+  Rename: F2
+  Delete: Delete (to the Recycle Bin)
+  Delete permanently: Shift+Delete
+  Properties: Alt+Enter
 
-Keep folders you use often as shortcuts in the Bookmarks folder next to
-qoqdir.exe (shown at the top of the tree). Tabs aren't remembered by themselves:
-Ctrl+S saves them in Bookmarks\\Tabs, and Ctrl+O opens them again.
-
-Examples:
-  qoqdir .
-  qoqdir -tD:\\projects -tD:\\logs");
+Command line
+  Open folders in tabs: qoqdir -t=\"D:\\logs\" -t=\"D:\\My Files\"
+  This help: qoqdir -h, or F1 in the window";
 
 /// The app's name: window title, settings file, logs. (The exe name is set in Cargo.toml.)
 pub const APP_NAME: &str = "Qoqdir";
+
+/// The help box, titled with the version: qoqdir -h (the mistake first, if there was one) and F1 in the window.
+pub fn show_help(owner: Option<HWND>, error: Option<&str>) {
+    let text = match error {
+        Some(error) => format!("{error}\n\n{USAGE}"),
+        None => USAGE.to_string(),
+    };
+    let title = format!("{APP_NAME} {}", env!("CARGO_PKG_VERSION"));
+    let icon = if error.is_some() { MB_ICONWARNING } else { MB_ICONINFORMATION };
+    unsafe { MessageBoxW(owner, pcwstr(&wide(text)), pcwstr(&wide(title)), icon) };
+}
 
 fn main() {
     // DLLs that Windows loads by name come from System32 only, never from the exe's folder: a planted
@@ -71,13 +101,7 @@ fn main() {
         cmd.error = Some("Unknown switch: --selftest".into()); // only a build with the selftest feature has it
     }
     if cmd.help || cmd.error.is_some() {
-        // There is no console, so the help is a small window.
-        let text = match &cmd.error {
-            Some(error) => format!("{error}\n\n{USAGE}"),
-            None => USAGE.to_string(),
-        };
-        let icon = if cmd.error.is_some() { MB_ICONWARNING } else { MB_ICONINFORMATION };
-        unsafe { MessageBoxW(None, pcwstr(&wide(text)), pcwstr(&wide(APP_NAME)), icon) };
+        show_help(None, cmd.error.as_deref()); // there is no console, so the help is a small window
         std::process::exit(if cmd.error.is_some() { 1 } else { 0 });
     }
     let code = unsafe {

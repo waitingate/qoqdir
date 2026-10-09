@@ -7,25 +7,50 @@
 
 namespace {
 
+// The main keys in groups, the most helpful first in each: what Explorer users wouldn't guess comes first. One action
+// a line, in plain words (the menus' own where there is one), with its main key: Explorer's other keys for the same
+// thing work but aren't listed (Alt+Up, F4, Ctrl+R), nor are Enter and Ctrl+C. The command line last, by example.
+// No tab stops: a message box puts them by the font's average letter width, so columns line up in one font only.
 const wchar_t kUsage[] =
-    L"Version " QOQDIR_VERSION "\n"
+    L"Navigation\n"
+    L"  Filter: type in the list, or Ctrl+F\n"
+    L"  Clear the filter: Esc\n"
+    L"  Up: Backspace\n"
+    L"  Bookmark a folder: Alt+drag it onto Bookmarks in the tree\n"
+    L"  Address bar: Ctrl+L\n"
+    L"  Back: Alt+Left\n"
+    L"  Forward: Alt+Right\n"
+    L"  Refresh: F5\n"
     L"\n"
-    L"Usage: qoqdir [switches] [folders...]\n"
+    L"Tabs\n"
+    L"  New tab: Ctrl+T\n"
+    L"  Close tab: Ctrl+W\n"
+    L"  Save tabs: Ctrl+S\n"
+    L"  Open saved tabs: Ctrl+O\n"
+    L"  Open in new tab: Ctrl+Enter or middle-click\n"
+    L"  Switch tab: Ctrl+Tab or Ctrl+1 to 9\n"
+    L"  Move tab: Ctrl+Shift+PgUp or Ctrl+Shift+PgDn\n"
     L"\n"
-    L"  {folder}\tOpen the folder in a tab (relative paths work: qoqdir .)\n"
-    L"  -t{folder}\tThe same, as a switch: -tD:\\logs  -t\"C:\\My Files\"\n"
-    L"\t(quote folders with spaces, but don't end them with \\ before the closing quote)\n"
-    L"  -h, -?\tShow this help\n"
+    L"Files\n"
+    L"  Show or hide hidden files: Ctrl+H\n"
+    L"  New folder: Ctrl+Shift+N\n"
+    L"  Rename: F2\n"
+    L"  Delete: Delete (to the Recycle Bin)\n"
+    L"  Delete permanently: Shift+Delete\n"
+    L"  Properties: Alt+Enter\n"
     L"\n"
-    L"Keep folders you use often as shortcuts in the Bookmarks folder next to\n"
-    L"qoqdir.exe (shown at the top of the tree). Tabs aren't remembered by themselves:\n"
-    L"Ctrl+S saves them in Bookmarks\\Tabs, and Ctrl+O opens them again.\n"
-    L"\n"
-    L"Examples:\n"
-    L"  qoqdir .\n"
-    L"  qoqdir -tD:\\projects -tD:\\logs";
+    L"Command line\n"
+    L"  Open folders in tabs: qoqdir -t=\"D:\\logs\" -t=\"D:\\My Files\"\n"
+    L"  This help: qoqdir -h, or F1 in the window";
 
 }  // namespace
+
+// The help box, titled with the version: qoqdir -h (the mistake first, if there was one) and F1 in the window.
+void showHelp(HWND owner, const std::wstring& error) {
+    std::wstring text = error.empty() ? kUsage : error + L"\n\n" + kUsage;
+    std::wstring title = std::wstring(kAppName) + L" " QOQDIR_VERSION;
+    MessageBoxW(owner, text.c_str(), title.c_str(), error.empty() ? MB_ICONINFORMATION : MB_ICONWARNING);
+}
 
 int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int) {
     // DLLs that Windows loads by name come from System32 only, never from the exe's folder: a planted
@@ -47,8 +72,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int) {
     if (cmd.selfTest) cmd.error = L"Unknown switch: --selftest";   // only qoqdir-test.exe has the self-test
 #endif
     if (cmd.help || !cmd.error.empty()) {   // there is no console, so the help is a small window
-        std::wstring text = cmd.error.empty() ? kUsage : cmd.error + L"\n\n" + kUsage;
-        MessageBoxW(nullptr, text.c_str(), kAppName, cmd.error.empty() ? MB_ICONINFORMATION : MB_ICONWARNING);
+        showHelp(nullptr, cmd.error);
         return cmd.error.empty() ? 0 : 1;
     }
 

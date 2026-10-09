@@ -20,15 +20,22 @@ choose More info, then Run anyway. Each release lists the zip's SHA-256, which
 ```
 qoqdir [switches] [folders...]
 
-  {folder}     open the folder in a tab (qoqdir . works too)
-  -t{folder}   the same: -tD:\logs  -t"C:\My Files"
-  -h, -?       help
+  {folder}         open the folder in a tab (qoqdir . works too)
+  -t="{folder}"    the same: -t="D:\logs" -t="C:\My Files"
+  --tab={folder}   the same, quotes needed only for spaces: --tab=D:\logs
+  -h, -?           help (F1 in the window shows it too)
 ```
 
 Each folder opens once, and the first one is shown. With no folders you get the
-home folder. `D:` means `D:\`. Don't end a quoted folder with `\`: Windows reads
-`\"` as a quote, so write `-t"D:\My Files"`. Put `qoqdir.exe` in a folder on your
-PATH to type just `qoqdir`.
+home folder. `D:` means `D:\`. After `-t=` or `--tab=`, all after `=` is the
+folder, even a name that starts with `-`, so use them in scripts. Always quote
+the folder after `-t=`: PowerShell (5.1 and 7) takes an unquoted `-t=` for a
+switch of its own, splits `-t=my.folder` at the dot and leaves `-t=$HOME` as
+typed. `--tab=` works the same in cmd, PowerShell and Git Bash, quoted or not
+(but Git Bash leaves `~` after `=` as it is, so write `"$HOME"`). Don't end a
+quoted folder with `\`: cmd and Windows PowerShell 5.1 read `\"` as a quote, so
+write `-t="D:\My Files"`. Put `qoqdir.exe` in a folder on your PATH to type just
+`qoqdir`.
 
 ## Bookmarks
 
@@ -52,7 +59,7 @@ rename that folder.
 | Ctrl+Shift+PgUp / PgDn | move the tab left / right |
 | Ctrl+L, Alt+D, F4 | address bar |
 | Ctrl+F, F3 | filter box (or just start typing in the list) |
-| F5, Ctrl+R | refresh |
+| F5, Ctrl+R | refresh the list and the tree (or the Refresh button) |
 | Ctrl+H | show or hide hidden files |
 | Alt+Left / Alt+Right / Alt+Up | back / forward / up |
 | Enter / Ctrl+Enter | open / open in a background tab |
@@ -63,6 +70,7 @@ rename that folder.
 | Ctrl+C / Ctrl+X / Ctrl+V | copy / cut / paste |
 | Alt+Enter | properties |
 | Esc | clear the filter |
+| F1 | this list of keys, and the command line |
 
 Middle-click a folder to open it in a background tab. New tabs always go at the
 end. Drag a tab along the bar to move it, and turn the mouse wheel over the tabs

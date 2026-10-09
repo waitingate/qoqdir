@@ -15,6 +15,12 @@ public class QoqdirHelp {
   [DllImport("user32.dll")] static extern bool IsWindowVisible(IntPtr h);
   [DllImport("user32.dll", CharSet=CharSet.Unicode)] static extern int GetClassName(IntPtr h, StringBuilder s, int n);
   [DllImport("user32.dll")] public static extern bool PostMessage(IntPtr h, uint m, IntPtr w, IntPtr l);
+  [DllImport("user32.dll")] public static extern IntPtr GetDlgItem(IntPtr h, int id);
+  [DllImport("user32.dll", CharSet=CharSet.Unicode)] static extern int GetDlgItemText(IntPtr h, int id, StringBuilder s, int n);
+  [DllImport("user32.dll", CharSet=CharSet.Unicode)] static extern int GetWindowText(IntPtr h, StringBuilder s, int n);
+  // A message box's text (its static control, id 0xFFFF), and its title.
+  public static string Text(IntPtr box) { var s = new StringBuilder(8192); GetDlgItemText(box, 0xFFFF, s, s.Capacity); return s.ToString(); }
+  public static string Title(IntPtr box) { var s = new StringBuilder(256); GetWindowText(box, s, s.Capacity); return s.ToString(); }
   // The message box (help text) shown by the given process, if any.
   public static IntPtr Dialog(uint pid) {
     IntPtr found = IntPtr.Zero;
@@ -50,13 +56,15 @@ function HelpExitCode([string]$arg) {   # starts the copy with a help/error swit
   $p = Start-Process $copy -ArgumentList $arg -PassThru
   Start-Sleep -Milliseconds 1500
   $box = [QoqdirHelp]::Dialog([uint32]$p.Id)
+  $text = if ($box -ne [IntPtr]::Zero) { [QoqdirHelp]::Text($box) } else { '' }
+  $title = if ($box -ne [IntPtr]::Zero) { [QoqdirHelp]::Title($box) } else { '' }
   if ($box -ne [IntPtr]::Zero) { [void][QoqdirHelp]::PostMessage($box, 0x0010, [IntPtr]::Zero, [IntPtr]::Zero) }   # WM_CLOSE
   [void]$p.WaitForExit(5000)
-  @{ Shown = $box -ne [IntPtr]::Zero; Code = $p.ExitCode }
+  @{ Shown = $box -ne [IntPtr]::Zero; Code = $p.ExitCode; Text = $text; Title = $title }
 }
 
-$title = TitleAfterStart @('-tC:\Users\Public', '-tc:\users\public')
-Check ($title -eq 'Public') "the same folder given twice opens one tab: '$title'"
+$title = TitleAfterStart @('--tab=C:\Users\Public', '-t="c:\users\public"')
+Check ($title -eq 'Public') "the same folder given twice (--tab=, then -t= with quotes) opens one tab: '$title'"
 $ini = Join-Path $dir 'qoqdir.ini'
 Check (-not ((Test-Path $ini) -and (Select-String -Path $ini -Pattern ':\\' -Quiet))) 'qoqdir.ini holds no paths (saved tabs are shortcuts in Bookmarks)'
 Check (Test-Path (Join-Path $dir 'Bookmarks') -PathType Container) 'a Bookmarks folder is created next to the exe'
@@ -65,11 +73,26 @@ $title = TitleAfterStart @()
 Check ($title -eq $homeName) "no folders opens the home folder: '$title'"
 $r = HelpExitCode '-h'
 Check ($r.Shown -and $r.Code -eq 0) "-h shows the help and exits with 0 (shown: $($r.Shown), exit code $($r.Code))"
+$help = $r.Text
+Check ($help.StartsWith('Navigation') -and $help -match 'Refresh: F5' -and $help -match 'F1' -and $r.Title -match '^Qoqdir \d') `
+  "the help starts with the navigation keys, says F1 shows it, and has the version in its title ('$($r.Title)')"
+# F1 in the window: posted to the file list as a key press would arrive (nothing global), then the box is closed.
+$p = Start-Process $copy -ArgumentList '--tab=C:\Users\Public' -PassThru
+Start-Sleep -Milliseconds 2000
+$p.Refresh()
+[void][QoqdirHelp]::PostMessage([QoqdirHelp]::GetDlgItem($p.MainWindowHandle, 108), 0x0100, [IntPtr]0x70, [IntPtr]::Zero)   # WM_KEYDOWN, VK_F1
+Start-Sleep -Milliseconds 1000
+$box = [QoqdirHelp]::Dialog([uint32]$p.Id)
+$text = if ($box -ne [IntPtr]::Zero) { [QoqdirHelp]::Text($box) } else { '' }
+if ($box -ne [IntPtr]::Zero) { [void][QoqdirHelp]::PostMessage($box, 0x0010, [IntPtr]::Zero, [IntPtr]::Zero) }
+Start-Sleep -Milliseconds 300
+[void]$p.CloseMainWindow(); [void]$p.WaitForExit(5000)
+Check ($text -ne '' -and $text -eq $help) "F1 in the window shows the same help (shown: $($box -ne [IntPtr]::Zero))"
 $r = HelpExitCode '-x'
 Check ($r.Shown -and $r.Code -eq 1) "-x shows the error with the help and exits with 1 (shown: $($r.Shown), exit code $($r.Code))"
 # A damaged qoqdir.ini: a number far off any screen gives the default (x + width must not overflow and stop it).
 Set-Content -Path $ini -Value "[Window]`r`nX=2147483000`r`nWidth=1000`r`nHeight=600"
-$title = TitleAfterStart @('-tC:\Users\Public')
+$title = TitleAfterStart @('--tab=C:\Users\Public')
 Check ($title -eq 'Public') "a damaged qoqdir.ini (X=2147483000) falls back to the defaults: '$title'"
 
 # A folder it can't write to, as Program Files is for most users: only adding files and folders is denied
@@ -79,7 +102,7 @@ New-Item -ItemType Directory $ro | Out-Null
 Copy-Item $Exe $ro
 $sid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
 [void](icacls $ro /deny "*${sid}:(OI)(CI)(WD,AD)")
-$p = Start-Process (Join-Path $ro (Split-Path $Exe -Leaf)) -ArgumentList '-tC:\Users\Public' -PassThru
+$p = Start-Process (Join-Path $ro (Split-Path $Exe -Leaf)) -ArgumentList '--tab=C:\Users\Public' -PassThru
 Start-Sleep -Milliseconds 2000
 $p.Refresh(); $title = $p.MainWindowTitle; $box = [QoqdirHelp]::Dialog([uint32]$p.Id)
 [void]$p.CloseMainWindow(); [void]$p.WaitForExit(5000)

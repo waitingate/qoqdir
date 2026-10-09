@@ -12,7 +12,7 @@
 
 namespace {
 
-enum : int { ID_BACK = 100, ID_FORWARD, ID_UP, ID_ADDRESS, ID_FILTER, ID_TABS, ID_PLUS, ID_TREE, ID_LIST, ID_STATUS };
+enum : int { ID_BACK = 100, ID_FORWARD, ID_UP, ID_ADDRESS, ID_FILTER, ID_TABS, ID_PLUS, ID_TREE, ID_LIST, ID_STATUS, ID_REFRESH };
 enum : UINT {
     WM_APP_LOADED = WM_APP + 1, WM_APP_CHANGED, WM_APP_CLOSETAB, WM_APP_RENAME, WM_APP_ICONS, WM_APP_TREE,
     WM_APP_MIDDLECLICK, WM_APP_TABS_SAVED, WM_APP_TABS_READ, WM_APP_PRESSTAB, WM_APP_DRAGTAB
@@ -140,6 +140,7 @@ bool App::create(HINSTANCE instance, const CommandLine& cmd, bool useSettings) {
     back_ = make(L"BUTTON", L"\uE72B", BS_PUSHBUTTON, 0, ID_BACK);   // Explorer's arrow icons (applyFont)
     forward_ = make(L"BUTTON", L"\uE72A", BS_PUSHBUTTON, 0, ID_FORWARD);
     up_ = make(L"BUTTON", L"\uE74A", BS_PUSHBUTTON, 0, ID_UP);
+    refresh_ = make(L"BUTTON", L"\uE72C", BS_PUSHBUTTON, 0, ID_REFRESH);
     address_ = make(WC_EDITW, L"", ES_AUTOHSCROLL | WS_TABSTOP, WS_EX_CLIENTEDGE, ID_ADDRESS);
     filter_ = make(WC_EDITW, L"", ES_AUTOHSCROLL | WS_TABSTOP, WS_EX_CLIENTEDGE, ID_FILTER);
     // Windows' plain tabs, as in its dialogs (the current one white and taller), all one width (showTabs).
@@ -206,12 +207,12 @@ void App::applyFont() {
     ncm.cbSize = sizeof ncm;
     SystemParametersInfoForDpi(SPI_GETNONCLIENTMETRICS, sizeof ncm, &ncm, 0, dpi_);
     Font font(CreateFontIndirectW(&ncm.lfMessageFont));
-    LOGFONTW icons = ncm.lfMessageFont;   // Back, Forward and Up: Explorer's arrows, as tall as the text
+    LOGFONTW icons = ncm.lfMessageFont;   // Back, Forward, Up and Refresh: Explorer's icons, as tall as the text
     lstrcpynW(icons.lfFaceName, L"Segoe MDL2 Assets", LF_FACESIZE);
     Font arrows(CreateFontIndirectW(&icons));
     for (HWND h : {address_, filter_, tabBar_, plus_, tree_.hwnd(), list_.hwnd(), status_})
         SendMessageW(h, WM_SETFONT, reinterpret_cast<WPARAM>(font.get()), TRUE);
-    for (HWND h : {back_, forward_, up_}) SendMessageW(h, WM_SETFONT, reinterpret_cast<WPARAM>(arrows.get()), TRUE);
+    for (HWND h : {back_, forward_, up_, refresh_}) SendMessageW(h, WM_SETFONT, reinterpret_cast<WPARAM>(arrows.get()), TRUE);
     font_ = std::move(font);   // the old fonts are deleted only after no control uses them
     arrowFont_ = std::move(arrows);
 
@@ -251,11 +252,11 @@ void App::layout() {
     int pad = scale(4, dpi_), btn = std::max(rowHeight_, scale(30, dpi_)), gap = scale(2, dpi_);
     int filterW = std::min(scale(120, dpi_), w / 3);
     int y = pad, x = pad;
-    HDWP d = BeginDeferWindowPos(10);
+    HDWP d = BeginDeferWindowPos(11);
     auto place = [&](HWND hwnd, int px, int py, int pw, int ph) {
         if (d) d = DeferWindowPos(d, hwnd, nullptr, px, py, std::max(pw, 0), std::max(ph, 0), SWP_NOZORDER | SWP_NOACTIVATE);
     };
-    for (HWND b : {back_, forward_, up_}) {
+    for (HWND b : {back_, forward_, up_, refresh_}) {
         place(b, x, y, btn, rowHeight_);
         x += btn + gap;
     }
@@ -305,7 +306,7 @@ LRESULT App::onMessage(UINT msg, WPARAM wp, LPARAM lp) {
         return 0;
     }
     case WM_SYSCOLORCHANGE:   // e.g. a high-contrast theme came or went: the controls hear of it only from here
-        for (HWND h : {back_, forward_, up_, address_, filter_, tabBar_, plus_, tree_.hwnd(), list_.hwnd(), status_})
+        for (HWND h : {back_, forward_, up_, refresh_, address_, filter_, tabBar_, plus_, tree_.hwnd(), list_.hwnd(), status_})
             SendMessageW(h, WM_SYSCOLORCHANGE, wp, lp);
         applyColors(highContrastOn());
         return 0;
@@ -328,6 +329,7 @@ LRESULT App::onMessage(UINT msg, WPARAM wp, LPARAM lp) {
         if (id == ID_BACK) goBack();
         if (id == ID_FORWARD) goForward();
         if (id == ID_UP) goUp();
+        if (id == ID_REFRESH) refreshAll();
         if (id == ID_PLUS) newTab(tab().path, true);
         focusList();
         return 0;
@@ -411,7 +413,7 @@ LRESULT App::onMessage(UINT msg, WPARAM wp, LPARAM lp) {
         switch (GET_APPCOMMAND_LPARAM(lp)) {
         case APPCOMMAND_BROWSER_BACKWARD: goBack(); return TRUE;
         case APPCOMMAND_BROWSER_FORWARD: goForward(); return TRUE;
-        case APPCOMMAND_BROWSER_REFRESH: refresh(); return TRUE;
+        case APPCOMMAND_BROWSER_REFRESH: refreshAll(); return TRUE;
         }
         break;
     case WM_DEVICECHANGE:
@@ -680,7 +682,8 @@ bool App::onKey(const Key& key) {
     if (ctrl && shift && (k == VK_PRIOR || k == VK_NEXT)) { moveTab(active_ + (k == VK_NEXT ? 1 : -1)); return true; }
     if ((ctrl && k == 'L') || (alt && k == 'D') || (k == VK_F4 && !alt)) { focusEdit(address_); return true; }
     if ((ctrl && k == 'F') || k == VK_F3) { focusEdit(filter_); return true; }
-    if (k == VK_F5 || (ctrl && k == 'R')) { refresh(); return true; }
+    if (k == VK_F5 || (ctrl && k == 'R')) { refreshAll(); return true; }
+    if (k == VK_F1) { showHelp(wnd_); return true; }
     if (ctrl && k == 'H') {   // hidden items are always read: the list just shows or hides them
         list_.setShowHidden(!list_.showHidden());
         setMessage(list_.showHidden() ? L"Showing hidden files" : L"Hiding hidden files");

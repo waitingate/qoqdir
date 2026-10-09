@@ -947,7 +947,7 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
     });
     add(L"a drag over a tab whose folder was never shown is refused at once (nobody has checked that folder)",
         [=, this] {
-            newTab(path(L"made"), false);   // a second tab, right of the current one, as from -t or a middle-click
+            newTab(path(L"made"), false);   // a second tab, right of the current one, as from --tab= or a middle-click
             POINTL cursor = tabPoint(active_ + 1);
             Com<IDataObject> data = dataObject(wnd_, path(L"file1.txt"));
             dragEffect = DROPEFFECT_COPY;
@@ -1152,6 +1152,35 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
             return bookmarkNodes() == L"one,two,sub" && one && TreeView_GetChild(tv, one) &&
                    (TreeView_GetItemState(tv, one, TVIS_EXPANDED) & TVIS_EXPANDED) && TreeView_GetChild(tv, last);
         });
+    auto one = [this] { return TreeView_GetChild(tree_.hwnd(), TreeView_GetRoot(tree_.hwnd())); };   // open, with "deep"
+    add(L"F5 reads the folders open in the tree again: one that is the same stays as it is (\"one\" stays open), one "
+        L"that changed shows its new subfolder (5.5)",
+        [=, this] {
+            CreateDirectoryW(path(L"Bookmarks\\one\\new").c_str(), nullptr);
+            selfTestKey(VK_F5);
+        },
+        [=, this] {
+            return bookmarkNodes() == L"one,two,sub" && nodeTexts(TreeView_GetChild(tree_.hwnd(), one())) == L"deep,new" &&
+                   (TreeView_GetItemState(tree_.hwnd(), one(), TVIS_EXPANDED) & TVIS_EXPANDED);
+        });
+    add(L"(the status bar says Refreshed)", nullptr, [=, this] { return statusMessage() == L"Refreshed"; });
+    auto newNode = [=, this] { return TreeView_GetNextSibling(tree_.hwnd(), TreeView_GetChild(tree_.hwnd(), one())); };
+    add(L"(open the folder new in the tree: it has no subfolders, so its arrow goes)",
+        [=, this] { TreeView_Expand(tree_.hwnd(), newNode(), TVE_EXPAND); },
+        [=, this] {
+            TVITEMW item{};
+            item.mask = TVIF_CHILDREN;
+            item.hItem = newNode();
+            TreeView_GetItem(tree_.hwnd(), &item);
+            return item.cChildren == 0;
+        });
+    add(L"the Refresh button does the same, and reads again a folder known to have no subfolders: it shows the one "
+        L"made since",
+        [=, this] {
+            CreateDirectoryW(path(L"Bookmarks\\one\\new\\inside").c_str(), nullptr);
+            SendMessageW(refresh_, BM_CLICK, 0, 0);
+        },
+        [=, this] { return nodeTexts(TreeView_GetChild(tree_.hwnd(), newNode())) == L"inside"; });
     auto nodePoint = [this](HTREEITEM node) {   // the middle of a tree node, in screen coordinates
         RECT r{};
         TreeView_GetItemRect(tree_.hwnd(), node, &r, TRUE);

@@ -28,6 +28,7 @@ public:
     const std::wstring& bookmarks() const { return bookmarks_; }
     void fill();   // rebuilds the roots (user folders and This PC)
     void refreshDrives();   // reads This PC's drives again; the rest of the tree stays as it is
+    void refresh();         // F5: reads again the folders whose subfolders are shown or known to be none (5.5)
     void addChildren(const TreeBatch& batch);
     void setIcons(const IconBatch& batch);
 
@@ -42,7 +43,7 @@ public:
 private:
     HTREEITEM add(HTREEITEM parent, const std::wstring& path, const std::wstring& text, int icon, bool leaf = false,
                   HTREEITEM after = TVI_LAST);
-    void startReading(HTREEITEM node);
+    void startReading(HTREEITEM node, bool again = false);   // again: also when its subfolders are shown
     // Runs `reader` on a worker thread to fill a batch, then posts it as the children of `node`.
     void startWorker(HTREEITEM node, std::function<void(TreeBatch&)> reader);
     const std::wstring& pathOf(HTREEITEM node) const;

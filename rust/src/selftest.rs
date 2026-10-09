@@ -43,7 +43,7 @@ use windows::Win32::UI::Shell::{
     SHGFI_SYSICONINDEX, SHGetFileInfoW, SHGetKnownFolderIDList, StrCmpLogicalW,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    FindWindowExW, GCLP_HBRBACKGROUND, GWLP_USERDATA, GetClassLongPtrW, GetClientRect, GetWindowLongPtrW, GetWindowRect, GetWindowTextLengthW, IsWindowVisible,
+    BM_CLICK, FindWindowExW, GCLP_HBRBACKGROUND, GWLP_USERDATA, GetClassLongPtrW, GetClientRect, GetWindowLongPtrW, GetWindowRect, GetWindowTextLengthW, IsWindowVisible,
     KillTimer, PostMessageW, SW_SHOWMINNOACTIVE, SW_SHOWNOACTIVATE, SetTimer, ShowWindow, WM_CHAR, WM_CLOSE,
     WM_DEVICECHANGE, WM_DPICHANGED, WM_KEYDOWN, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONUP, WM_MOUSEMOVE, WM_MOUSEWHEEL,
     WM_SYSKEYDOWN, WM_TIMER,
@@ -1543,7 +1543,7 @@ impl App {
         s.add(
             "a drag over a tab whose folder was never shown is refused at once (nobody has checked that folder)",
             |a| {
-                a.new_tab(Location::dir(p("made")), false); // a second tab, right of the current one, as from -t or a middle-click
+                a.new_tab(Location::dir(p("made")), false); // a second tab, right of the current one, as from --tab= or a middle-click
                 let cursor = a.tab_point(a.active() + 1);
                 let data = data_object_at(a.wnd, &Location::dir(p("file1.txt")));
                 let mut effect = DROPEFFECT_COPY;
@@ -1764,6 +1764,37 @@ impl App {
                 let expanded = send(a.tree.hwnd(), TVM_GETITEMSTATE, one as usize, TVIS_EXPANDED.0 as isize) & TVIS_EXPANDED.0 as isize != 0;
                 a.bookmark_nodes() == "one,two,sub" && one != 0 && a.tree_child(one) != 0 && expanded && a.tree_child(a.tree_last_root()) != 0
             },
+        );
+        s.add(
+            "F5 reads the folders open in the tree again: one that is the same stays as it is (\"one\" stays open), one \
+             that changed shows its new subfolder (5.5)",
+            |a| {
+                let _ = std::fs::create_dir(p("Bookmarks\\one\\new"));
+                a.press(VK_F5, 0);
+            },
+            |a| {
+                let one = a.tree_child(a.tree_root()); // open, with "deep"
+                let expanded = send(a.tree.hwnd(), TVM_GETITEMSTATE, one as usize, TVIS_EXPANDED.0 as isize) & TVIS_EXPANDED.0 as isize != 0;
+                a.bookmark_nodes() == "one,two,sub" && a.node_texts(a.tree_child(one)) == "deep,new" && expanded
+            },
+        );
+        s.check("(the status bar says Refreshed)", |a| a.status_message() == "Refreshed");
+        let new_node = |a: &App| a.tree_next(a.tree_child(a.tree_child(a.tree_root())));
+        s.add(
+            "(open the folder new in the tree: it has no subfolders, so its arrow goes)",
+            move |a| {
+                send(a.tree.hwnd(), TVM_EXPAND, TVE_EXPAND.0 as usize, new_node(a));
+            },
+            move |a| a.tree_item(new_node(a), TVIF_CHILDREN).cChildren.0 == 0,
+        );
+        s.add(
+            "the Refresh button does the same, and reads again a folder known to have no subfolders: it shows the one \
+             made since",
+            |a| {
+                let _ = std::fs::create_dir(p("Bookmarks\\one\\new\\inside"));
+                send(a.refresh, BM_CLICK, 0, 0);
+            },
+            move |a| a.node_texts(a.tree_child(new_node(a))) == "inside",
         );
         s.add(
             "This PC in the tree takes no drop",

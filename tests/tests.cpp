@@ -123,11 +123,11 @@ int main() {
     CHECK(!isRelativePath(L"\\\\server\\share"));
     CHECK(!isRelativePath(L""));
 
-    // parseCommandLine: 7z-style switches, plus plain folders
+    // parseCommandLine: switches, plus plain folders
     {
         wchar_t cwd[MAX_PATH];
         GetCurrentDirectoryW(MAX_PATH, cwd);
-        CommandLine c = parseCommandLine({L".", L"-tC:\\A", L"-tc:\\a", L"-tC:\\My Files\\"});
+        CommandLine c = parseCommandLine({L".", L"--tab=C:\\A", L"--tab=c:\\a", L"-t=C:\\My Files\\"});
         CHECK(c.error.empty() && !c.help && !c.selfTest);   // c:\a is C:\A again: kept once
         CHECK(c.folders.size() == 3);
         CHECK_EQ(c.folders.size() == 3 ? c.folders[0] : L"", normalizePath(cwd));
@@ -137,14 +137,13 @@ int main() {
         CHECK(parseCommandLine({L"-h"}).help && parseCommandLine({L"-?"}).help);
         CHECK(parseCommandLine({L"--selftest"}).selfTest);
         CHECK_EQ(parseCommandLine({L"-x"}).error, L"Unknown switch: -x");
-        CHECK(!parseCommandLine({L"-t"}).error.empty());               // -t without a folder
-        // A network folder comes out as itself; "-t:" with a colon, as the user typed it, means the same as -t.
-        CHECK_EQ(parseCommandLine({L"-t\\\\nas\\share\\"}).folders.at(0), L"\\\\nas\\share");
-        CommandLine colon = parseCommandLine({L"-t:\\\\nas\\share"});
-        CHECK_EQ(colon.folders.empty() ? L"" : colon.folders[0], L"\\\\nas\\share");
-        CHECK(!parseCommandLine({L"-t:"}).error.empty());
-        CHECK(!parseCommandLine({L"-tC:\\A", L"-q"}).error.empty());
+        // A network folder comes out as itself, and a name that starts with "-" is a folder too.
+        CHECK_EQ(parseCommandLine({L"--tab=\\\\nas\\share\\"}).folders.at(0), L"\\\\nas\\share");
+        CommandLine dash = parseCommandLine({L"--tab=-h"});
+        CHECK(dash.error.empty() && !dash.help && dash.folders.size() == 1 && dash.folders[0].ends_with(L"\\-h"));
+        CHECK(!parseCommandLine({L"--tab=C:\\A", L"-q"}).error.empty());
         CHECK(!parseCommandLine({L"-n"}).error.empty());               // -n no longer exists
+        CHECK(!parseCommandLine({L"-tC:\\A"}).error.empty());          // nor -t without "="
     }
 
     // samePath / extensionOf

@@ -195,9 +195,10 @@ Targets on an ordinary SSD laptop with a folder of 10,000 files (faster is fine)
 ## 5. Features
 
 ### 5.1 Window layout, top to bottom
-1. Toolbar: Back, Forward and Up buttons (Explorer's own arrow icons, from
-   Windows' icon font, as tall as the text), the address bar (it stretches), and
-   the filter box, 120 pixels wide at 100% scaling, with the hint "Filter".
+1. Toolbar: Back, Forward, Up and Refresh buttons (Explorer's own icons, from
+   Windows' icon font, as tall as the text; Refresh does what F5 does), the
+   address bar (it stretches), and the filter box, 120 pixels wide at 100%
+   scaling, with the hint "Filter".
 2. The tabs, with a "+" button at the right for a new tab.
 3. The folder tree on the left, a splitter, the file list on the right.
 4. Status bar: item counts and selection size on the left, messages on the right.
@@ -293,6 +294,11 @@ Back, Forward and Up are disabled when they can't do anything.
   naturally. Hidden folders aren't shown. A node has an expand arrow until it is
   known to have no subfolders.
 - Collapsing and expanding a node again shows its subfolders as they are now.
+- F5 (and Ctrl+R and the Refresh button) reads again every folder whose
+  subfolders are shown, and every one known to have none. A folder whose
+  subfolders are the same stays as it is; one whose subfolders changed shows them
+  afresh, and what was open below it closes (an open list changed item by item is
+  slow: Windows repaints it for each).
 - Clicking a node, or moving to it with the keyboard, opens it in this tab, and
   clicking the selected node opens it again. Middle-click opens a new background
   tab.
@@ -395,10 +401,11 @@ Anywhere in the window:
 | Ctrl+Shift+PgUp / Ctrl+Shift+PgDn | move the tab left / right |
 | Ctrl+L, Alt+D, F4 | address bar (text selected) |
 | Ctrl+F, F3 | filter box |
-| F5, Ctrl+R | refresh |
+| F5, Ctrl+R | refresh the list and the tree (5.5); the status bar says "Refreshed" |
 | Ctrl+H | show or hide hidden files |
 | Alt+Left / Alt+Right / Alt+Up | back / forward / up |
 | Mouse back and forward buttons | back / forward |
+| F1 | the help, with the main keys (5.10) |
 | Tab, Shift+Tab | move the focus: address, filter, tree, list |
 
 In the file list:
@@ -420,15 +427,30 @@ Keys are handled only for Qoqdir's own window. Dialogs opened from it
 (Properties, copy progress) keep their own keys.
 
 ### 5.10 Command line
-7-Zip style switches. No console window appears.
+Switches start with `-`, and the folder switches take their folder after `=`.
+No console window appears.
 
 ```
 qoqdir [switches] [folders...]
 
-  {folder}     open the folder in a tab (relative paths work: qoqdir .)
-  -t{folder}   the same, as a switch: -tD:\logs  -t"C:\My Files"
-  -h, -?       show the help
+  {folder}         open the folder in a tab (relative paths work: qoqdir .)
+  -t="{folder}"    the same, as a switch: -t="D:\logs"  -t="C:\My Files"
+  --tab={folder}   the same, quotes needed only for spaces: --tab=D:\logs
+  -h, -?           show the help
 ```
+
+- `-t=` and `--tab=` are the safe forms for scripts: all after `=` is the
+  folder, even a name that starts with `-`. Tested in cmd, Windows PowerShell
+  5.1, PowerShell 7.6 and Git Bash: `--tab=` arrives whole in all four, with
+  PowerShell's variables filled in (`--tab=$HOME`); only Git Bash leaves `~`
+  after `=` as it is (`--tab="$HOME"` works). `-t=` does too when the folder is
+  quoted. Unquoted, PowerShell (5.1 and 7.6 alike) reads `-t=...` as a switch of
+  its own (a word that starts with `-` and a letter): a dot ends the switch's
+  name, so `-t=my.folder` and `-t=.` arrive as two arguments (unless a colon
+  came first, as in `-t=D:\my.folder`), and a variable in the name isn't filled
+  in (`-t=$HOME`). Quotes make the word plain text, and so do two dashes. Git
+  Bash turns an argument that starts with `/` into a path (`/t` arrives as
+  `T:/`), so there is no `/t`.
 
 - Each folder opens once, in the given order (the same folder twice, in any
   letter case or with a trailing backslash, gives one tab). The first is shown.
@@ -436,13 +458,22 @@ qoqdir [switches] [folders...]
 - `qoqdir .` opens the terminal's current folder, and `D:` means `D:\`.
 - A folder that can't be opened still gets its tab, in the "not available" state
   (4.3). That helps with network drives that connect later.
-- `-h` and `-?` show the version and the help in a small window and exit with
-  code 0. An unknown switch (or `-t` without a folder) shows the error ("Unknown
-  switch: -x") above the help and exits with code 1.
-- The help says: quote folders with spaces, but don't end them with `\` before the
-  closing quote (Windows reads `\"` as a quote); keep folders you use often as
-  shortcuts in the Bookmarks folder next to `qoqdir.exe`; tabs aren't remembered
-  by themselves, but Ctrl+S saves them and Ctrl+O opens them again. Examples: `qoqdir .` and `qoqdir -tD:\projects -tD:\logs`.
+- `-h` and `-?` show the help in a small window titled "Qoqdir" and the version,
+  and exit with code 0; F1 shows the same help over the window.
+  An unknown switch shows the error ("Unknown switch: -x") above the help and
+  exits with code 1.
+- The help is short and in plain words. It lists the main keys of 5.9 in groups
+  (navigation, tabs, files), the most helpful first in each: what Explorer users
+  wouldn't guess (typing to filter, Backspace for up, Alt+drag onto Bookmarks,
+  saving tabs, Ctrl+H) before what they know. One action a line, named as in the
+  menus where there is one, with its main key ("Save tabs: Ctrl+S"); "or" adds a
+  key only when it does what the main one can't (Ctrl+F filters from anywhere).
+  Explorer's other keys for the same things (Alt+Up, Alt+D, F4, F3, Ctrl+R) work
+  but aren't listed, nor are Enter and Ctrl+C. No tab stops: a message box sets
+  them by the font's average letter width, so columns would line up in one font
+  only. Last, the command line by example (`-t=` and a quoted folder for each; -h
+  or F1 shows the help); `--tab=`, plain folders, `-?` and the quoting rules are
+  in the README.
 - `--selftest` runs the self-test (7.2) in `qoqdir-test.exe`; the exe users get
   treats it as an unknown switch. It isn't in the help.
 
@@ -476,9 +507,9 @@ At least these, with concrete examples:
   `%VAR%`, `D:`, `..`, trailing backslash, "This PC"), telling a path from a
   command, comparing paths ignoring case, and which child of A leads to B (used to
   select the folder you came from).
-- Command line: plain folders, `-t`, duplicates removed (letter case, trailing
-  backslash), `.`, `-h`, `-?`, `--selftest`; unknown switches and `-t` without a
-  folder are errors.
+- Command line: plain folders, `--tab=` and `-t=` (a name that starts with `-`
+  too), duplicates removed (letter case, trailing backslash), `.`, `-h`, `-?`,
+  `--selftest`; unknown switches (`-t` without `=` among them) are errors.
 - Sorting: folders first, natural number order, each column both ways, ties by
   name, Type by the shown type text.
 - Filtering: substring, ignoring case, wildcards (`*.pdf` must not match
@@ -623,15 +654,24 @@ result:
 56. The colours for a high-contrast theme (applied directly: the test never
     switches the user's theme) replace the soft gray in the window, list and tree,
     and the gray comes back after.
+57. With `Bookmarks\one` open in the tree (showing `deep`): after creating
+    `one\new`, F5 leaves Bookmarks as it was (`one` stays open), shows "deep",
+    "new" under `one`, and the status bar says "Refreshed". Opening the empty `new`
+    takes its arrow away; after creating `new\inside`, the Refresh button shows
+    "inside" under `new`.
 
 ### 7.3 Command-line checks
 Run on a copy of the exe in a temp folder:
-- `-tC:\Users\Public -tc:\users\public` opens one window titled "Public".
+- `--tab=C:\Users\Public -t="c:\users\public"` (the same folder, in both forms)
+  opens one window titled "Public".
   After closing it, `qoqdir.ini` holds no tabs or paths, and a `Bookmarks` folder
   exists next to the exe.
 - No arguments: the home folder is shown.
 - `-h` shows the help and exits with code 0. `-x` shows the error with the help
   and exits with code 1.
+- The help starts with the navigation keys, says that F1 shows it, and has the
+  version in its title. F1 in the window (a key press posted to the file list,
+  nothing global) shows the same help.
 - With a damaged `qoqdir.ini` (a window position far off any screen) it starts
   with the defaults.
 - From a folder it can't write to (as Program Files is for most users), it runs,
