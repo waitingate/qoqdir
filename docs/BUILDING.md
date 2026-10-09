@@ -99,6 +99,23 @@ running on with wrong data. A build to step through with `gdb` (it comes with
 winlibs) goes in a folder of its own:
 `cmake -S . -B build-debug -G Ninja -DCMAKE_BUILD_TYPE=Debug`.
 
+### The C++ version with GCC alone
+
+On a PC with just the compiler, no CMake or Ninja: `windres` and `g++` come with
+any MinGW-w64 GCC. It needs only the 18 files in `src\` (not `selftest.cpp`,
+which goes into the test version only). In `src\`, with `C:\mingw64\bin` on the
+PATH:
+
+```powershell
+windres app.rc -O coff -o app_res.o
+g++ -std=c++20 -O2 -DNDEBUG -DUNICODE -D_UNICODE -DNOMINMAX -D_WIN32_WINNT=0x0A00 -DWINVER=0x0A00 -D_GLIBCXX_ASSERTIONS -fsanitize=signed-integer-overflow -fsanitize-undefined-trap-on-error -ffunction-sections -fdata-sections -mwindows -municode -static '-Wl,--gc-sections' -s main.cpp app.cpp filelist.cpp tree.cpp shell.cpp folder.cpp crashlog.cpp app_res.o -o qoqdir.exe -lole32 -loleaut32 -lshell32 -lshlwapi -lcomctl32 -luuid
+```
+
+That makes the same `qoqdir.exe` as the CMake build, in under two minutes. The
+flags are the ones in `CMakeLists.txt`: keep the two in step. PowerShell needs
+the quotes around `-Wl,--gc-sections`, as it reads a comma as a list; cmd.exe
+doesn't.
+
 ### The Rust version by hand
 
 From `rust\`, with `C:\mingw64\bin` on the PATH for the icon:
