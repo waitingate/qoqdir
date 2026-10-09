@@ -150,6 +150,11 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
         GetWindowTextW(filter_, text, 64);
         return std::wstring(text);
     };
+    auto addressText = [this] {
+        std::wstring s(size_t(GetWindowTextLengthW(address_)) + 1, L'\0');
+        s.resize(size_t(GetWindowTextW(address_, s.data(), int(s.size()))));
+        return s;
+    };
     auto editText = [this] {
         HWND edit = ListView_GetEditControl(list_.hwnd());
         wchar_t buf[MAX_PATH] = {};
@@ -247,6 +252,40 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
         [=, this] {
             selfTest_->note = L"filter \"" + filterText() + L"\"";
             return filterText() == L"file ";
+        });
+    add(L"Ctrl+Backspace in the address bar deletes the last word too",
+        [=, this] {
+            SetFocus(address_);
+            SetWindowTextW(address_, L"D:\\my files");
+            SendMessageW(address_, EM_SETSEL, 11, 11);   // the caret at the end
+            selfTestKey(VK_BACK, true);
+        },
+        [=, this] {
+            selfTest_->note = L"address \"" + addressText() + L"\"";
+            return addressText() == L"D:\\my ";
+        });
+    add(L"(Esc puts the path back and returns to the list)", [=, this] { selfTestKey(VK_ESCAPE); },
+        [=, this] { return addressText() == locationText(tab().path) && GetFocus() == list_.hwnd(); });
+    // The tree's width (96-DPI units) before a drag, and what a drag far past the window's edge left it at.
+    auto drag = std::make_shared<std::pair<int, int>>();
+    add(L"dragging the splitter past the window's edge keeps the width shown (what is saved), not one past the edge",
+        [=, this] {
+            RECT rc{};
+            GetClientRect(wnd_, &rc);
+            int y = rc.bottom / 2, before = treeWidth_;
+            SendMessageW(wnd_, WM_LBUTTONDOWN, MK_LBUTTON, MAKELPARAM(splitterX_ + 1, y));
+            SendMessageW(wnd_, WM_MOUSEMOVE, MK_LBUTTON, MAKELPARAM(rc.right + 1000, y));
+            *drag = {before, treeWidth_};
+            SendMessageW(wnd_, WM_MOUSEMOVE, MK_LBUTTON, MAKELPARAM(scale(before, dpi_), y));   // and back
+            SendMessageW(wnd_, WM_LBUTTONUP, 0, MAKELPARAM(scale(before, dpi_), y));
+        },
+        [=, this] {
+            RECT rc{};
+            GetClientRect(wnd_, &rc);
+            int limit = MulDiv(std::max(scale(80, dpi_), int(rc.right) - scale(200, dpi_)), 96, int(dpi_));
+            selfTest_->note = L"far " + std::to_wstring(drag->second) + L", limit " + std::to_wstring(limit) +
+                              L", back to " + std::to_wstring(treeWidth_);
+            return drag->second <= limit + 1 && std::abs(treeWidth_ - drag->first) <= 1 && !dragging_;
         });
     // Paste only the test's own file: after a failed Ctrl+C, pasting would move files the user cut.
     auto holdsTestFile = [=] {

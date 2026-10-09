@@ -16,8 +16,7 @@ use std::ffi::OsString;
 
 use windows::Win32::Foundation::{CloseHandle, GENERIC_READ, GENERIC_WRITE, HWND};
 use windows::Win32::Storage::FileSystem::{
-    CreateFileW, FILE_SHARE_READ, FILE_SHARE_WRITE, FILE_TYPE_DISK, FILE_TYPE_PIPE, FILE_TYPE_UNKNOWN, GetFileType,
-    OPEN_EXISTING, WriteFile,
+    CreateFileW, FILE_SHARE_READ, FILE_SHARE_WRITE, FILE_TYPE_UNKNOWN, GetFileType, OPEN_EXISTING, WriteFile,
 };
 use windows::Win32::System::Console::{
     ATTACH_PARENT_PROCESS, AttachConsole, CONSOLE_SCREEN_BUFFER_INFO, FreeConsole, GetConsoleScreenBufferInfo,
@@ -129,15 +128,15 @@ fn help_box(owner: Option<HWND>, text: &str, icon: MESSAGEBOX_STYLE) {
     unsafe { MessageBoxW(owner, pcwstr(&wide(text)), pcwstr(&wide(title)), icon) };
 }
 
-/// Prints to a file or pipe (qoqdir -h > help.txt), else to the terminal it was typed in. False with neither (a
-/// shortcut, Run): then the caller shows a box.
+/// Prints wherever the output was sent (a file, a pipe, nul), else to the terminal it was typed in. False with
+/// neither (a shortcut, Run): then the caller shows a box.
 fn print_help(text: &str) -> bool {
     let text = text.replace('\n', "\r\n");
     unsafe {
         let out = GetStdHandle(STD_OUTPUT_HANDLE).unwrap_or_default();
-        let kind = if out.is_invalid() { FILE_TYPE_UNKNOWN } else { GetFileType(out) };
+        let sent = !out.is_invalid() && GetFileType(out) != FILE_TYPE_UNKNOWN;
         // PowerShell 7 closes the pipe at once for $h = qoqdir -h: then the terminal.
-        if (kind == FILE_TYPE_DISK || kind == FILE_TYPE_PIPE) && WriteFile(out, Some(text.as_bytes()), None, None).is_ok() {
+        if sent && WriteFile(out, Some(text.as_bytes()), None, None).is_ok() {
             return true;
         }
         if AttachConsole(ATTACH_PARENT_PROCESS).is_err() {

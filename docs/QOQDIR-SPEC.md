@@ -249,6 +249,8 @@ Back, Forward and Up are disabled when they can't do anything.
   - A path that doesn't work stays selected in the box, so it can be fixed.
 - Folder names autocomplete as you type (Windows' own autocomplete).
 - Esc in the address bar puts the current path back and returns to the list.
+- Ctrl+Backspace deletes the word before the cursor, in the address bar and in
+  the filter box (an edit box on its own types a box character instead).
 
 ### 5.4 File list
 - Detail view with Name, Date modified, Type and Size (size right aligned, empty
@@ -313,7 +315,8 @@ Back, Forward and Up are disabled when they can't do anything.
   server that is off would freeze the drag), and not the folder the files come
   from.
 - Backspace in the tree goes up.
-- The splitter sets the tree's width, which is remembered.
+- The splitter sets the tree's width, which is remembered; a drag past the
+  window's edge keeps the width shown, not one past it.
 
 ### 5.6 Bookmarks
 - Bookmarks are ordinary files: `.lnk` shortcuts and `.url` links, and plain
@@ -460,7 +463,7 @@ qoqdir [options] [folder ...]
   (4.3). That helps with network drives that connect later.
 - `-h`, `--help` and `-?` print the command-line help and exit with 0. An
   unknown option prints "Unknown option: -x" above the help and exits with 1.
-  The help goes to a file or pipe if the output is sent there, else to the
+  The help goes wherever the output is sent (a file, a pipe, `nul`), else to the
   terminal it was typed in, else (shortcut, Run) to a box titled with the
   version. cmd and PowerShell don't wait for a window program, so their prompt
   can be back before the help. Then the help goes below it and Qoqdir sends the
@@ -669,6 +672,11 @@ result:
     "new" under `one`, and the status bar says "Refreshed". Opening the empty `new`
     takes its arrow away; after creating `new\inside`, the Refresh button shows
     "inside" under `new`.
+58. Ctrl+Backspace in the address bar deletes the last word (as in the filter
+    box, 5.3), and Esc puts the path back and returns to the list.
+59. Dragging the splitter 1000 pixels past the window's right edge sets the
+    tree's width to the widest the layout allows, never one past the edge (that
+    width is what gets saved); dragging it back restores the old width.
 
 ### 7.3 Command-line checks
 Run on a copy of the exe in a temp folder:

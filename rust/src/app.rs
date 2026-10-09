@@ -207,9 +207,9 @@ pub struct App {
     pub dpi: Cell<u32>,
     pub row_height: Cell<i32>,
     tab_height: Cell<i32>,
-    tree_width: Cell<i32>, // in 96-DPI units
-    splitter_x: Cell<i32>,
-    dragging: Cell<bool>,       // moving the tree/list splitter
+    pub tree_width: Cell<i32>, // in 96-DPI units
+    pub splitter_x: Cell<i32>,
+    pub dragging: Cell<bool>,   // moving the tree/list splitter
     dragging_files: Cell<bool>, // a drag started from our own list is in progress
     pub refresh_queued: Cell<bool>,
     load_message_shown: Cell<bool>, // "Loading..." or "not available": cleared when a folder loads
@@ -633,6 +633,9 @@ impl App {
 
             let split_w = scale(SPLITTER_WIDTH, dpi);
             let tree_w = scale(self.tree_width.get(), dpi).clamp(scale(80, dpi), scale(80, dpi).max(w - scale(200, dpi)));
+            if self.dragging.get() {
+                self.tree_width.set((i64::from(tree_w) * 96 / i64::from(dpi)) as i32); // a drag past the edge keeps the width shown, not one past it
+            }
             let body_h = h - status_h - y;
             place(self.tree.hwnd(), 0, y, tree_w, body_h);
             place(self.list.hwnd(), tree_w + split_w, y, w - tree_w - split_w, body_h);
@@ -1277,6 +1280,10 @@ impl App {
             if is(VK_ESCAPE) {
                 set_text(self.address, self.location().text());
                 self.focus_list();
+                return true;
+            }
+            if ctrl && is(VK_BACK) {
+                delete_word_before(self.address);
                 return true;
             }
             return false;

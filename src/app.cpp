@@ -270,6 +270,7 @@ void App::layout() {
 
     int splitW = scale(kSplitterWidth, dpi_);
     int treeW = std::clamp(scale(treeWidth_, dpi_), scale(80, dpi_), std::max(scale(80, dpi_), w - scale(200, dpi_)));
+    if (dragging_) treeWidth_ = MulDiv(treeW, 96, int(dpi_));   // a drag past the edge keeps the width shown, not one past it
     int bodyH = h - statusH - y;
     place(tree_.hwnd(), 0, y, treeW, bodyH);
     place(list_.hwnd(), treeW + splitW, y, w - treeW - splitW, bodyH);
@@ -714,6 +715,7 @@ bool App::onKey(const Key& key) {
             focusList();
             return true;
         }
+        if (ctrl && k == VK_BACK) { deleteWordBefore(address_); return true; }
         return false;
     }
     if (focus == filter_) {

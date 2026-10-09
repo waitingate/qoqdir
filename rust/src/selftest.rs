@@ -25,7 +25,7 @@ use windows::Win32::System::Ole::{DROPEFFECT_COPY, DROPEFFECT_NONE};
 use windows::Win32::System::SystemInformation::GetSystemDirectoryW;
 use windows::Win32::System::SystemServices::MK_LBUTTON;
 use windows::Win32::UI::Controls::{
-    EM_GETSEL, EM_REPLACESEL, HTREEITEM, LVIF_IMAGE, LVIR_LABEL, LVITEMW, LVM_CANCELEDITLABEL, LVM_GETBKCOLOR, LVM_GETCOUNTPERPAGE,
+    EM_SETSEL, EM_GETSEL, EM_REPLACESEL, HTREEITEM, LVIF_IMAGE, LVIR_LABEL, LVITEMW, LVM_CANCELEDITLABEL, LVM_GETBKCOLOR, LVM_GETCOUNTPERPAGE,
     LVM_GETTEXTBKCOLOR, TVM_GETBKCOLOR,
     LVM_GETITEMRECT, LVM_GETITEMW, SB_GETTEXTLENGTHW, SB_GETTEXTW, TCIF_TEXT, TCITEMW,
     TCM_GETCURSEL, TCM_GETITEMCOUNT, TCM_GETITEMRECT, TCM_GETITEMW, TCM_SETCURFOCUS, UPDOWN_CLASSW,
@@ -448,6 +448,10 @@ impl App {
         window_text(self.filter).to_string_lossy().into_owned()
     }
 
+    fn address_text(&self) -> String {
+        window_text(self.address).to_string_lossy().into_owned()
+    }
+
     fn edit_text(&self) -> String {
         self.list.edit_control().map(|e| window_text(e).to_string_lossy().into_owned()).unwrap_or_default()
     }
@@ -629,6 +633,54 @@ impl App {
             |a| {
                 note(format!("filter \"{}\"", a.filter_text()));
                 a.filter_text() == "file "
+            },
+        );
+        s.add(
+            "Ctrl+Backspace in the address bar deletes the last word too",
+            |a| {
+                focus(a.address);
+                set_text(a.address, "D:\\my files");
+                send(a.address, EM_SETSEL, 11, 11); // the caret at the end
+                a.press(VK_BACK, CTRL);
+            },
+            |a| {
+                note(format!("address \"{}\"", a.address_text()));
+                a.address_text() == "D:\\my "
+            },
+        );
+        s.add("(Esc puts the path back and returns to the list)", |a| a.press(VK_ESCAPE, 0), |a| {
+            let st = a.st.borrow();
+            a.address_text() == st.tabs[st.active].location.text().to_string_lossy() && unsafe { GetFocus() } == a.list.hwnd()
+        });
+        // The tree's width (96-DPI units) before a drag, and what a drag far past the window's edge left it at.
+        let drag = Rc::new(Cell::new((0, 0)));
+        let (drag_act, drag_done) = (drag.clone(), drag);
+        s.add(
+            "dragging the splitter past the window's edge keeps the width shown (what is saved), not one past the edge",
+            move |a| {
+                let mut rc = RECT::default();
+                unsafe {
+                    let _ = GetClientRect(a.wnd, &mut rc);
+                }
+                let (y, button) = (rc.bottom / 2, MK_LBUTTON.0 as usize);
+                let before = a.tree_width.get();
+                send(a.wnd, WM_LBUTTONDOWN, button, packed(a.splitter_x.get() + 1, y));
+                send(a.wnd, WM_MOUSEMOVE, button, packed(rc.right + 1000, y));
+                drag_act.set((before, a.tree_width.get()));
+                let back = scale(before, a.dpi.get());
+                send(a.wnd, WM_MOUSEMOVE, button, packed(back, y)); // and back
+                send(a.wnd, WM_LBUTTONUP, 0, packed(back, y));
+            },
+            move |a| {
+                let (before, far) = drag_done.get();
+                let mut rc = RECT::default();
+                unsafe {
+                    let _ = GetClientRect(a.wnd, &mut rc);
+                }
+                let dpi = a.dpi.get();
+                let limit = (i64::from(scale(80, dpi).max(rc.right - scale(200, dpi))) * 96 / i64::from(dpi)) as i32;
+                note(format!("far {far}, limit {limit}, back to {}", a.tree_width.get()));
+                far <= limit + 1 && (a.tree_width.get() - before).abs() <= 1 && !a.dragging.get()
             },
         );
         s.add(

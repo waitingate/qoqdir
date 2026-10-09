@@ -88,14 +88,13 @@ void helpBox(HWND owner, const std::wstring& text, UINT icon) {   // titled with
     MessageBoxW(owner, text.c_str(), title.c_str(), icon);
 }
 
-// Prints to a file or pipe (qoqdir -h > help.txt), else to the terminal it was typed in. False with neither (a
-// shortcut, Run): then the caller shows a box.
+// Prints wherever the output was sent (a file, a pipe, nul), else to the terminal it was typed in. False with
+// neither (a shortcut, Run): then the caller shows a box.
 bool printHelp(std::wstring text) {
     for (size_t i = 0; (i = text.find(L'\n', i)) != std::wstring::npos; i += 2) text.insert(i, 1, L'\r');
     DWORD n = 0;
     HANDLE out = GetStdHandle(STD_OUTPUT_HANDLE);
-    DWORD type = out ? GetFileType(out) : FILE_TYPE_UNKNOWN;
-    if (type == FILE_TYPE_DISK || type == FILE_TYPE_PIPE) {
+    if (out && GetFileType(out) != FILE_TYPE_UNKNOWN) {
         std::string utf8(size_t(WideCharToMultiByte(CP_UTF8, 0, text.c_str(), int(text.size()), nullptr, 0, nullptr, nullptr)), '\0');
         WideCharToMultiByte(CP_UTF8, 0, text.c_str(), int(text.size()), utf8.data(), int(utf8.size()), nullptr, nullptr);
         // PowerShell 7 closes the pipe at once for $h = qoqdir -h: then the terminal.
