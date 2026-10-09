@@ -506,6 +506,12 @@ and exits with code 0 only if every step passed. It must:
   ever answers there), and start the steps that cancel such a load while it is
   still running;
 - give each step a timeout and carry on after a failed step;
+- share the clipboard with whatever else runs, so the user can go on copying and
+  pasting: a step that copies does it again while its files aren't there, and a
+  paste step first puts its file back if another program has taken the
+  clipboard (it never pastes anything else). Windows reads the clipboard a
+  moment after a paste starts, so a copy at that very moment can still make a
+  paste step fail, as it would make Explorer's paste do nothing;
 - leave nothing behind but the test folder and log in `%TEMP%` (one small file in
   the Recycle Bin from the delete test is fine). It may replace the clipboard.
 

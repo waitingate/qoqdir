@@ -65,6 +65,7 @@ struct Step {
     done: Check,
     timeout_ms: u128,
     while_loading: bool, // start without waiting for the current folder load to finish
+    copies: bool,        // puts files on the clipboard: done again while they aren't there (self_test_tick)
 }
 
 impl Step {
@@ -75,6 +76,11 @@ impl Step {
 
     fn during_load(&mut self) -> &mut Step {
         self.while_loading = true;
+        self
+    }
+
+    fn copies(&mut self) -> &mut Step {
+        self.copies = true;
         self
     }
 }
@@ -98,7 +104,7 @@ impl Steps {
     }
 
     fn push(&mut self, name: &'static str, act: Option<Act>, done: Check) -> &mut Step {
-        self.0.push(Step { name, act, done, timeout_ms: 5000, while_loading: false });
+        self.0.push(Step { name, act, done, timeout_ms: 5000, while_loading: false, copies: false });
         self.0.last_mut().expect("just added")
     }
 }
@@ -224,6 +230,15 @@ fn clipboard_files() -> Vec<PathBuf> {
 fn holds_test_file() -> bool {
     let files = clipboard_files();
     files.len() == 1 && Location::dir(&files[0]).same(&Location::dir(p("file1.txt")))
+}
+
+/// Puts the test's file there again if another program has taken the clipboard since.
+fn test_file_on_clipboard(a: &App) -> bool {
+    if !holds_test_file() {
+        let file = Item { name: "file1.txt".into(), attrs: FILE_ATTRIBUTE_ARCHIVE.0, icon: -1, ..Default::default() };
+        copy_to_clipboard(a.wnd, &Location::dir(test_dir()), &[file], false);
+    }
+    holds_test_file()
 }
 
 /// A shortcut to `target`; "" is This PC, which has no path.
@@ -622,7 +637,8 @@ impl App {
                 a.press(letter(b'C'), CTRL);
             },
             |_| holds_test_file(),
-        );
+        )
+        .copies();
         s.add(
             "filter + Enter opens a folder",
             |a| {
@@ -634,7 +650,7 @@ impl App {
         s.add(
             "Ctrl+V pastes with the Windows copy engine",
             |a| {
-                if holds_test_file() {
+                if test_file_on_clipboard(a) {
                     a.press(letter(b'V'), CTRL);
                 }
             },
@@ -645,7 +661,7 @@ impl App {
         s.add(
             "Paste shortcut makes a shortcut to the copied file",
             |a| {
-                if holds_test_file() {
+                if test_file_on_clipboard(a) {
                     paste_into(a.wnd, &a.list.location(), true);
                 }
             },
@@ -2112,7 +2128,8 @@ impl App {
                 note(format!("copy {} ms", t.elapsed().as_millis()));
             },
             |_| clipboard_files().len() == 10000,
-        );
+        )
+        .copies();
         s.add(
             "copying takes the files from the list, not from the disk",
             |a| {
@@ -2120,7 +2137,8 @@ impl App {
                 copy_to_clipboard(a.wnd, &a.list.location(), &a.list.selected_items(), false);
             },
             |_| clipboard_files().len() == 3,
-        );
+        )
+        .copies();
         s.add(
             "a Ctrl+C that cannot reach the clipboard says so, not \"copied\" (another program holds it open)",
             |a| {
@@ -2165,7 +2183,7 @@ impl App {
         enum Next {
             Wait,
             Act(Option<Act>),
-            Check(Check, u128),
+            Check(Check, u128, Option<Act>), // the act again, for a step that copies
             Finish,
         }
         // Decide under a short borrow, then run the step with nothing borrowed: actions can run modal loops.
@@ -2180,7 +2198,7 @@ impl App {
                 if self.is_loading() && !step.while_loading { Next::Wait } else { Next::Act(step.act.clone()) }
             } else {
                 let s = &t.steps[t.index];
-                Next::Check(s.done.clone(), s.timeout_ms)
+                Next::Check(s.done.clone(), s.timeout_ms, if s.copies { s.act.clone() } else { None })
             })
         });
         let Some(next) = next else { return };
@@ -2201,10 +2219,15 @@ impl App {
                     t.started = Some(Instant::now());
                 });
             }
-            Next::Check(done, timeout) => {
+            Next::Check(done, timeout, again) => {
                 let ok = done(self);
                 let elapsed = step_ms();
                 if !ok && elapsed < timeout {
+                    // The clipboard is shared with every program: the user's own copying may have taken it
+                    // since. Copy again.
+                    if let Some(act) = again {
+                        act(self);
+                    }
                     return;
                 }
                 let note = noted();

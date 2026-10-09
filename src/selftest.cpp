@@ -16,6 +16,7 @@ struct App::SelfTest {
         std::function<bool()> done;
         ULONGLONG timeoutMs = 5000;
         bool whileLoading = false;   // start without waiting for the current folder load to finish
+        bool copies = false;         // puts files on the clipboard: done again while they aren't there (selfTestTick)
     };
     std::vector<Step> steps;
     size_t index = 0;
@@ -186,8 +187,9 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
         selfTestKey(VK_RETURN);
     };
     auto add = [&t](std::wstring name, std::function<void()> act, std::function<bool()> done, ULONGLONG timeout = 5000,
-                    bool whileLoading = false) {
+                    bool whileLoading = false) -> SelfTest::Step& {
         t.steps.push_back({std::move(name), std::move(act), std::move(done), timeout, whileLoading});
+        return t.steps.back();
     };
     auto backHome = [&](const wchar_t* name) {   // a step that opens the test folder again
         add(name, [=, this] { open(dir, Nav::New); }, [=, this] { return at(dir); });
@@ -250,6 +252,13 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
         auto files = clipboardFiles();
         return files.size() == 1 && samePath(files[0], path(L"file1.txt"));
     };
+    auto testFileOnClipboard = [=, this] {   // put there again if another program has taken the clipboard since
+        Item file;
+        file.name = L"file1.txt";
+        file.attrs = FILE_ATTRIBUTE_ARCHIVE;
+        if (!holdsTestFile()) copyToClipboard(wnd_, dir, {file}, false);
+        return holdsTestFile();
+    };
     add(L"Ctrl+C puts the file on the clipboard",
         [=, this] {
             SetWindowTextW(filter_, L"");
@@ -257,14 +266,14 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
             list_.select({L"file1.txt"}, L"file1.txt");
             selfTestKey('C', true);
         },
-        holdsTestFile);
+        holdsTestFile).copies = true;
     add(L"filter + Enter opens a folder", [=, this] { selfTestType(L"sub"); selfTestKey(VK_RETURN); },
         [=, this] { return at(path(L"sub")); });
-    add(L"Ctrl+V pastes with the Windows copy engine", [=, this] { if (holdsTestFile()) selfTestKey('V', true); },
+    add(L"Ctrl+V pastes with the Windows copy engine", [=, this] { if (testFileOnClipboard()) selfTestKey('V', true); },
         [=, this] { return exists(path(L"sub\\file1.txt")); }, 10000);
     add(L"pasted file appears in the list by itself", nullptr, [=, this] { return idle() && listed(L"file1.txt"); });
     add(L"Paste shortcut makes a shortcut to the copied file",
-        [=, this] { if (holdsTestFile()) pasteInto(wnd_, list_.dir(), true); },
+        [=, this] { if (testFileOnClipboard()) pasteInto(wnd_, list_.dir(), true); },
         [=, this] {
             bool folder = false;
             for (const Item& it : listFolder(path(L"sub"), false).items)
@@ -1430,7 +1439,7 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
             copyToClipboard(wnd_, list_.dir(), list_.selectedItems(), false);
             selfTest_->note = L"copy " + std::to_wstring(int(nowMs() - t0)) + L" ms";
         },
-        [=, this] { return clipboardFiles().size() == 10000; });
+        [=, this] { return clipboardFiles().size() == 10000; }).copies = true;
     // Files that exist only in the list, all selected: a copy that asked the disk about each one would find nothing.
     auto showGhosts = [=, this] {
         Listing l;
@@ -1449,7 +1458,7 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
             showGhosts();
             copyToClipboard(wnd_, list_.dir(), list_.selectedItems(), false);
         },
-        [=, this] { return clipboardFiles().size() == 3; });
+        [=, this] { return clipboardFiles().size() == 3; }).copies = true;
     add(L"a Ctrl+C that cannot reach the clipboard says so, not \"copied\" (another program holds it open)",
         [=, this] {
             // Another thread holds the clipboard open, as a clipboard manager or a remote desktop can.
@@ -1516,7 +1525,11 @@ void App::selfTestTick() {
         }
         bool ok = !s.done || s.done();
         ULONGLONG elapsed = GetTickCount64() - t.startTick;
-        if (!ok && elapsed < s.timeoutMs) return;
+        if (!ok && elapsed < s.timeoutMs) {
+            // The clipboard is shared with every program: the user's own copying may have taken it since. Copy again.
+            if (s.copies) s.act();
+            return;
+        }
         if (!ok) ++t.failures;
         std::wstring line = (ok ? L"ok    " : L"FAIL  ") + s.name + (t.note.empty() ? L"" : L"   [" + t.note + L"]");
         if (elapsed > 500) line += L"   (slow step: " + std::to_wstring(elapsed) + L" ms)";
