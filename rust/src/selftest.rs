@@ -39,7 +39,7 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
     VK_RIGHT, VK_TAB,
 };
 use windows::Win32::UI::Shell::{
-    DragQueryFileW, FOLDERID_ComputerFolder, FOLDERID_Desktop, HDROP, SHFILEINFOW, SHGFI_DISPLAYNAME, SHGFI_SMALLICON,
+    DROPFILES, FOLDERID_ComputerFolder, FOLDERID_Desktop, SHFILEINFOW, SHGFI_DISPLAYNAME, SHGFI_SMALLICON,
     SHGFI_SYSICONINDEX, SHGetFileInfoW, SHGetKnownFolderIDList, StrCmpLogicalW,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
@@ -211,12 +211,15 @@ fn clipboard_files() -> Vec<PathBuf> {
         }
         if let Ok(data) = GetClipboardData(CF_HDROP) {
             let global = HGLOBAL(data.0);
-            let drop = HDROP(GlobalLock(global));
-            let n = DragQueryFileW(drop, u32::MAX, None);
-            for i in 0..n {
-                let mut buf = [0u16; 260];
-                if DragQueryFileW(drop, i, Some(&mut buf)) > 0 {
-                    files.push(PathBuf::from(from_wide(&buf)));
+            // The names one after another, read straight: DragQueryFileW(i) starts from the first name each time,
+            // which took 9 s for 10,000 (and the window showed "not responding").
+            let drop = GlobalLock(global) as *const DROPFILES;
+            if !drop.is_null() && (*drop).fWide.as_bool() {
+                let mut p = drop.cast::<u8>().add((*drop).pFiles as usize).cast::<u16>();
+                while *p != 0 {
+                    let len = (0..).take_while(|&i| *p.add(i) != 0).count();
+                    files.push(PathBuf::from(from_wide(std::slice::from_raw_parts(p, len))));
+                    p = p.add(len + 1);
                 }
             }
             let _ = GlobalUnlock(global);
