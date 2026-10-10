@@ -441,12 +441,12 @@ std::optional<std::wstring> shortcutTarget(const std::wstring& lnkPath, bool* fo
     if (link->GetPath(target.data(), int(target.size()), &stored, 0) == S_OK && target[0]) {
         *folder = (stored.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0;
         target.resize(target.find(L'\0'));
-        // A target gone from a local drive (a flash drive on another letter, a pair moved together) is looked for
+        // A target on a drive letter that is gone (a flash drive that came back under another letter) is looked for
         // where the shortcut says it is relative to itself: Windows stores that for one made on the target's drive.
-        // No search, no box, and nothing on the network: a server that is off would freeze a drag over the tree.
+        // No search, no box, and no disk is asked: a drive that is there is left to the loader, since a sleeping
+        // disk or a server that is off would freeze the UI thread (a drag over the tree asks here).
         bool onDrive = target.size() >= 3 && target[1] == L':';
-        if (onDrive && GetDriveTypeW(target.substr(0, 3).c_str()) != DRIVE_REMOTE &&
-            GetFileAttributesW(target.c_str()) == INVALID_FILE_ATTRIBUTES &&
+        if (onDrive && GetDriveTypeW(target.substr(0, 3).c_str()) == DRIVE_NO_ROOT_DIR &&
             link->Resolve(nullptr, SLR_NO_UI | SLR_NOSEARCH | SLR_NOTRACK | SLR_NOLINKINFO | SLR_NOUPDATE) == S_OK) {
             std::wstring found(32768, L'\0');
             if (link->GetPath(found.data(), int(found.size()), nullptr, 0) == S_OK) target = found.c_str();

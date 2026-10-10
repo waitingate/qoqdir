@@ -14,7 +14,8 @@ use std::time::{Duration, Instant};
 use windows::Win32::Foundation::{HGLOBAL, HWND, LPARAM, POINT, POINTL, RECT, WPARAM};
 use windows::Win32::Graphics::Gdi::{COLOR_WINDOW, ClientToScreen, GetSysColor, GetSysColorBrush};
 use windows::Win32::Storage::FileSystem::{
-    FILE_ATTRIBUTE_ARCHIVE, FILE_ATTRIBUTE_HIDDEN, FILE_FLAGS_AND_ATTRIBUTES, GetFileAttributesW, GetLongPathNameW,
+    DDD_EXACT_MATCH_ON_REMOVE, DDD_NO_BROADCAST_SYSTEM, DDD_REMOVE_DEFINITION, DefineDosDeviceW, FILE_ATTRIBUTE_ARCHIVE,
+    FILE_ATTRIBUTE_HIDDEN, FILE_FLAGS_AND_ATTRIBUTES, GetFileAttributesW, GetLogicalDrives, GetLongPathNameW,
     SetFileAttributesW,
 };
 use windows::Win32::System::Com::IDataObject;
@@ -1471,23 +1472,35 @@ impl App {
             a.at(&dir()) && a.status_message().contains("no-such-folder")
         });
         s.add(
-            "a bookmark whose target moved along with it (a flash drive on a new letter) opens the target where it is \
-             now (5.6)",
+            "a bookmark whose drive letter is gone (a flash drive that came back under another letter) opens its folder \
+             where the shortcut says it is, relative to itself (5.6)",
             |a| {
+                // The folder under a drive letter of its own, as on a flash drive: the shortcut is made through the letter,
+                // and then the letter goes, as it does when the drive comes back as another one.
+                let used = unsafe { GetLogicalDrives() };
+                let letter = (b'D'..=b'Z').rev().find(|l| used & (1 << (l - b'A')) == 0).unwrap_or(b'Z');
+                let drive = format!("{}:", letter as char);
                 let _ = std::fs::create_dir_all(p("pack\\target"));
-                make_shortcut(&p("pack\\go.lnk"), p("pack\\target")); // on the target's drive: Windows stores the way to it
-                let _ = std::fs::rename(p("pack"), p("moved"));
-                a.open_shortcut(p("moved\\go.lnk"), false);
+                let (drive_w, pack_w) = (wide(&drive), wide(p("pack")));
+                unsafe {
+                    let _ = DefineDosDeviceW(DDD_NO_BROADCAST_SYSTEM, pcwstr(&drive_w), pcwstr(&pack_w));
+                }
+                make_shortcut(Path::new(&format!("{drive}\\go.lnk")), format!("{drive}\\target")); // both through the letter: Windows stores the way between them
+                unsafe {
+                    let gone = DDD_REMOVE_DEFINITION | DDD_EXACT_MATCH_ON_REMOVE | DDD_NO_BROADCAST_SYSTEM;
+                    let _ = DefineDosDeviceW(gone, pcwstr(&drive_w), pcwstr(&pack_w));
+                }
+                a.open_shortcut(p("pack\\go.lnk"), false);
             },
-            |a| a.at(&p("moved\\target")),
+            |a| a.at(&p("pack\\target")),
         );
         s.add("(back to the test folder)", reopen_home, move |a| a.at(&dir()));
         s.add(
             "(remove them)",
             |_| {
-                let _ = std::fs::remove_dir_all(p("moved"));
+                let _ = std::fs::remove_dir_all(p("pack"));
             },
-            |_| !p("moved").exists(),
+            |_| !p("pack").exists(),
         );
         s.add(
             "a shortcut to This PC opens This PC here (not in Explorer)",

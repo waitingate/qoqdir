@@ -866,24 +866,32 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
         });
     add(L"(the status bar names the missing folder, and the tab stays put)", nullptr,
         [=, this] { return at(dir) && statusMessage().find(L"no-such-folder") != std::wstring::npos; });
-    add(L"a bookmark whose target moved along with it (a flash drive on a new letter) opens the target where it is "
-        L"now (5.6)",
+    add(L"a bookmark whose drive letter is gone (a flash drive that came back under another letter) opens its folder "
+        L"where the shortcut says it is, relative to itself (5.6)",
         [=, this] {
+            // The folder under a drive letter of its own, as on a flash drive: the shortcut is made through the letter,
+            // and then the letter goes, as it does when the drive comes back as another one.
+            DWORD used = GetLogicalDrives();
+            wchar_t letter = L'Z';
+            while (letter > L'C' && (used & (1u << (letter - L'A')))) --letter;
+            std::wstring drive = std::wstring(1, letter) + L":";
             CreateDirectoryW(path(L"pack").c_str(), nullptr);
             CreateDirectoryW(path(L"pack\\target").c_str(), nullptr);
-            makeShortcut(path(L"pack\\go.lnk"), path(L"pack\\target"));   // on the target's drive: Windows stores the way to it
-            MoveFileW(path(L"pack").c_str(), path(L"moved").c_str());
-            openShortcut(path(L"moved\\go.lnk"), false);
+            DefineDosDeviceW(DDD_NO_BROADCAST_SYSTEM, drive.c_str(), path(L"pack").c_str());
+            makeShortcut(drive + L"\\go.lnk", drive + L"\\target");   // both through the letter: Windows stores the way between them
+            DefineDosDeviceW(DDD_REMOVE_DEFINITION | DDD_EXACT_MATCH_ON_REMOVE | DDD_NO_BROADCAST_SYSTEM, drive.c_str(),
+                             path(L"pack").c_str());
+            openShortcut(path(L"pack\\go.lnk"), false);
         },
-        [=, this] { return at(path(L"moved\\target")); });
+        [=, this] { return at(path(L"pack\\target")); });
     backHome(L"(back to the test folder)");
     add(L"(remove them)",
         [=, this] {
-            DeleteFileW(path(L"moved\\go.lnk").c_str());
-            RemoveDirectoryW(path(L"moved\\target").c_str());
-            RemoveDirectoryW(path(L"moved").c_str());
+            DeleteFileW(path(L"pack\\go.lnk").c_str());
+            RemoveDirectoryW(path(L"pack\\target").c_str());
+            RemoveDirectoryW(path(L"pack").c_str());
         },
-        [=, this] { return !exists(path(L"moved")); });
+        [=, this] { return !exists(path(L"pack")); });
     add(L"a shortcut to This PC opens This PC here (not in Explorer)",
         [=, this] {
             makeShortcut(path(L"pc.lnk"), L"");

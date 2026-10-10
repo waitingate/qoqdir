@@ -97,10 +97,10 @@ instead of corrupting data, and the crash log says where.
   `FileList::update` changes `view_`, rebuilding it before any ListView call.
   Hidden items are always read; Ctrl+H only shows or hides them.
 - Tree nodes keep their path in `FolderTree::paths_`, removed in
-  `TVN_DELETEITEM`. A bookmark shortcut is read from the .lnk file; a target gone
-  from a local drive is looked for by the relative path Windows stores in it
-  (`Resolve` without search or UI, never on the network). Its own icon comes
-  later from the worker, like file icons in the list.
+  `TVN_DELETEITEM`. A bookmark shortcut is read from the .lnk file; a target on
+  a drive letter that is gone is looked for by the relative path Windows stores
+  in it (`Resolve` without search or UI); a drive that is there is never asked.
+  Its own icon comes later from the worker, like file icons in the list.
 - Every message goes through `App::handleKey` before dispatch, but only for
   Qoqdir's own windows. `App::onKey` is the one shortcut table. A key counts for
   the window it was typed in, not for where the focus is once it is read: an input
