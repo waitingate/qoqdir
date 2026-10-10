@@ -580,12 +580,16 @@ impl App {
             mode & SEM_FAILCRITICALERRORS.0 != 0
         });
         s.add(
-            "typing in the list filters it",
+            "typing in the list filters it, and the status bar says so the first time",
             |a| {
                 focus(a.list.hwnd());
                 a.type_text("file");
             },
-            |a| a.list.count() == 3 && unsafe { GetFocus() } == a.filter,
+            |a| {
+                a.list.count() == 3
+                    && unsafe { GetFocus() } == a.filter
+                    && a.status_message() == "Typing filters the list; Esc shows all again"
+            },
         );
         s.add("Esc clears the filter and returns to the list", |a| a.press(VK_ESCAPE, 0), |a| {
             a.list.count() == 6 && unsafe { GetFocus() } == a.list.hwnd()
@@ -725,9 +729,16 @@ impl App {
             },
         )
         .wait(10000);
-        s.add("Backspace goes up and selects the folder you came from", |a| a.press(VK_BACK, 0), move |a| {
-            a.at(&dir()) && a.focused_is("sub") && a.list.selected_names().len() == 1
-        });
+        s.add(
+            "Backspace goes up and selects the folder you came from, and the status bar says so the first time",
+            |a| a.press(VK_BACK, 0),
+            move |a| {
+                a.at(&dir())
+                    && a.focused_is("sub")
+                    && a.list.selected_names().len() == 1
+                    && a.status_message() == "Up (Alt+Left goes back)"
+            },
+        );
         s.add("Alt+Left goes back", |a| a.press(VK_LEFT, ALT), |a| a.at(&p("sub")));
         s.add("Alt+Right goes forward", |a| a.press(VK_RIGHT, ALT), move |a| a.at(&dir()));
         s.add("Ctrl+Shift+N creates a folder and starts renaming it", |a| a.press(letter(b'N'), CTRL | SHIFT), |a| {

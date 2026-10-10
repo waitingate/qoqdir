@@ -686,6 +686,7 @@ bool App::onKey(const Key& key) {
         // Typing in the file list filters it.
         if (focus == list && key.code >= 32 && key.code != 127 && !ctrl && !alt) {
             SetFocus(filter_);
+            hint(hintedFilter_, L"Typing filters the list; Esc shows all again");
             int len = GetWindowTextLengthW(filter_);
             SendMessageW(filter_, EM_SETSEL, WPARAM(len), LPARAM(len));
             SendMessageW(filter_, WM_CHAR, key.code, 0);
@@ -758,7 +759,7 @@ bool App::onKey(const Key& key) {
     }
     if (focus == list) {
         if (k == VK_RETURN) { activate(ctrl); return true; }
-        if (k == VK_BACK) { goUp(); return true; }
+        if (k == VK_BACK) { if (goUp()) hint(hintedUp_, L"Up (Alt+Left goes back)", true); return true; }
         if (k == VK_DELETE) { deleteSelection(shift); return true; }
         if (k == VK_F2) {
             std::vector<int> rows = list_.selection();
@@ -782,7 +783,7 @@ bool App::onKey(const Key& key) {
         if (ctrl && k == 'V') { pasteInto(wnd_, list_.dir()); return true; }
         return false;
     }
-    if (focus == tree_.hwnd() && k == VK_BACK) { goUp(); return true; }
+    if (focus == tree_.hwnd() && k == VK_BACK) { if (goUp()) hint(hintedUp_, L"Up (Alt+Left goes back)", true); return true; }
     return false;
 }
 
@@ -903,7 +904,8 @@ void App::onLoaded(Listing&& listing, UINT generation) {
     FILETIME now = folderWritten(t.path);
     if (CompareFileTime(&now, &written) != 0) queueRefresh();
     showLocation(p.nav);
-    if (moved) setMessage(L"");
+    if (moved) setMessage(lateHint_ ? lateHint_ : L"");   // a navigation clears the message, or says its hint
+    lateHint_ = nullptr;
     showStatus();
 }
 
@@ -922,6 +924,7 @@ void App::showLocation(Nav nav) {
 // The folder could not be read: decide what to show or do instead.
 void App::onLoadFailed(const Listing& listing, const Pending& p) {
     Tab& t = tab();
+    lateHint_ = nullptr;   // the error is what to say
     // A navigation that fails or opens a file leaves the folder shown: its filter comes back, unless retyped.
     if (p.nav != Nav::Refresh && p.nav != Nav::Switch && GetWindowTextLengthW(filter_) == 0)
         SetWindowTextW(filter_, p.filter.c_str());
@@ -969,8 +972,10 @@ void App::goForward() {
     if (!tab().forward.empty()) open(tab().forward.back(), Nav::Forward);
 }
 
-void App::goUp() {
-    if (!tab().path.empty()) open(parentPath(tab().path), Nav::New);
+bool App::goUp() {
+    if (tab().path.empty()) return false;
+    open(parentPath(tab().path), Nav::New);
+    return true;
 }
 
 bool App::refresh(ViewState view) {
@@ -1302,6 +1307,13 @@ void App::warn() {
 
 void App::setMessage(const std::wstring& text) {
     SendMessageW(status_, SB_SETTEXTW, 1, reinterpret_cast<LPARAM>(text.c_str()));
+}
+
+void App::hint(bool& said, const wchar_t* text, bool afterLoad) {
+    if (said) return;
+    said = true;
+    if (afterLoad) lateHint_ = text;   // onLoaded says it: the navigation clears messages first
+    else setMessage(text);
 }
 
 void App::loadSettings(const CommandLine& cmd) {

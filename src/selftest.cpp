@@ -209,8 +209,12 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
         });
     add(L"a drive without a disk fails quietly, without Windows' \"No Disk\" box", nullptr,
         [] { return (GetErrorMode() & SEM_FAILCRITICALERRORS) != 0; });
-    add(L"typing in the list filters it", [=, this] { SetFocus(list_.hwnd()); selfTestType(L"file"); },
-        [=, this] { return list_.count() == 3 && GetFocus() == filter_; });
+    add(L"typing in the list filters it, and the status bar says so the first time",
+        [=, this] { SetFocus(list_.hwnd()); selfTestType(L"file"); },
+        [=, this] {
+            return list_.count() == 3 && GetFocus() == filter_ &&
+                   statusMessage() == L"Typing filters the list; Esc shows all again";
+        });
     add(L"Esc clears the filter and returns to the list", [=, this] { selfTestKey(VK_ESCAPE); },
         [=, this] { return list_.count() == 6 && GetFocus() == list_.hwnd(); });
     // An input method hands over a whole word at once: its letters wait in the queue for the list together.
@@ -312,8 +316,12 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
                     return true;
             return false;
         }, 10000);
-    add(L"Backspace goes up and selects the folder you came from", [=, this] { selfTestKey(VK_BACK); },
-        [=, this] { return at(dir) && list_.focusedName() == L"sub" && list_.selectedNames().size() == 1; });
+    add(L"Backspace goes up and selects the folder you came from, and the status bar says so the first time",
+        [=, this] { selfTestKey(VK_BACK); },
+        [=, this] {
+            return at(dir) && list_.focusedName() == L"sub" && list_.selectedNames().size() == 1 &&
+                   statusMessage() == L"Up (Alt+Left goes back)";
+        });
     add(L"Alt+Left goes back", [=, this] { selfTestKey(VK_LEFT, false, false, true); }, [=, this] { return at(path(L"sub")); });
     add(L"Alt+Right goes forward", [=, this] { selfTestKey(VK_RIGHT, false, false, true); }, [=, this] { return at(dir); });
     add(L"Ctrl+Shift+N creates a folder and starts renaming it", [=, this] { selfTestKey('N', true, true); },

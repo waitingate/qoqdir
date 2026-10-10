@@ -92,7 +92,7 @@ private:
     void showLocation(Nav nav);
     void goBack();
     void goForward();
-    void goUp();
+    bool goUp();   // false: at This PC, nowhere to go
     bool refresh(ViewState view = {});   // false: a load was in progress, so none was started
     // F5 and the Refresh button: the list (unless it is loading already) and the tree (5.5); the status bar says so.
     void refreshAll() { bool list = refresh(); tree_.refresh(); if (list) setMessage(L"Refreshed"); }
@@ -129,6 +129,8 @@ private:
     // Status and settings
     void showStatus();
     void setMessage(const std::wstring& text);
+    // A status message once per run (5.3); with 'afterLoad', once the folder being loaded has landed.
+    void hint(bool& said, const wchar_t* text, bool afterLoad = false);
     void warn();                    // error beep
     void loadSettings(const CommandLine& cmd);
     void saveSettings();
@@ -160,6 +162,7 @@ private:
     int splitterX_ = 0;
     static constexpr int kSplitterWidth = 5;   // in 96-DPI units
     bool overSplitter(int x) const { return x >= splitterX_ && x < splitterX_ + scale(kSplitterWidth, dpi_); }
+    bool hintedFilter_ = false, hintedUp_ = false;   // the two things Explorer users don't expect, said once (5.3)
     bool dragging_ = false;         // moving the tree/list splitter
     bool draggingFiles_ = false;    // a drag started from our own list is in progress
     bool refreshQueued_ = false;
@@ -168,6 +171,7 @@ private:
         ViewState view;
     } queuedView_;
     bool loadMessageShown_ = false; // "Loading..." or "not available": cleared when a folder loads
+    const wchar_t* lateHint_ = nullptr;   // a hint for when the folder being loaded lands (a navigation clears messages)
 
     std::vector<Tab> tabs_;
     int active_ = 0;

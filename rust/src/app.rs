@@ -222,6 +222,9 @@ pub struct App {
     ini: Vec<u16>, // settings file
     pub st: RefCell<State>,
     pub quiet: Cell<bool>, // no beeps (set by the self-test, which triggers errors on purpose)
+    hinted_filter: Cell<bool>, // the two things Explorer users don't expect, said once (5.3)
+    hinted_up: Cell<bool>,
+    late_hint: Cell<Option<&'static str>>, // a hint for when the folder being loaded lands (a navigation clears messages)
     gray: HBRUSH,          // the window's soft gray: lives as long as the process
 }
 
@@ -474,6 +477,9 @@ impl App {
                     last_focus: None,
                 }),
                 quiet: Cell::new(false),
+                hinted_filter: Cell::new(false),
+                hinted_up: Cell::new(false),
+                late_hint: Cell::new(None),
                 gray: CreateSolidBrush(BACKGROUND),
             });
             SetWindowLongPtrW(wnd, GWLP_USERDATA, Rc::as_ptr(&app) as isize);
@@ -714,7 +720,9 @@ impl App {
                     match id {
                         ID_BACK => self.go_back(),
                         ID_FORWARD => self.go_forward(),
-                        ID_UP => self.go_up(),
+                        ID_UP => {
+                        self.go_up();
+                    }
                         ID_REFRESH => self.refresh_all(),
                         ID_PLUS => self.new_tab(self.location(), true),
                         _ => {}
@@ -1210,6 +1218,7 @@ impl App {
             // Typing in the file list filters it.
             if focused == list && key.code >= 32 && key.code != 127 && !ctrl && !alt {
                 focus(self.filter);
+                self.hint(&self.hinted_filter, "Typing filters the list; Esc shows all again", false);
                 let len = window_text(self.filter).encode_wide().count();
                 send(self.filter, EM_SETSEL, len, len as isize);
                 send(self.filter, WM_CHAR, key.code, 0);
@@ -1357,7 +1366,9 @@ impl App {
                 return true;
             }
             if is(VK_BACK) {
-                self.go_up();
+                if self.go_up() {
+                    self.hint(&self.hinted_up, "Up (Alt+Left goes back)", true);
+                }
                 return true;
             }
             if is(VK_DELETE) {
@@ -1404,7 +1415,9 @@ impl App {
             return false;
         }
         if focused == self.tree.hwnd() && is(VK_BACK) {
-            self.go_up();
+            if self.go_up() {
+                self.hint(&self.hinted_up, "Up (Alt+Left goes back)", true);
+            }
             return true;
         }
         false
@@ -1585,8 +1598,9 @@ impl App {
         }
         self.show_location(pending.nav);
         if moved {
-            self.set_message("");
+            self.set_message(self.late_hint.get().unwrap_or("")); // a navigation clears the message, or says its hint
         }
+        self.late_hint.set(None);
         self.show_status();
     }
 
@@ -1609,6 +1623,7 @@ impl App {
 
     /// The folder could not be read: decide what to show or do instead.
     fn on_load_failed(&self, listing: &Listing, error: &str, pending: &Pending) {
+        self.late_hint.set(None); // the error is what to say
         // A navigation that fails or opens a file leaves the folder shown: its filter comes back, unless retyped.
         if !matches!(pending.nav, Nav::Refresh | Nav::Switch) && window_text(self.filter).is_empty() {
             set_text(self.filter, &pending.filter);
@@ -1674,11 +1689,12 @@ impl App {
         }
     }
 
-    fn go_up(&self) {
+    /// False at This PC: nowhere to go.
+    fn go_up(&self) -> bool {
         let location = self.location();
-        if let Location::Dir(_) = location {
-            self.open(location.parent(), Nav::New, ViewState::default());
-        }
+        let Location::Dir(_) = location else { return false };
+        self.open(location.parent(), Nav::New, ViewState::default());
+        true
     }
 
     /// False: a load was in progress, so none was started.
@@ -2144,6 +2160,15 @@ impl App {
     pub fn set_message(&self, text: &str) {
         let w = wide(text);
         send(self.status, SB_SETTEXTW, 1, w.as_ptr() as isize);
+    }
+
+    /// A status message once per run (5.3); with `after_load`, once the folder being loaded has landed (a navigation
+    /// clears messages first).
+    fn hint(&self, said: &Cell<bool>, text: &'static str, after_load: bool) {
+        if said.replace(true) {
+            return;
+        }
+        if after_load { self.late_hint.set(Some(text)) } else { self.set_message(text) }
     }
 
     fn warn(&self) {

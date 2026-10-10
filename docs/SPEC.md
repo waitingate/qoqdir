@@ -273,6 +273,10 @@ Back, Forward and Up are disabled when they can't do anything.
   item that matches stays highlighted and in view. Esc clears the filter, Down
   moves to the list, and Enter opens the focused item. Going to another folder
   clears the filter; refreshing the same folder keeps it.
+- The two things Explorer users don't expect are said once per run, in the
+  status bar: the first time typing moves to the filter box, "Typing filters the
+  list; Esc shows all again"; the first Backspace that goes up, "Up (Alt+Left
+  goes back)".
 - Rename in place with F2 or the context menu. The name is selected without its
   extension, as in Explorer. Drives can't be renamed here.
 - Opening (Enter or double-click):
@@ -580,7 +584,9 @@ result:
 1. Start: the test folder shows the expected item count, and the Chinese name
    shows correctly.
 2. Typing letters in the list moves the focus to the filter box and filters the
-   list. Esc clears the filter and goes back to the list.
+   list, and the status bar says so, this first time. Esc clears the filter and
+   goes back to the list. (The first Backspace that goes up is said the same
+   way, in scenario 6.)
 3. Ctrl+C on a file puts exactly that file on the clipboard (readable by
    Explorer).
 4. Filter "sub", then Enter: `sub` opens.
