@@ -48,8 +48,8 @@ made on the same drive also remembers the way from itself to its target.
 Tabs aren't saved by themselves. Ctrl+S (or "Save tabs" on a tab's right-click
 menu) saves them as shortcuts in `Bookmarks\Tabs`, replacing the ones there, and
 Ctrl+O ("Open saved tabs") opens them again after your open tabs. To keep a set,
-rename that folder. Closing the last window with four or more tabs open asks
-whether to save them first.
+rename that folder. Closing a window with four or more tabs open asks whether to
+save them first.
 
 ## Keys
 

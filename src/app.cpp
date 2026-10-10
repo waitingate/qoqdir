@@ -462,11 +462,9 @@ LRESULT App::onMessage(UINT msg, WPARAM wp, LPARAM lp) {
         if (wp) saveSettings();
         return 0;
     case WM_CLOSE: {
-        // The last window going with many tabs offers to save them, so a set isn't lost by one click (5.7). Saved
-        // here and now: a worker would die with the window. A self-test never asks.
-        bool another = false;
-        for (HWND h = nullptr; (h = FindWindowExW(nullptr, h, kAppName, nullptr));) another |= h != wnd_;
-        if (tabs_.size() >= 4 && !another && !selfTest_) {
+        // A window going with many tabs offers to save them, so a set isn't lost by one click (5.7). Saved here and
+        // now: a worker would die with the window. A self-test never asks.
+        if (tabs_.size() >= 4 && !selfTest_) {
             int answer = MessageBoxW(wnd_, L"Save these tabs in Bookmarks\\Tabs before closing?", kAppName,
                                      MB_YESNOCANCEL | MB_ICONQUESTION);
             if (answer == IDCANCEL) return 0;

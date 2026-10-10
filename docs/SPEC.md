@@ -379,11 +379,12 @@ Back, Forward and Up are disabled when they can't do anything.
   opens their folders as tabs after the open ones, skips any already open, and
   shows the first new one. Renaming the folder keeps a set. Both work on a worker
   thread, since a folder may be on a server that is off.
-- Closing the last Qoqdir window with four or more tabs open asks "Save these
-  tabs in Bookmarks\Tabs before closing?": Yes saves them (here and now) and
-  closes, No closes, Cancel keeps the window. With fewer tabs, or another Qoqdir
-  window open, it closes at once; a shutdown never asks (5.11). The self-test
-  never shows a box that waits (7.2), so this is checked by hand.
+- Closing a Qoqdir window with four or more tabs open asks "Save these tabs in
+  Bookmarks\Tabs before closing?": Yes saves them (here and now) and closes, No
+  closes, Cancel keeps the window. With fewer tabs it closes at once; a shutdown
+  never asks (5.11). A window closed while others stay open asks too: the set in
+  it would be lost all the same. The self-test never shows a box that waits
+  (7.2), so this is checked by hand.
 
 ### 5.8 File operations (all done by Windows)
 - Copy, cut and paste: Ctrl+C, Ctrl+X, Ctrl+V. The clipboard works with Explorer

@@ -38,8 +38,7 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
 };
 use windows::Win32::UI::Shell::{DefSubclassProc, FOLDERID_Profile, SHACF_FILESYS_DIRS, SHAutoComplete, SetWindowSubclass};
 use windows::Win32::UI::WindowsAndMessaging::{
-    AppendMenuW, CW_USEDEFAULT, CreatePopupMenu, CreateWindowExW, DefWindowProcW, DestroyWindow, FindWindowExW,
-    GCLP_HBRBACKGROUND,
+    AppendMenuW, CW_USEDEFAULT, CreatePopupMenu, CreateWindowExW, DefWindowProcW, DestroyWindow, GCLP_HBRBACKGROUND,
     GWLP_USERDATA, GetClientRect, GetCursorPos, GetParent, GetWindowLongPtrW, GetWindowPlacement, GetWindowRect,
     HMENU, HTCLIENT, IDC_ARROW, IDC_SIZEWE, IsChild, KillTimer, WPF_RESTORETOMAXIMIZED, LoadCursorW, LoadIconW, MB_ICONQUESTION,
     IDCANCEL, IDYES, MB_ICONWARNING, MB_OKCANCEL, MB_YESNOCANCEL, MF_GRAYED, MF_SEPARATOR, MF_STRING, MINMAXINFO, MSG,
@@ -291,21 +290,6 @@ fn delete_word_before(edit: HWND) {
 /// A shortcut's target that opens in a tab: a folder path, or This PC. Anything else is for Windows.
 fn opens_in_tab(target: &Location) -> bool {
     target.path().is_none_or(|p| is_absolute_path(p.as_os_str()))
-}
-
-/// Another top-level window of this class: a second Qoqdir is open.
-fn another_window(wnd: HWND) -> bool {
-    let class = wide(APP_NAME);
-    let mut h = HWND::default();
-    loop {
-        h = unsafe { FindWindowExW(None, Some(h), pcwstr(&class), PCWSTR::null()) }.unwrap_or_default();
-        if h.is_invalid() {
-            return false;
-        }
-        if h != wnd {
-            return true;
-        }
-    }
 }
 
 /// The tab bar. A press is handled here, not by the control: it makes the tab current at once and starts a drag along
@@ -897,10 +881,10 @@ impl App {
                     return LRESULT(0);
                 }
                 WM_CLOSE => {
-                    // The last window going with many tabs offers to save them, so a set isn't lost by one click (5.7).
-                    // Saved here and now: a worker would die with the window. A self-test never asks.
+                    // A window going with many tabs offers to save them, so a set isn't lost by one click (5.7). Saved
+                    // here and now: a worker would die with the window. A self-test never asks.
                     let tabs = self.st.borrow().tabs.len();
-                    if tabs >= 4 && !self.quiet.get() && !another_window(self.wnd) {
+                    if tabs >= 4 && !self.quiet.get() {
                         let text = w!("Save these tabs in Bookmarks\\Tabs before closing?");
                         let answer = MessageBoxW(Some(self.wnd), text, pcwstr(&wide(APP_NAME)), MB_YESNOCANCEL | MB_ICONQUESTION);
                         if answer == IDCANCEL {
