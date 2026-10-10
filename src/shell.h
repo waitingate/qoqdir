@@ -67,6 +67,8 @@ std::optional<std::wstring> shortcutTarget(const std::wstring& lnkPath, bool* fo
 // that is off.
 bool saveFolderShortcuts(const std::wstring& dir, const std::vector<std::wstring>& folders);
 std::vector<std::wstring> savedFolders(const std::wstring& dir);   // the folders they lead to, in order
+// A bookmark: a shortcut to 'folder' in 'dir' (Bookmarks), named after the folder; one that is there already stays.
+bool bookmarkFolder(const std::wstring& dir, const std::wstring& folder);
 
 // ---------------------------------------------------------------- background work
 

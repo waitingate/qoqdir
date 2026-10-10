@@ -1288,7 +1288,10 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
             treeDrop_->DragEnter(data.get(), MK_LBUTTON, nodePoint(pc), &dragEffect);
             treeDrop_->DragLeave();
         },
-        [=, this] { return dragEffect == DROPEFFECT_NONE && !TreeView_GetDropHilight(tree_.hwnd()); });
+        [=, this] {
+            return dragEffect == DROPEFFECT_NONE && !TreeView_GetDropHilight(tree_.hwnd()) &&
+                   statusMessage() == L"Only a folder on this PC takes a drop";
+        });
     add(L"a drag over a folder in the tree lights it up, and the folder takes the file",
         [=, this] {
             CreateDirectoryW(path(L"Bookmarks\\two\\inner").c_str(), nullptr);
@@ -1378,6 +1381,19 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
             deleteTree(path(L"Bookmarks\\Tabs"));
         },
         [=, this] { return tabs_.size() == 1 && at(dir); });
+    add(L"Bookmark this folder on a tab's menu writes a shortcut to the tab's folder in Bookmarks and shows it in the "
+        L"tree (5.6)",
+        [=, this] { bookmarkTab(active_); },
+        [=, this] {
+            return exists(path(L"Bookmarks\\" + leafName(dir) + L".lnk")) &&
+                   bookmarkNodes().find(leafName(dir)) != std::wstring::npos;
+        });
+    add(L"(remove it)",
+        [=, this] {
+            DeleteFileW(path(L"Bookmarks\\" + leafName(dir) + L".lnk").c_str());
+            tree_.refreshFolder(tree_.bookmarks());
+        },
+        [=, this] { return bookmarkNodes() == L"one,two,sub"; });
 
     // Speed: a folder with 10,000 files.
     add(L"loads a 10,000-file folder",

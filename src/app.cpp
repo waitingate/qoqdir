@@ -166,8 +166,11 @@ bool App::create(HINSTANCE instance, const CommandLine& cmd, bool useSettings) {
     // And on a folder in the tree, in that folder; not back where they come from.
     *treeDrop_.put() = newDropTarget(wnd_, [this](const POINT* pt) -> std::optional<std::wstring> {
         std::optional<std::wstring> dir = tree_.dropTarget(pt);
-        if (dir && draggingFiles_ && samePath(*dir, list_.dir())) return std::nullopt;
-        return dir;
+        bool fromHere = dir && draggingFiles_ && samePath(*dir, list_.dir());
+        std::wstring over;   // a node that refuses says why in the status bar (5.5)
+        if ((!dir || fromHere) && pt && tree_.pathAt(*pt, &over))
+            setMessage(fromHere ? L"The files come from there" : L"Only a folder on this PC takes a drop");
+        return fromHere ? std::nullopt : dir;
     });
     RegisterDragDrop(tree_.hwnd(), treeDrop_.get());
 
@@ -372,7 +375,7 @@ LRESULT App::onMessage(UINT msg, WPARAM wp, LPARAM lp) {
         onMiddleClick(reinterpret_cast<HWND>(wp), {GET_X_LPARAM(lp), GET_Y_LPARAM(lp)});
         return 0;
     case WM_APP_TABS_SAVED:
-        setMessage(wp ? L"Tabs saved in Bookmarks\\Tabs" : L"Can't save every tab in Bookmarks\\Tabs");
+        setMessage(wp ? L"Tabs saved in Bookmarks\\Tabs, replacing the earlier set" : L"Can't save every tab in Bookmarks\\Tabs");
         if (!wp) warn();
         return 0;
     case WM_APP_TABS_READ: {
@@ -458,10 +461,25 @@ LRESULT App::onMessage(UINT msg, WPARAM wp, LPARAM lp) {
         // Shutdown or sign-out ends the process without a WM_CLOSE: save here too (5.11).
         if (wp) saveSettings();
         return 0;
-    case WM_CLOSE:
+    case WM_CLOSE: {
+        // The last window going with many tabs offers to save them, so a set isn't lost by one click (5.7). Saved
+        // here and now: a worker would die with the window. A self-test never asks.
+        bool another = false;
+        for (HWND h = nullptr; (h = FindWindowExW(nullptr, h, kAppName, nullptr));) another |= h != wnd_;
+        if (tabs_.size() >= 4 && !another && !selfTest_) {
+            int answer = MessageBoxW(wnd_, L"Save these tabs in Bookmarks\\Tabs before closing?", kAppName,
+                                     MB_YESNOCANCEL | MB_ICONQUESTION);
+            if (answer == IDCANCEL) return 0;
+            if (answer == IDYES) {
+                std::vector<std::wstring> folders;
+                for (const Tab& t : tabs_) folders.push_back(t.path);
+                saveFolderShortcuts(joinPath(tree_.bookmarks(), L"Tabs"), folders);
+            }
+        }
         saveSettings();
         DestroyWindow(wnd_);
         return 0;
+    }
     case WM_DESTROY:
         watch_ = {};
         RevokeDragDrop(list_.hwnd());
@@ -630,6 +648,7 @@ void App::onTabMenu() {
     AppendMenuW(menu.get(), MF_STRING, 2, L"Close tab\tCtrl+W");
     AppendMenuW(menu.get(), MF_STRING | (tabs_.size() > 1 ? 0 : MF_GRAYED), 3, L"Close other tabs");
     AppendMenuW(menu.get(), MF_SEPARATOR, 0, nullptr);
+    AppendMenuW(menu.get(), MF_STRING, 6, L"Bookmark this folder");
     AppendMenuW(menu.get(), MF_STRING, 4, L"Save tabs\tCtrl+S");
     AppendMenuW(menu.get(), MF_STRING, 5, L"Open saved tabs\tCtrl+O");
     int cmd = TrackPopupMenuEx(menu.get(), TPM_RETURNCMD | TPM_RIGHTBUTTON, screen.x, screen.y, wnd_, nullptr);
@@ -638,6 +657,7 @@ void App::onTabMenu() {
     if (cmd == 3) closeOtherTabs(index);
     if (cmd == 4) saveTabs();
     if (cmd == 5) openSavedTabs();
+    if (cmd == 6) bookmarkTab(index);
 }
 
 // ---------------------------------------------------------------- keyboard
@@ -1182,6 +1202,14 @@ void App::showTabs() {
     SelectObject(dc, old);
     ReleaseDC(tabBar_, dc);
     TabCtrl_SetCurSel(tabBar_, active_);
+}
+
+// The tab's folder as a shortcut in Bookmarks, shown in the tree at once (5.6).
+void App::bookmarkTab(int index) {
+    bool ok = bookmarkFolder(tree_.bookmarks(), tabs_[size_t(index)].path);
+    tree_.refreshFolder(tree_.bookmarks());
+    setMessage(ok ? L"Bookmarked" : L"Can't make the bookmark");
+    if (!ok) warn();
 }
 
 // ---------------------------------------------------------------- saved tabs (Bookmarks\Tabs)

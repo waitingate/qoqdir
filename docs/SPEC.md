@@ -319,7 +319,7 @@ Back, Forward and Up are disabled when they can't do anything.
   folders inside it can be reached. Only folders on local drives take drops: not
   This PC, not a shortcut to a file or a web page, nothing on the network (a
   server that is off would freeze the drag), and not the folder the files come
-  from.
+  from. While the drag is over a node that refuses, the status bar says why.
 - Backspace in the tree goes up.
 - The splitter sets the tree's width, which is remembered; a drag past the
   window's edge keeps the width shown, not one past it.
@@ -328,7 +328,8 @@ Back, Forward and Up are disabled when they can't do anything.
 - Bookmarks are ordinary files: `.lnk` shortcuts and `.url` links, and plain
   subfolders for grouping, in the `Bookmarks` folder next to `qoqdir.exe`. There
   is no bookmark database or special format: they are added, renamed and deleted
-  like any file (for example, Alt+drag a folder into Bookmarks).
+  like any file: Alt+drag a folder into Bookmarks, or choose "Bookmark this
+  folder" on its tab's menu, which writes the shortcut and shows it in the tree.
 - The Bookmarks node is open at start and lists its subfolders and then its
   shortcuts. A folder inside Bookmarks lists its own the same way when expanded,
   so bookmarks can be grouped. Shortcuts show the name and icon Windows gives
@@ -355,8 +356,8 @@ Back, Forward and Up are disabled when they can't do anything.
 - Close a tab with Ctrl+W, a middle-click on it, or its context menu. The last
   tab can't be closed.
 - Tab context menu: "Duplicate tab", "Close tab   Ctrl+W", "Close other tabs"
-  (disabled when there is only one), then "Save tabs   Ctrl+S" and "Open saved
-  tabs   Ctrl+O".
+  (disabled when there is only one), then "Bookmark this folder", "Save tabs
+  Ctrl+S" and "Open saved tabs   Ctrl+O".
 - Switch with a click (a tab becomes current as the button goes down), the mouse
   wheel over the tabs (up: the tab to the left; it stops at either end), Ctrl+Tab
   and Ctrl+Shift+Tab (they wrap around), Ctrl+1 to Ctrl+8 (that tab, or the
@@ -374,10 +375,15 @@ Back, Forward and Up are disabled when they can't do anything.
   files come from.
 - Tabs aren't remembered between runs by themselves. Ctrl+S saves them as
   shortcuts in `Bookmarks\Tabs`, numbered in tab order ("1 logs.lnk"); it replaces
-  the shortcuts there and leaves anything else. Ctrl+O opens their folders as tabs
-  after the open ones, skips any already open, and shows the first new one.
-  Renaming the folder keeps a set. Both work on a worker thread, since a folder
-  may be on a server that is off.
+  the shortcuts there (the status bar says so) and leaves anything else. Ctrl+O
+  opens their folders as tabs after the open ones, skips any already open, and
+  shows the first new one. Renaming the folder keeps a set. Both work on a worker
+  thread, since a folder may be on a server that is off.
+- Closing the last Qoqdir window with four or more tabs open asks "Save these
+  tabs in Bookmarks\Tabs before closing?": Yes saves them (here and now) and
+  closes, No closes, Cancel keeps the window. With fewer tabs, or another Qoqdir
+  window open, it closes at once; a shutdown never asks (5.11). The self-test
+  never shows a box that waits (7.2), so this is checked by hand.
 
 ### 5.8 File operations (all done by Windows)
 - Copy, cut and paste: Ctrl+C, Ctrl+X, Ctrl+V. The clipboard works with Explorer
@@ -691,6 +697,10 @@ result:
 63. With a `subst` drive letter for `pack` (a folder in the test folder), a
     shortcut made through that letter to `pack\target`; once the letter is gone,
     opening the shortcut shows `pack\target`.
+64. "Bookmark this folder" for the tab showing the test folder writes
+    `Bookmarks\<name>.lnk`, and the tree shows it. A drag held over This PC in
+    the tree is refused, and the status bar says only a folder on this PC takes
+    a drop.
 
 ### 7.3 Command-line checks
 Run on a copy of the exe in a temp folder:

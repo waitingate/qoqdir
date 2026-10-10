@@ -462,35 +462,50 @@ std::optional<std::wstring> shortcutTarget(const std::wstring& lnkPath, bool* fo
     return std::wstring();
 }
 
+namespace {
+// A shortcut to `folder` ("" for This PC) at `lnk`, made from the path and find data that say "folder": the
+// shortcut then says so too, even for a folder that can't be reached now.
+bool writeFolderShortcut(const std::wstring& lnk, const std::wstring& folder) {
+    Com<IFileSystemBindData> known;
+    Com<IBindCtx> bind = findDataBind(known);
+    WIN32_FIND_DATAW fd{};
+    fd.dwFileAttributes = FILE_ATTRIBUTE_DIRECTORY;
+    leafName(folder).copy(fd.cFileName, MAX_PATH - 1);
+    if (bind) known->SetFindData(&fd);
+    PIDLIST_ABSOLUTE p = nullptr;
+    if (folder.empty()) SHGetKnownFolderIDList(FOLDERID_ComputerFolder, 0, nullptr, &p);
+    else if (bind) SHParseDisplayName(folder.c_str(), bind.get(), &p, 0, nullptr);
+    Pidl pidl(p);
+    Com<IShellLinkW> link;
+    Com<IPersistFile> file;
+    return pidl &&
+           SUCCEEDED(CoCreateInstance(CLSID_ShellLink, nullptr, CLSCTX_INPROC_SERVER, IID_IShellLinkW,
+                                      reinterpret_cast<void**>(link.put()))) &&
+           SUCCEEDED(link->SetIDList(pidl.get())) && (file = link.as<IPersistFile>()) &&
+           SUCCEEDED(file->Save(lnk.c_str(), TRUE));
+}
+
+// The shortcut's file name for a folder: its display name, without what a file name can't hold.
+std::wstring shortcutName(const std::wstring& folder) {
+    std::wstring name = displayName(folder);
+    std::erase_if(name, [](wchar_t c) { return std::wstring_view(L"\\/:*?\"<>|").find(c) != std::wstring_view::npos; });
+    return name + L".lnk";
+}
+}  // namespace
+
 bool saveFolderShortcuts(const std::wstring& dir, const std::vector<std::wstring>& folders) {
     CreateDirectoryW(dir.c_str(), nullptr);   // fails harmlessly if it exists
     for (const Item& it : listFolder(dir, true).items)
         if (!it.isDir() && extensionOf(it.name) == L".lnk") DeleteFileW(joinPath(dir, it.name).c_str());
-    // Each folder's item is made from its path and find data that say "folder": the shortcut then says so
-    // too, even for a folder that can't be reached now.
-    Com<IFileSystemBindData> known;
-    Com<IBindCtx> bind = findDataBind(known);
-    bool ok = bool(bind);
-    for (size_t i = 0; bind && i < folders.size(); ++i) {
-        WIN32_FIND_DATAW fd{};
-        fd.dwFileAttributes = FILE_ATTRIBUTE_DIRECTORY;
-        leafName(folders[i]).copy(fd.cFileName, MAX_PATH - 1);
-        known->SetFindData(&fd);
-        PIDLIST_ABSOLUTE p = nullptr;
-        if (folders[i].empty()) SHGetKnownFolderIDList(FOLDERID_ComputerFolder, 0, nullptr, &p);
-        else SHParseDisplayName(folders[i].c_str(), bind.get(), &p, 0, nullptr);
-        Pidl pidl(p);
-        std::wstring name = displayName(folders[i]);
-        std::erase_if(name, [](wchar_t c) { return std::wstring_view(L"\\/:*?\"<>|").find(c) != std::wstring_view::npos; });
-        Com<IShellLinkW> link;
-        Com<IPersistFile> file;
-        if (!pidl || FAILED(CoCreateInstance(CLSID_ShellLink, nullptr, CLSCTX_INPROC_SERVER, IID_IShellLinkW,
-                                             reinterpret_cast<void**>(link.put()))) ||
-            FAILED(link->SetIDList(pidl.get())) || !(file = link.as<IPersistFile>()) ||
-            FAILED(file->Save(joinPath(dir, std::to_wstring(i + 1) + L" " + name + L".lnk").c_str(), TRUE)))
-            ok = false;
-    }
+    bool ok = true;
+    for (size_t i = 0; i < folders.size(); ++i)
+        ok &= writeFolderShortcut(joinPath(dir, std::to_wstring(i + 1) + L" " + shortcutName(folders[i])), folders[i]);
     return ok;
+}
+
+bool bookmarkFolder(const std::wstring& dir, const std::wstring& folder) {
+    std::wstring lnk = joinPath(dir, shortcutName(folder));
+    return GetFileAttributesW(lnk.c_str()) != INVALID_FILE_ATTRIBUTES || writeFolderShortcut(lnk, folder);
 }
 
 std::vector<std::wstring> savedFolders(const std::wstring& dir) {

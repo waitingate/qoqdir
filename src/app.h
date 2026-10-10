@@ -115,6 +115,7 @@ private:
     void dragTab(int over, int x);
     std::optional<std::wstring> tabDropTarget(const POINT* screenPt);
     void showTabs();
+    void bookmarkTab(int index);   // the tab's folder as a shortcut in Bookmarks (the tab's menu)
 
     // Saved tabs (Bookmarks\Tabs)
     void saveTabs();       // Ctrl+S: a shortcut per tab in Bookmarks\Tabs

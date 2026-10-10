@@ -1935,7 +1935,11 @@ impl App {
                 }
                 EFFECT.set(effect.0);
             },
-            |a| EFFECT.get() == DROPEFFECT_NONE.0 && a.drop_highlight() == 0,
+            |a| {
+                EFFECT.get() == DROPEFFECT_NONE.0
+                    && a.drop_highlight() == 0
+                    && a.status_message() == "Only a folder on this PC takes a drop"
+            },
         );
         s.add(
             "a drag over a folder in the tree lights it up, and the folder takes the file",
@@ -2067,6 +2071,27 @@ impl App {
                 let _ = std::fs::remove_dir_all(p("Bookmarks\\Tabs"));
             },
             move |a| a.tabs() == 1 && a.at(&dir()),
+        );
+        s.add(
+            "Bookmark this folder on a tab's menu writes a shortcut to the tab's folder in Bookmarks and shows it in the \
+             tree (5.6)",
+            |a| {
+                let active = a.st.borrow().active;
+                a.bookmark_tab(active);
+            },
+            move |a| {
+                let name = dir().file_name().unwrap_or_default().to_string_lossy().into_owned();
+                p(&format!("Bookmarks\\{name}.lnk")).exists() && a.bookmark_nodes().contains(&name)
+            },
+        );
+        s.add(
+            "(remove it)",
+            move |a| {
+                let name = dir().file_name().unwrap_or_default().to_string_lossy().into_owned();
+                let _ = std::fs::remove_file(p(&format!("Bookmarks\\{name}.lnk")));
+                a.tree.refresh_folder(a.tree.bookmarks());
+            },
+            |a| a.bookmark_nodes() == "one,two,sub",
         );
 
         // Speed: a folder with 10,000 files.

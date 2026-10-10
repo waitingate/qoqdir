@@ -613,37 +613,50 @@ pub fn save_folder_shortcuts(dir: &Path, folders: &[Location]) -> bool {
             let _ = std::fs::remove_file(dir.join(&it.name));
         }
     }
-    // Each folder's item is made from its path and find data that say "folder": the shortcut then says so
-    // too, even for a folder that can't be reached now.
-    let Ok((known, bind)) = find_data_bind() else { return false };
     let mut ok = true;
     for (i, folder) in folders.iter().enumerate() {
-        let name = folder.display_name();
-        let clean: Vec<u16> = wide(&name).into_iter().filter(|c| !r#"\/:*?"<>|"#.encode_utf16().any(|b| b == *c)).collect();
         let mut file = OsString::from(format!("{} ", i + 1));
-        file.push(from_wide(&clean));
-        file.push(".lnk");
-        let save = || -> Result<()> {
-            unsafe {
-                let pidl = match folder {
-                    Location::ThisPc => pidl_from(folder).ok_or(E_FAIL)?,
-                    Location::Dir(path) => {
-                        let mut fd = WIN32_FIND_DATAW { dwFileAttributes: FILE_ATTRIBUTE_DIRECTORY.0, ..Default::default() };
-                        copy_to(fd.cFileName.as_mut_ptr(), MAX_PATH as i32, &name);
-                        known.SetFindData(&fd)?;
-                        let mut raw: *mut ITEMIDLIST = std::ptr::null_mut();
-                        SHParseDisplayName(pcwstr(&wide(path)), &bind, &mut raw, 0, None)?;
-                        Pidl(raw)
-                    }
-                };
-                let link: IShellLinkW = CoCreateInstance(&ShellLink, None, CLSCTX_INPROC_SERVER)?;
-                link.SetIDList(pidl.0)?;
-                link.cast::<IPersistFile>()?.Save(pcwstr(&wide(dir.join(&file))), true)
-            }
-        };
-        ok &= save().is_ok();
+        file.push(shortcut_name(folder));
+        ok &= write_folder_shortcut(&dir.join(&file), folder).is_ok();
     }
     ok
+}
+
+/// A bookmark: a shortcut to `folder` in `dir` (Bookmarks), named after the folder; one that is there already stays.
+pub fn bookmark_folder(dir: &Path, folder: &Location) -> bool {
+    let lnk = dir.join(shortcut_name(folder));
+    lnk.exists() || write_folder_shortcut(&lnk, folder).is_ok()
+}
+
+/// A shortcut to `folder` at `lnk`, made from the path and find data that say "folder": the shortcut then says so
+/// too, even for a folder that can't be reached now.
+fn write_folder_shortcut(lnk: &Path, folder: &Location) -> Result<()> {
+    unsafe {
+        let pidl = match folder {
+            Location::ThisPc => pidl_from(folder).ok_or(E_FAIL)?,
+            Location::Dir(path) => {
+                let (known, bind) = find_data_bind()?;
+                let mut fd = WIN32_FIND_DATAW { dwFileAttributes: FILE_ATTRIBUTE_DIRECTORY.0, ..Default::default() };
+                copy_to(fd.cFileName.as_mut_ptr(), MAX_PATH as i32, folder.display_name());
+                known.SetFindData(&fd)?;
+                let mut raw: *mut ITEMIDLIST = std::ptr::null_mut();
+                SHParseDisplayName(pcwstr(&wide(path)), &bind, &mut raw, 0, None)?;
+                Pidl(raw)
+            }
+        };
+        let link: IShellLinkW = CoCreateInstance(&ShellLink, None, CLSCTX_INPROC_SERVER)?;
+        link.SetIDList(pidl.0)?;
+        link.cast::<IPersistFile>()?.Save(pcwstr(&wide(lnk)), true)
+    }
+}
+
+/// The shortcut's file name for a folder: its display name, without what a file name can't hold.
+fn shortcut_name(folder: &Location) -> OsString {
+    let clean: Vec<u16> =
+        wide(folder.display_name()).into_iter().filter(|c| !r#"\/:*?"<>|"#.encode_utf16().any(|b| b == *c)).collect();
+    let mut name = from_wide(&clean);
+    name.push(".lnk");
+    name
 }
 
 /// The folders the saved tabs' shortcuts lead to, in order. Worker thread.

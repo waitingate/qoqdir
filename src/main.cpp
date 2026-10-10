@@ -19,7 +19,7 @@ const wchar_t kKeys[] =
     L"  Filter: type in the list, or Ctrl+F\n"
     L"  Clear the filter: Esc\n"
     L"  Up: Backspace\n"
-    L"  Bookmark a folder: Alt+drag it onto Bookmarks in the tree\n"
+    L"  Bookmark a folder: right-click its tab, or Alt+drag it onto Bookmarks\n"
     L"  Address bar: Ctrl+L\n"
     L"  Back: Alt+Left\n"
     L"  Forward: Alt+Right\n"

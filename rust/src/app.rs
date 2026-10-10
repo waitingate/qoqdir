@@ -37,10 +37,12 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
 };
 use windows::Win32::UI::Shell::{DefSubclassProc, FOLDERID_Profile, SHACF_FILESYS_DIRS, SHAutoComplete, SetWindowSubclass};
 use windows::Win32::UI::WindowsAndMessaging::{
-    AppendMenuW, CW_USEDEFAULT, CreatePopupMenu, CreateWindowExW, DefWindowProcW, DestroyWindow, GCLP_HBRBACKGROUND,
+    AppendMenuW, CW_USEDEFAULT, CreatePopupMenu, CreateWindowExW, DefWindowProcW, DestroyWindow, FindWindowExW,
+    GCLP_HBRBACKGROUND,
     GWLP_USERDATA, GetClientRect, GetCursorPos, GetParent, GetWindowLongPtrW, GetWindowPlacement, GetWindowRect,
     HMENU, HTCLIENT, IDC_ARROW, IDC_SIZEWE, IsChild, KillTimer, WPF_RESTORETOMAXIMIZED, LoadCursorW, LoadIconW, MB_ICONQUESTION,
-    MB_ICONWARNING, MB_OKCANCEL, MF_GRAYED, MF_SEPARATOR, MF_STRING, MINMAXINFO, MSG, MessageBoxW, MoveWindow,
+    IDCANCEL, IDYES, MB_ICONWARNING, MB_OKCANCEL, MB_YESNOCANCEL, MF_GRAYED, MF_SEPARATOR, MF_STRING, MINMAXINFO, MSG,
+    MessageBoxW, MoveWindow,
     NONCLIENTMETRICSW, PostMessageW, PostQuitMessage, RegisterClassExW, SIZE_MINIMIZED, SPI_GETHIGHCONTRAST,
     SPI_GETNONCLIENTMETRICS, SW_SHOWMAXIMIZED, SW_SHOWNOACTIVATE, SW_SHOWNORMAL, SWP_NOACTIVATE, SWP_NOZORDER, SetClassLongPtrW,
     SetCursor, SetTimer, SetWindowLongPtrW, SetWindowPlacement, SetWindowPos, ShowWindow, SystemParametersInfoW, TPM_RETURNCMD,
@@ -60,7 +62,7 @@ use crate::folder::{
     is_relative_path, is_shortcut, list_folder, normalize, row_after_deleting,
 };
 use crate::shell::{
-    FolderWatch, IconBatch, acknowledge_change, has_own_icon, read_own_icons, remember_icons, background_menu, copy_to_clipboard, delete_items, drag_out,
+    FolderWatch, IconBatch, acknowledge_change, has_own_icon, read_own_icons, remember_icons, background_menu, bookmark_folder, copy_to_clipboard, delete_items, drag_out,
     shortcut_target, forward_menu_message, in_background, invoke_verb, item_menu, item_menu_at, known_folder, new_drop_target, open_file,
     paste_into, post, rename_item, run_command, save_folder_shortcuts, saved_folders, show_menu,
 };
@@ -290,6 +292,21 @@ fn opens_in_tab(target: &Location) -> bool {
     target.path().is_none_or(|p| is_absolute_path(p.as_os_str()))
 }
 
+/// Another top-level window of this class: a second Qoqdir is open.
+fn another_window(wnd: HWND) -> bool {
+    let class = wide(APP_NAME);
+    let mut h = HWND::default();
+    loop {
+        h = unsafe { FindWindowExW(None, Some(h), pcwstr(&class), PCWSTR::null()) }.unwrap_or_default();
+        if h.is_invalid() {
+            return false;
+        }
+        if h != wnd {
+            return true;
+        }
+    }
+}
+
 /// The tab bar. A press is handled here, not by the control: it makes the tab current at once and starts a drag along
 /// the bar that moves it. A middle-click closes a tab.
 unsafe extern "system" fn tab_bar_proc(h: HWND, msg: u32, wp: WPARAM, lp: LPARAM, _: usize, _: usize) -> LRESULT {
@@ -503,8 +520,13 @@ impl App {
                 wnd,
                 Box::new(move |pt| {
                     let app = weak.upgrade()?;
-                    let dir = app.tree.drop_target(pt)?;
-                    (!(app.dragging_files.get() && dir.same(&app.list.location()))).then_some(dir)
+                    let dir = app.tree.drop_target(pt);
+                    let from_here = dir.as_ref().is_some_and(|d| app.dragging_files.get() && d.same(&app.list.location()));
+                    // A node that refuses says why in the status bar (5.5).
+                    if (dir.is_none() || from_here) && pt.is_some_and(|pt| app.tree.location_at(pt).is_some()) {
+                        app.set_message(if from_here { "The files come from there" } else { "Only a folder on this PC takes a drop" });
+                    }
+                    if from_here { None } else { dir }
                 }),
             );
             let _ = RegisterDragDrop(app.tree.hwnd(), &tree_drop);
@@ -759,7 +781,7 @@ impl App {
                 }
                 WM_APP_TABS_SAVED => {
                     if wp.0 != 0 {
-                        self.set_message("Tabs saved in Bookmarks\\Tabs");
+                        self.set_message("Tabs saved in Bookmarks\\Tabs, replacing the earlier set");
                     } else {
                         self.set_message("Can't save every tab in Bookmarks\\Tabs");
                         self.warn();
@@ -874,6 +896,20 @@ impl App {
                     return LRESULT(0);
                 }
                 WM_CLOSE => {
+                    // The last window going with many tabs offers to save them, so a set isn't lost by one click (5.7).
+                    // Saved here and now: a worker would die with the window. A self-test never asks.
+                    let tabs = self.st.borrow().tabs.len();
+                    if tabs >= 4 && !self.quiet.get() && !another_window(self.wnd) {
+                        let text = w!("Save these tabs in Bookmarks\\Tabs before closing?");
+                        let answer = MessageBoxW(Some(self.wnd), text, pcwstr(&wide(APP_NAME)), MB_YESNOCANCEL | MB_ICONQUESTION);
+                        if answer == IDCANCEL {
+                            return LRESULT(0);
+                        }
+                        if answer == IDYES && let Some(dir) = self.tree.bookmarks().path().map(|p| p.join("Tabs")) {
+                            let folders: Vec<Location> = self.st.borrow().tabs.iter().map(|t| t.location.clone()).collect();
+                            save_folder_shortcuts(&dir, &folders);
+                        }
+                    }
                     self.save_settings();
                     let _ = DestroyWindow(self.wnd);
                     return LRESULT(0);
@@ -1123,6 +1159,7 @@ impl App {
             let grayed = if tab_count > 1 { MF_STRING } else { MF_STRING | MF_GRAYED };
             let _ = AppendMenuW(menu.0, grayed, 3, w!("Close other tabs"));
             let _ = AppendMenuW(menu.0, MF_SEPARATOR, 0, PCWSTR::null());
+            let _ = AppendMenuW(menu.0, MF_STRING, 6, w!("Bookmark this folder"));
             let _ = AppendMenuW(menu.0, MF_STRING, 4, w!("Save tabs\tCtrl+S"));
             let _ = AppendMenuW(menu.0, MF_STRING, 5, w!("Open saved tabs\tCtrl+O"));
             TrackPopupMenuEx(menu.0, (TPM_RETURNCMD | TPM_RIGHTBUTTON).0, screen.x, screen.y, self.wnd, None).0
@@ -1138,6 +1175,7 @@ impl App {
             3 => self.close_other_tabs(index),
             4 => self.save_tabs(),
             5 => self.open_saved_tabs(),
+            6 => self.bookmark_tab(index),
             _ => {}
         }
     }
@@ -1984,6 +2022,18 @@ impl App {
             ReleaseDC(Some(self.tab_bar), dc);
         }
         send(self.tab_bar, TCM_SETCURSEL, active, 0);
+    }
+
+    /// The tab's folder as a shortcut in Bookmarks, shown in the tree at once (5.6).
+    pub fn bookmark_tab(&self, index: usize) {
+        let folder = self.st.borrow().tabs.get(index).map(|t| t.location.clone());
+        let Some((folder, dir)) = folder.zip(self.tree.bookmarks().path().map(|p| p.to_path_buf())) else { return };
+        let ok = bookmark_folder(&dir, &folder);
+        self.tree.refresh_folder(self.tree.bookmarks());
+        self.set_message(if ok { "Bookmarked" } else { "Can't make the bookmark" });
+        if !ok {
+            self.warn();
+        }
     }
 
     // ------------------------------------------------------------ saved tabs (Bookmarks\Tabs)

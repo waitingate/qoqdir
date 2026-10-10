@@ -51,7 +51,7 @@ const KEYS: &str = "Navigation
   Filter: type in the list, or Ctrl+F
   Clear the filter: Esc
   Up: Backspace
-  Bookmark a folder: Alt+drag it onto Bookmarks in the tree
+  Bookmark a folder: right-click its tab, or Alt+drag it onto Bookmarks
   Address bar: Ctrl+L
   Back: Alt+Left
   Forward: Alt+Right
