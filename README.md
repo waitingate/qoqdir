@@ -80,6 +80,10 @@ to switch between them. Drop files on a tab, or on a folder or bookmark in the
 tree, to move or copy them there, as Explorer would; a closed folder in the tree
 opens when you hold the drag over it. (The tree takes drops on local drives only.)
 
+For what Qoqdir doesn't do, thumbnails and searching inside subfolders,
+right-click the empty space: Open in Explorer and Search in Explorer open that
+folder there.
+
 Qoqdir has no undo of its own: Windows keeps one undo list for all programs. To
 take back a rename, move, copy or delete done in Qoqdir, click the desktop (or an
 Explorer window) and press Ctrl+Z. A Shift+Delete can't be undone.

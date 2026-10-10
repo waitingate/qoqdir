@@ -596,9 +596,15 @@ void App::onContextMenu(HWND from, POINT pt) {
         const std::wstring dir = list_.dir();
         const std::vector<std::wstring> names = list_.selectedNames();
         if (rows.empty()) {
-            if (!dir.empty())
+            if (!dir.empty()) {
+                bool copied = IsClipboardFormatAvailable(CF_HDROP) != 0;   // else Paste is greyed
+                auto paste = [&](bool shortcuts) { if (samePath(list_.dir(), dir)) pasteInto(wnd_, dir, shortcuts); };
                 showMenu(wnd_, backgroundMenu(wnd_, dir).get(), pt, nullptr,
-                         [&](bool shortcuts) { if (samePath(list_.dir(), dir)) pasteInto(wnd_, dir, shortcuts); });
+                         {{L"Paste\tCtrl+V", copied, [&] { paste(false); }},
+                          {L"Paste shortcut", copied, [&] { paste(true); }},
+                          {L"Open in Explorer", true, [&] { openInExplorer(wnd_, dir, false); }},
+                          {L"Search in Explorer", true, [&] { openInExplorer(wnd_, dir, true); }}});
+            }
             return;
         }
         // With a folder or shortcut among them, activate opens them all (folders here, files with Windows).

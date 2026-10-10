@@ -138,7 +138,7 @@ HRESULT fileOperation(HWND owner, DWORD flags, AddWork addWork) {
 }
 
 constexpr UINT kFirstCmd = 1, kLastCmd = 0x7FFF;          // the shell's own menu items
-constexpr UINT kPasteCmd = 0x8000, kPasteShortcutCmd = 0x8001;   // ours
+constexpr UINT kOwnFirst = 0x8000;   // the app's own items' ids, after the shell's
 Com<IContextMenu2> g_menu2;   // set only while a context menu is on screen
 Com<IContextMenu3> g_menu3;
 
@@ -256,16 +256,13 @@ Com<IContextMenu> backgroundMenu(HWND owner, const std::wstring& dir) {
 }
 
 void showMenu(HWND owner, IContextMenu* cm, POINT pt, const std::function<bool(const std::wstring&)>& intercept,
-              const std::function<void(bool shortcuts)>& paste) {
+              const std::vector<OwnItem>& own) {
     if (!cm) return;
     Menu menu(CreatePopupMenu());
     if (!menu) return;
-    if (paste) {   // greyed when no files were copied
-        UINT state = MF_STRING | (IsClipboardFormatAvailable(CF_HDROP) ? 0 : MF_GRAYED);
-        AppendMenuW(menu.get(), state, kPasteCmd, L"Paste\tCtrl+V");
-        AppendMenuW(menu.get(), state, kPasteShortcutCmd, L"Paste shortcut");
-        AppendMenuW(menu.get(), MF_SEPARATOR, 0, nullptr);
-    }
+    for (size_t i = 0; i < own.size(); ++i)
+        AppendMenuW(menu.get(), MF_STRING | (own[i].enabled ? 0 : MF_GRAYED), kOwnFirst + i, own[i].text);
+    if (!own.empty()) AppendMenuW(menu.get(), MF_SEPARATOR, 0, nullptr);
     UINT flags = CMF_NORMAL | CMF_CANRENAME;
     if (GetKeyState(VK_SHIFT) < 0) flags |= CMF_EXTENDEDVERBS;
     if (FAILED(cm->QueryContextMenu(menu.get(), UINT(GetMenuItemCount(menu.get())), kFirstCmd, kLastCmd, flags))) return;
@@ -277,7 +274,7 @@ void showMenu(HWND owner, IContextMenu* cm, POINT pt, const std::function<bool(c
     UINT id = UINT(TrackPopupMenuEx(menu.get(), TPM_RETURNCMD | TPM_RIGHTBUTTON, pt.x, pt.y, owner, nullptr));
     g_menu2.reset();
     g_menu3.reset();
-    if (id == kPasteCmd || id == kPasteShortcutCmd) return paste(id == kPasteShortcutCmd);
+    if (id >= kOwnFirst && id - kOwnFirst < own.size()) return own[id - kOwnFirst].act();
     if (id < kFirstCmd) return;
 
     wchar_t verb[80] = {};
@@ -379,6 +376,33 @@ void openFile(HWND owner, const std::wstring& path) {
     sei.lpDirectory = dir.c_str();
     sei.nShow = SW_SHOWNORMAL;
     ShellExecuteExW(&sei);   // Windows shows its own "open with" / error dialog
+}
+
+namespace {
+// `text` as a part of a URL: UTF-8, everything but letters, digits and -_.~ as %XX, the way search-ms: links are
+// written ("C%3A%5CUsers").
+std::wstring urlPart(const std::wstring& text) {
+    int n = WideCharToMultiByte(CP_UTF8, 0, text.c_str(), int(text.size()), nullptr, 0, nullptr, nullptr);
+    std::string utf8(size_t(std::max(n, 0)), '\0');
+    WideCharToMultiByte(CP_UTF8, 0, text.c_str(), int(text.size()), utf8.data(), n, nullptr, nullptr);
+    std::wstring out;
+    for (unsigned char c : utf8) {
+        if (isalnum(c) || c == '-' || c == '_' || c == '.' || c == '~') out += wchar_t(c);
+        else out += L'%' + std::wstring{L"0123456789ABCDEF"[c >> 4], L"0123456789ABCDEF"[c & 15]};
+    }
+    return out;
+}
+}  // namespace
+
+void openInExplorer(HWND owner, const std::wstring& dir, bool search) {
+    std::wstring file = search ? L"search-ms:crumb=location:" + urlPart(dir) : dir;
+    SHELLEXECUTEINFOW sei{};
+    sei.cbSize = sizeof sei;
+    sei.hwnd = owner;
+    sei.lpVerb = search ? nullptr : L"explore";
+    sei.lpFile = file.c_str();
+    sei.nShow = SW_SHOWNORMAL;
+    ShellExecuteExW(&sei);
 }
 
 namespace {

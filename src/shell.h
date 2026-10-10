@@ -34,11 +34,15 @@ Com<IDataObject> dataObject(HWND owner, const std::wstring& path);
 Com<IContextMenu> itemMenu(HWND owner, const std::wstring& dir, const std::vector<Item>& items);
 Com<IContextMenu> itemMenu(HWND owner, const std::wstring& path);
 Com<IContextMenu> backgroundMenu(HWND owner, const std::wstring& dir);
-// 'intercept' sees the chosen verb first and returns true if it handled it.
-// With 'paste', Paste and Paste shortcut come first (a folder's own menu has neither).
+// An item of the app's own at the top of a shell menu (Paste on a folder's menu, for one).
+struct OwnItem {
+    const wchar_t* text;
+    bool enabled;
+    std::function<void()> act;
+};
+// 'intercept' sees the chosen verb first and returns true if it handled it. 'own' items come first.
 void showMenu(HWND owner, IContextMenu* menu, POINT screenPt,
-              const std::function<bool(const std::wstring& verb)>& intercept,
-              const std::function<void(bool shortcuts)>& paste = nullptr);
+              const std::function<bool(const std::wstring& verb)>& intercept, const std::vector<OwnItem>& own = {});
 // Forwards owner-drawn submenu messages (Send to, Open with) while a menu is open.
 bool forwardMenuMessage(UINT msg, WPARAM wp, LPARAM lp, LRESULT* result);
 bool invokeVerb(HWND owner, IContextMenu* menu, const char* verb);
@@ -52,6 +56,9 @@ void pasteInto(HWND owner, const std::wstring& dir, bool shortcuts = false);   /
 bool deleteItems(HWND owner, const std::wstring& dir, const std::vector<Item>& items, bool permanently);
 HRESULT renameItem(HWND owner, const std::wstring& path, const std::wstring& newName);
 void openFile(HWND owner, const std::wstring& path);
+// Explorer on the folder, or Windows Search scoped to it: what Qoqdir leaves to Explorer (thumbnails, searching
+// inside subfolders).
+void openInExplorer(HWND owner, const std::wstring& dir, bool search);
 bool runCommand(HWND owner, const std::wstring& command, const std::wstring& workDir);
 void dragOut(HWND owner, const std::wstring& dir, const std::vector<Item>& items);
 

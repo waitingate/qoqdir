@@ -20,11 +20,11 @@ use windows::Win32::System::Com::{
     CoInitializeEx, CoTaskMemFree, CoUninitialize, CreateBindCtx, DVASPECT_CONTENT, FORMATETC, IBindCtx, IDataObject,
     IPersistFile, STGM_CREATE, STGM_READ, STGMEDIUM, STGMEDIUM_0, TYMED_HGLOBAL,
 };
-use windows::Win32::System::DataExchange::{IsClipboardFormatAvailable, RegisterClipboardFormatW};
+use windows::Win32::System::DataExchange::RegisterClipboardFormatW;
 use windows::Win32::System::LibraryLoader::{GetProcAddress, LOAD_LIBRARY_SEARCH_SYSTEM32, LoadLibraryExW};
 use windows::Win32::System::Memory::{GMEM_MOVEABLE, GlobalAlloc, GlobalLock, GlobalUnlock};
 use windows::Win32::System::Ole::{
-    CF_HDROP, DROPEFFECT, DROPEFFECT_COPY, DROPEFFECT_LINK, DROPEFFECT_MOVE, DROPEFFECT_NONE, IDropSource, IDropTarget,
+    DROPEFFECT, DROPEFFECT_COPY, DROPEFFECT_LINK, DROPEFFECT_MOVE, DROPEFFECT_NONE, IDropSource, IDropTarget,
     IDropTarget_Impl, OleSetClipboard, ReleaseStgMedium,
 };
 use windows::Win32::System::SystemServices::MODIFIERKEYS_FLAGS;
@@ -62,8 +62,7 @@ use crate::util::{OwnedMenu, Pidl, copy_to, from_wide, key_down, pcwstr, wide};
 const CMIC_MASK_UNICODE: u32 = 0x4000; // not in the windows crate
 const FIRST_CMD: u32 = 1;
 const LAST_CMD: u32 = 0x7FFF;
-const PASTE_CMD: u32 = 0x8000; // our own items, after the shell's ids
-const PASTE_SHORTCUT_CMD: u32 = 0x8001;
+const OWN_FIRST: u32 = 0x8000; // the app's own items' ids, after the shell's
 
 thread_local! {
     static TYPES: RefCell<HashMap<String, (i32, OsString)>> = RefCell::new(HashMap::new());
@@ -340,16 +339,23 @@ pub fn background_menu(owner: HWND, dir: &Location) -> Option<IContextMenu> {
 
 /// `intercept` sees the chosen verb first and returns true if it handled it.
 /// With `paste`, Paste and Paste shortcut come first (a folder's own menu has neither).
-pub fn show_menu(owner: HWND, cm: &IContextMenu, pt: POINT, intercept: &mut dyn FnMut(&str) -> bool, paste: Option<&dyn Fn(bool)>) {
+/// An item of the app's own at the top of a shell menu (Paste on a folder's menu, for one).
+pub struct OwnItem<'a> {
+    pub text: &'static str,
+    pub enabled: bool,
+    pub act: &'a dyn Fn(),
+}
+
+/// `intercept` sees the chosen verb first and returns true if it handled it. `own` items come first.
+pub fn show_menu(owner: HWND, cm: &IContextMenu, pt: POINT, intercept: &mut dyn FnMut(&str) -> bool, own: &[OwnItem]) {
     let Ok(menu) = (unsafe { CreatePopupMenu() }) else { return };
     let menu = OwnedMenu(menu);
-    if paste.is_some() {
-        // Greyed when no files were copied.
-        let copied = unsafe { IsClipboardFormatAvailable(u32::from(CF_HDROP.0)) }.is_ok();
-        let state = if copied { MF_STRING } else { MF_STRING | MF_GRAYED };
-        unsafe {
-            let _ = AppendMenuW(menu.0, state, PASTE_CMD as usize, w!("Paste\tCtrl+V"));
-            let _ = AppendMenuW(menu.0, state, PASTE_SHORTCUT_CMD as usize, w!("Paste shortcut"));
+    unsafe {
+        for (i, item) in own.iter().enumerate() {
+            let state = if item.enabled { MF_STRING } else { MF_STRING | MF_GRAYED };
+            let _ = AppendMenuW(menu.0, state, OWN_FIRST as usize + i, pcwstr(&wide(item.text)));
+        }
+        if !own.is_empty() {
             let _ = AppendMenuW(menu.0, MF_SEPARATOR, 0, PCWSTR::null());
         }
     }
@@ -365,8 +371,8 @@ pub fn show_menu(owner: HWND, cm: &IContextMenu, pt: POINT, intercept: &mut dyn 
         OPEN_MENU.with(|m| *m.borrow_mut() = (cm.cast().ok(), cm.cast().ok()));
         let id = TrackPopupMenuEx(menu.0, (TPM_RETURNCMD | TPM_RIGHTBUTTON).0, pt.x, pt.y, owner, None).0 as u32;
         OPEN_MENU.with(|m| *m.borrow_mut() = (None, None));
-        if let (PASTE_CMD | PASTE_SHORTCUT_CMD, Some(paste)) = (id, paste) {
-            return paste(id == PASTE_SHORTCUT_CMD);
+        if id >= OWN_FIRST && let Some(item) = own.get((id - OWN_FIRST) as usize) {
+            return (item.act)();
         }
         if id < FIRST_CMD {
             return;
@@ -509,6 +515,33 @@ pub fn open_file(owner: HWND, path: &Path) {
     };
     unsafe {
         let _ = ShellExecuteExW(&mut sei); // Windows shows its own "open with" / error dialog
+    }
+}
+
+/// Explorer on the folder, or Windows Search scoped to it: what Qoqdir leaves to Explorer (thumbnails, searching
+/// inside subfolders). The path goes into the search-ms: link as UTF-8 with everything but letters, digits and
+/// -_.~ as %XX, the way such links are written ("C%3A%5CUsers").
+pub fn open_in_explorer(owner: HWND, dir: &Path, search: bool) {
+    let file = if search {
+        let mut url = String::from("search-ms:crumb=location:");
+        for b in dir.to_string_lossy().bytes() {
+            if b.is_ascii_alphanumeric() || b"-_.~".contains(&b) { url.push(b as char) } else { url.push_str(&format!("%{b:02X}")) }
+        }
+        wide(url)
+    } else {
+        wide(dir)
+    };
+    let verb = wide("explore");
+    let mut sei = SHELLEXECUTEINFOW {
+        cbSize: size_of::<SHELLEXECUTEINFOW>() as u32,
+        hwnd: owner,
+        lpVerb: if search { PCWSTR::null() } else { pcwstr(&verb) },
+        lpFile: pcwstr(&file),
+        nShow: SW_SHOWNORMAL.0,
+        ..Default::default()
+    };
+    unsafe {
+        let _ = ShellExecuteExW(&mut sei);
     }
 }
 

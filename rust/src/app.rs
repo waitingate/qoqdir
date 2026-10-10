@@ -6,7 +6,7 @@
 use std::cell::{Cell, RefCell};
 use std::ffi::OsString;
 use std::os::windows::ffi::OsStrExt;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::rc::{Rc, Weak};
 use std::sync::atomic::{AtomicU32, Ordering};
 
@@ -19,7 +19,8 @@ use windows::Win32::Graphics::Gdi::{
 use windows::Win32::Storage::FileSystem::CreateDirectoryW;
 use windows::Win32::System::Diagnostics::Debug::MessageBeep;
 use windows::Win32::System::LibraryLoader::GetModuleFileNameW;
-use windows::Win32::System::Ole::{IDropTarget, RegisterDragDrop, RevokeDragDrop};
+use windows::Win32::System::DataExchange::IsClipboardFormatAvailable;
+use windows::Win32::System::Ole::{CF_HDROP, IDropTarget, RegisterDragDrop, RevokeDragDrop};
 use windows::Win32::System::SystemServices::MK_LBUTTON;
 use windows::Win32::System::WindowsProgramming::{GetPrivateProfileStringW, WritePrivateProfileStringW};
 use windows::Win32::UI::Controls::{
@@ -62,7 +63,7 @@ use crate::folder::{
     is_relative_path, is_shortcut, list_folder, normalize, row_after_deleting,
 };
 use crate::shell::{
-    FolderWatch, IconBatch, acknowledge_change, has_own_icon, read_own_icons, remember_icons, background_menu, bookmark_folder, copy_to_clipboard, delete_items, drag_out,
+    FolderWatch, IconBatch, OwnItem, acknowledge_change, has_own_icon, read_own_icons, remember_icons, background_menu, bookmark_folder, copy_to_clipboard, delete_items, drag_out, open_in_explorer,
     shortcut_target, forward_menu_message, in_background, invoke_verb, item_menu, item_menu_at, known_folder, new_drop_target, open_file,
     paste_into, post, rename_item, run_command, save_folder_shortcuts, saved_folders, show_menu,
 };
@@ -1081,7 +1082,15 @@ impl App {
                             paste_into(self.wnd, &dir, shortcuts);
                         }
                     };
-                    show_menu(self.wnd, &cm, pt, &mut |_| false, Some(&paste));
+                    let copied = unsafe { IsClipboardFormatAvailable(u32::from(CF_HDROP.0)) }.is_ok(); // else Paste is greyed
+                    let folder = dir.path().map(Path::to_path_buf).unwrap_or_default();
+                    let own = [
+                        OwnItem { text: "Paste\tCtrl+V", enabled: copied, act: &|| paste(false) },
+                        OwnItem { text: "Paste shortcut", enabled: copied, act: &|| paste(true) },
+                        OwnItem { text: "Open in Explorer", enabled: true, act: &|| open_in_explorer(self.wnd, &folder, false) },
+                        OwnItem { text: "Search in Explorer", enabled: true, act: &|| open_in_explorer(self.wnd, &folder, true) },
+                    ];
+                    show_menu(self.wnd, &cm, pt, &mut |_| false, &own);
                 }
                 return;
             }
@@ -1106,7 +1115,7 @@ impl App {
                     self.activate(in_new_tab);
                 }
                 true
-            }, None);
+            }, &[]);
             return;
         }
         if from == self.tree.hwnd() {
@@ -1131,7 +1140,7 @@ impl App {
                     return false;
                 }
                 true
-            }, None);
+            }, &[]);
             self.tree.refresh_folder(&location.parent()); // a folder deleted from its own menu leaves the tree
         }
     }

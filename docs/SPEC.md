@@ -397,8 +397,9 @@ Back, Forward and Up are disabled when they can't do anything.
 - Context menus: right-click on items gives Windows' full context menu for the
   selection (Shift+right-click gives the extended menu). Right-click on empty
   space gives Paste and Paste shortcut (greyed when no files were copied; Paste
-  does what Ctrl+V does), then the folder's own menu from Windows (New,
-  Properties...). Windows' folder menu has neither of those two, because Explorer
+  does what Ctrl+V does), Open in Explorer and Search in Explorer (Windows
+  Search scoped to the folder: both for what Qoqdir leaves to Explorer, 6), then
+  the folder's own menu from Windows (New, Properties...). Windows' folder menu has neither of those two, because Explorer
   adds them itself, so Qoqdir adds them too. Like Explorer, Ctrl+C marks the files
   "copy or link"; otherwise Windows refuses Paste shortcut. The Menu key or
   Shift+F10 opens the menu for the focused item. Owner-drawn and cascading menus
@@ -518,7 +519,8 @@ back to the defaults, and a missing or read-only file is never an error.
 
 Not to be built: tabs or sessions that come back by themselves (saved tabs are
 shortcuts, 5.7), dark mode or themes, a copy engine or progress window of our own,
-previews or thumbnails, search across subfolders, archive browsing, dual panes,
+previews or thumbnails, search across subfolders (the empty-space menu hands
+both to Explorer, 5.8), archive browsing, dual panes,
 plugins or scripting, a bookmark manager, other languages, an installer,
 auto-update, telemetry.
 
