@@ -218,8 +218,9 @@ settings" has "Override high DPI scaling behavior" ticked, scaled by System.
 
 ## 4. The icon
 
-`res\qoqdir.ico` is drawn by `scripts\make-icon.ps1`: a flat folder in Windows'
-own style with a Q on it. After changing the drawing, run
+`res\qoqdir.ico` is drawn by `scripts\make-icon.ps1`: a cartoon folder with a
+face and Qoqdir's mark, a pink ring with a leaf. Every shape is drawn in the
+script from numbers, nothing is taken from another icon. After changing it, run
 `powershell -File scripts\make-icon.ps1`; the next build of either version takes
 the new icon in.
 
