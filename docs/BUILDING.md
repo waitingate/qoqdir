@@ -111,7 +111,7 @@ windres ..\res\qoqdir.rc -O coff -o app_res.o
 g++ -std=c++20 -O2 -DNDEBUG -DUNICODE -D_UNICODE -DNOMINMAX -D_WIN32_WINNT=0x0A00 -DWINVER=0x0A00 -D_GLIBCXX_ASSERTIONS -fsanitize=signed-integer-overflow -fsanitize-undefined-trap-on-error -ffunction-sections -fdata-sections -mwindows -municode -static '-Wl,--gc-sections' -s main.cpp app.cpp filelist.cpp tree.cpp shell.cpp folder.cpp crashlog.cpp app_res.o -o qoqdir.exe -lole32 -loleaut32 -lshell32 -lshlwapi -lcomctl32 -luuid
 ```
 
-That makes the same `qoqdir.exe` as the CMake build, in under two minutes. The
+That makes the same `qoqdir.exe` as the CMake build, in about two minutes. The
 flags are the ones in `CMakeLists.txt`: keep the two in step. PowerShell needs
 the quotes around `-Wl,--gc-sections`, as it reads a comma as a list; cmd.exe
 doesn't.
@@ -218,9 +218,9 @@ settings" has "Override high DPI scaling behavior" ticked, scaled by System.
 
 ## 4. The icon
 
-`res\qoqdir.ico` is drawn by `scripts\make-icon.ps1`: a cartoon folder with a
-face and Qoqdir's mark, a pink ring with a leaf. Every shape is drawn in the
-script from numbers, nothing is taken from another icon. After changing it, run
+`res\qoqdir.ico` is drawn by `scripts\make-icon.ps1`: a yellow folder with
+Qoqdir's mark, a white Q, on its front. Every shape is drawn in the script
+from numbers, nothing is taken from another icon. After changing it, run
 `powershell -File scripts\make-icon.ps1`; the next build of either version takes
 the new icon in.
 

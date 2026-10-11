@@ -1,16 +1,16 @@
-# Draws res\qoqdir.ico: a cartoon folder, flat yellow with a dark outline, a small face on its front from 32 pixels
-# up, and Qoqdir's mark beside it: a pink ring with a leaf lying on its lower right. Every shape is drawn here from
-# numbers on a 256 grid, nothing is taken from another icon. Each size is drawn afresh; at 64 and below the folder is
-# snapped to whole pixels so its edges stay sharp, and the mark is drawn from 24 pixels up, a little larger at 24 and
-# 32 where it has to be read. 16, 24 and 32 are stored as plain bitmaps (what the title bar and Explorer use most),
-# 48, 64 and 256 PNG-compressed, which Windows reads: about 20 KB in all.
+# Draws res\qoqdir.ico: a yellow folder filling its square, like Windows' own, shaded a little lighter at the top,
+# with Qoqdir's mark in the middle of its front: a white Q, a rounded square with a short tail off its lower right
+# corner, over a soft shadow. Every shape is drawn here from numbers on a 256 grid, nothing is taken from another
+# icon. The sizes up to 64 are drawn eight times larger and shrunk, which gives them even edges, and carry the mark
+# from 24 pixels up, where it can be read. 16, 24 and 32 are stored as plain bitmaps (what the title bar and Explorer
+# use most), 48, 64 and 256 PNG-compressed, which Windows reads: about 20 KB in all.
 Add-Type -AssemblyName System.Drawing
-function Color($html) { [System.Drawing.ColorTranslator]::FromHtml($html) }
-function Brush($html) { New-Object System.Drawing.SolidBrush (Color $html) }
-function ABrush($alpha, $html) { $c = Color $html; New-Object System.Drawing.SolidBrush ([System.Drawing.Color]::FromArgb([int]$alpha, $c.R, $c.G, $c.B)) }
-function Pen($html, $width) { New-Object System.Drawing.Pen (Color $html), ([float]$width) }
+function Color($html, $alpha = 255) { $c = [System.Drawing.ColorTranslator]::FromHtml($html); [System.Drawing.Color]::FromArgb($alpha, $c) }
+function Shade($y, $h, $top, $bottom) {   # a brush running from $top at $y to $bottom at $y + $h
+    New-Object System.Drawing.Drawing2D.LinearGradientBrush (New-Object System.Drawing.Rectangle 0, $y, 256, $h), (Color $top), (Color $bottom), ([float]90)
+}
+function Pen($brush, $width) { $p = New-Object System.Drawing.Pen $brush, ([float]$width); $p.LineJoin = 'Round'; $p.StartCap = 'Round'; $p.EndCap = 'Round'; $p }
 function RoundRect($x, $y, $w, $h, $r) {
-    if ($r -lt 1) { $r = 1 }   # an arc of size 0 is refused
     $p = New-Object System.Drawing.Drawing2D.GraphicsPath
     $p.AddArc([float]$x, [float]$y, [float](2 * $r), [float](2 * $r), 180, 90); $p.AddArc([float]($x + $w - 2 * $r), [float]$y, [float](2 * $r), [float](2 * $r), 270, 90)
     $p.AddArc([float]($x + $w - 2 * $r), [float]($y + $h - 2 * $r), [float](2 * $r), [float](2 * $r), 0, 90); $p.AddArc([float]$x, [float]($y + $h - 2 * $r), [float](2 * $r), [float](2 * $r), 90, 90)
@@ -20,7 +20,6 @@ function RoundRect($x, $y, $w, $h, $r) {
 # The folder's back with its tab: a rounded box from ($x0,$top) to ($x1,$bottom) rising to $tabTop over the first
 # $tabW of its width, the tab's right side sloping down over $slope.
 function Back($x0, $tabTop, $top, $x1, $bottom, $tabW, $slope, $r) {
-    if ($r -lt 1) { $r = 1 }
     $p = New-Object System.Drawing.Drawing2D.GraphicsPath
     $p.AddArc([float]$x0, [float]$tabTop, [float](2 * $r), [float](2 * $r), 180, 90)
     $p.AddLine([float]($x0 + $r), [float]$tabTop, [float]($x0 + $tabW), [float]$tabTop)
@@ -32,44 +31,27 @@ function Back($x0, $tabTop, $top, $x1, $bottom, $tabW, $slope, $r) {
     $p.CloseFigure()
     return $p
 }
-# A teardrop leaf, round at ($bx,$by), narrowing to its stem at ($tx,$ty), in two greens split along its spine when $two.
-function Leaf($g, $bx, $by, $tx, $ty, $bulge, $two) {
-    $dx = [double]$tx - $bx; $dy = [double]$ty - $by; $len = [Math]::Sqrt($dx * $dx + $dy * $dy)
-    $nx = -$dy / $len * $bulge; $ny = $dx / $len * $bulge
-    function Side($sign) {   # one edge of the leaf, from the round end to the stem, closed along the spine
-        $p = New-Object System.Drawing.Drawing2D.GraphicsPath
-        $p.AddBezier([float]$bx, [float]$by, [float]($bx + $dx * 0.02 + $nx * $sign), [float]($by + $dy * 0.02 + $ny * $sign), [float]($bx + $dx * 0.6 + $nx * 0.9 * $sign), [float]($by + $dy * 0.6 + $ny * 0.9 * $sign), [float]$tx, [float]$ty)
-        $p.AddLine([float]$tx, [float]$ty, [float]$bx, [float]$by)
-        $p.CloseFigure()
-        return $p
-    }
-    $g.FillPath((Brush '#4CAF50'), (Side 1)); $g.FillPath((Brush $(if ($two) { '#7CCB80' } else { '#4CAF50' })), (Side -1))
-}
 
+function Q($g, $pen, $dy = 0) {   # the mark, $dy lower than its place
+    $g.TranslateTransform(0, $dy); $g.DrawPath($pen, (RoundRect 83 115 78 78 11)); $g.DrawLine($pen, 161, 193, 186, 218); $g.TranslateTransform(0, -$dy)
+}
 function Draw($size) {
-    $bmp = New-Object System.Drawing.Bitmap $size, $size
-    $g = [System.Drawing.Graphics]::FromImage($bmp); $g.SmoothingMode = 'AntiAlias'; $g.PixelOffsetMode = 'HighQuality'
-    $k = $size / 256.0
-    function S($v) { if ($size -le 64) { [Math]::Round($v * $k) } else { $v * $k } }   # a length on the 256 grid, at this size
-    $back = Back (S 20) (S 40) (S 66) (S 236) (S 214) (S 86) (S 14) (S 14)
-    $front = RoundRect (S 20) (S 88) (S 216) (S 126) (S 14)
-    $g.FillPath((Brush '#F5A623'), $back); $g.FillPath((Brush '#FFD93D'), $front)
-    $ink = Pen '#2B2B2B' ([Math]::Max(1.5, 6 * $k))
-    $g.DrawPath($ink, $back); $g.DrawPath($ink, $front)
-    $face = $size -ge 32
-    $g.ScaleTransform($k, $k)   # from here on, the 256 grid
-    if ($face) {   # on the left of the front: blushing cheeks, two dot eyes, a small smile
-        $g.FillEllipse((ABrush 120 '#FF7A9A'), 38, 142, 18, 9); $g.FillEllipse((ABrush 120 '#FF7A9A'), 92, 142, 18, 9)
-        $g.FillEllipse((Brush '#2B2B2B'), 54, 126, 9, 9); $g.FillEllipse((Brush '#2B2B2B'), 84, 126, 9, 9)
-        $g.DrawArc((Pen '#2B2B2B' 3.5), 60, 132, 28, 18, 20, 140)
-    }
-    if ($size -ge 24) {   # the mark, to the right of the face when there is one
-        $dx = if ($face) { 50 } else { 0 }
-        if ($size -le 32) { $g.TranslateTransform(132 + $dx, 150); $g.ScaleTransform(1.12, 1.12); $g.TranslateTransform(-132, -150) } else { $g.TranslateTransform($dx, 0) }
-        $g.DrawEllipse((Pen '#EF4F9E' ([Math]::Max(13, 2.2 / $k))), 79, 110, 66, 66)   # the ring: 13 wide, never under 2.2 px
-        Leaf $g 172 198 134 165 16 ($size -ge 48)
+    $ss = if ($size -le 64) { 8 } else { 1 }   # the small sizes are drawn this many times larger, then shrunk
+    $big = New-Object System.Drawing.Bitmap ($size * $ss), ($size * $ss)
+    $g = [System.Drawing.Graphics]::FromImage($big); $g.SmoothingMode = 'AntiAlias'; $g.PixelOffsetMode = 'HighQuality'
+    $g.ScaleTransform($size * $ss / 256.0, $size * $ss / 256.0)   # from here on, the 256 grid
+    $g.FillPath((Shade 24 212 '#F6B52E' '#E39310'), (Back 8 24 52 248 236 92 16 14))   # the back with its tab
+    $g.FillPath((Shade 84 152 '#FFD75A' '#FFBE2E'), (RoundRect 8 84 240 152 14))       # the front
+    $g.DrawLine((Pen (Color '#FFFFFF' 110) 5), 22, 86.5, 234, 86.5)                   # the light along its top edge
+    if ($size -ge 24) {
+        foreach ($s in @(@(40, 18), @(34, 28), @(28, 40))) { Q $g (Pen (Color '#7A4A00' $s[1]) $s[0]) 5 }   # the shadow: three soft layers
+        Q $g (Pen (Shade 92 140 '#FFFFFF' '#F2EDE2') 26)
     }
     $g.Dispose()
+    if ($ss -eq 1) { return $big }
+    $bmp = New-Object System.Drawing.Bitmap $size, $size
+    $g = [System.Drawing.Graphics]::FromImage($bmp); $g.InterpolationMode = 'HighQualityBicubic'; $g.PixelOffsetMode = 'HighQuality'; $g.CompositingMode = 'SourceCopy'
+    $g.DrawImage($big, 0, 0, $size, $size); $g.Dispose()
     return $bmp
 }
 function Dib($bmp) {   # a 32-bit bitmap as an icon file holds it: header, rows bottom-up, then the 1-bit mask
