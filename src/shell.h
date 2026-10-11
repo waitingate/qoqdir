@@ -79,7 +79,9 @@ bool bookmarkFolder(const std::wstring& dir, const std::wstring& folder);
 
 // ---------------------------------------------------------------- background work
 
-// Runs `work` on a thread of its own, with COM set up for the shell calls it makes.
+// Runs `work` on a thread of its own, with COM set up for the shell calls it makes. The thread is never joined, so
+// it can outlive the window and the App: `work` captures values and a window handle only, never a pointer to
+// either, and reports with post(), which drops the message when the window is gone.
 void inBackground(std::function<void()> work);
 // Hands `object` to `window` by a posted message; the handler then owns it. Freed here if the window is gone.
 template <class T>

@@ -711,7 +711,9 @@ pub fn saved_folders(dir: &Path) -> Vec<Location> {
 
 // ---------------------------------------------------------------- background work
 
-/// Runs `work` on a thread of its own, with COM set up for the shell calls it makes.
+/// Runs `work` on a thread of its own, with COM set up for the shell calls it makes. The thread is never joined, so
+/// it can outlive the window and the App: `work` captures values and a window handle only, never a reference to
+/// either, and reports with post(), which drops the message when the window is gone.
 pub fn in_background(work: impl FnOnce() + Send + 'static) {
     std::thread::spawn(move || unsafe {
         let co = CoInitializeEx(None, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE);
