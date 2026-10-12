@@ -1,8 +1,11 @@
 #include "app.h"
 
+#include "crashlog.h"
 #include "shell.h"
 
 #include <dbt.h>
+#include <initguid.h>
+#include <oleacc.h>
 #include <windowsx.h>
 
 #include <algorithm>
@@ -147,6 +150,24 @@ bool App::create(HINSTANCE instance, const CommandLine& cmd, bool useSettings) {
     tree_.create(wnd_, ID_TREE, WM_APP_TREE, WM_APP_TREE_ICONS, bookmarks);
     list_.create(wnd_, ID_LIST);
     status_ = make(STATUSCLASSNAMEW, L"", SBARS_SIZEGRIP, 0, ID_STATUS);
+    // Each button's tooltip says what it does and its key, and screen readers read the same as its name (5.1).
+    tips_ = CreateWindowExW(0, TOOLTIPS_CLASSW, nullptr, WS_POPUP | TTS_ALWAYSTIP, CW_USEDEFAULT, CW_USEDEFAULT,
+                            CW_USEDEFAULT, CW_USEDEFAULT, wnd_, nullptr, instance, nullptr);
+    Com<IAccPropServices> names;
+    CoCreateInstance(CLSID_AccPropServices, nullptr, CLSCTX_INPROC_SERVER, IID_IAccPropServices,
+                     reinterpret_cast<void**>(names.put()));
+    const std::pair<HWND, const wchar_t*> named[] = {{back_, L"Back (Alt+Left)"}, {forward_, L"Forward (Alt+Right)"},
+                                                      {up_, L"Up (Backspace)"}, {refresh_, L"Refresh (F5)"}};
+    for (auto [h, text] : named) {
+        TTTOOLINFOW ti{};
+        ti.cbSize = sizeof ti;
+        ti.uFlags = TTF_IDISHWND | TTF_SUBCLASS;
+        ti.hwnd = wnd_;
+        ti.uId = reinterpret_cast<UINT_PTR>(h);
+        ti.lpszText = const_cast<wchar_t*>(text);
+        SendMessageW(tips_, TTM_ADDTOOLW, 0, reinterpret_cast<LPARAM>(&ti));
+        if (names) names->SetHwndPropStr(h, OBJID_CLIENT, CHILDID_SELF, PROPID_ACC_NAME, text);
+    }
 
     SendMessageW(filter_, EM_SETCUEBANNER, TRUE, reinterpret_cast<LPARAM>(L"Filter"));
     SHAutoComplete(address_, SHACF_FILESYS_DIRS);
@@ -185,6 +206,7 @@ bool App::create(HINSTANCE instance, const CommandLine& cmd, bool useSettings) {
     showTabs();
     open(tab().path, Nav::Switch, tab().view);
     focusList();
+    watchForHangs(wnd_);
     return true;
 }
 
@@ -813,6 +835,7 @@ void App::open(const std::wstring& path, Nav nav, ViewState view, Origin origin)
     inBackground([wnd = wnd_, generation, path] {
         auto replaced = [generation] { return g_newestLoad != generation; };
         auto result = std::make_unique<Listing>(listFolder(path, true, replaced));
+        if (!replaced()) fillTypes(result->items);   // the shell's type names and icons, off the window's thread
         std::vector<std::wstring> own;
         for (const Item& it : result->items)
             if (hasOwnIcon(it)) own.push_back(it.name);

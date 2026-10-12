@@ -109,13 +109,15 @@ bool printHelp(std::wstring text) {
     };
     HANDLE con = open(L"CONOUT$"), in = open(L"CONIN$");
     // cmd and PowerShell don't wait for a window program, so they may be waiting for the next command already, the
-    // cursor past column 0. Print below that line, then send Enter so a fresh input line follows the help. Without
-    // it PowerShell 7 draws the next typed line over the help.
+    // cursor past column 0: print below that line. PowerShell then gets an Enter, so a fresh input line follows the
+    // help: its input line would otherwise be drawn over the help as soon as a key is typed. cmd draws nothing over
+    // it, and a .bat file must get none (a pause after qoqdir would take it).
     CONSOLE_SCREEN_BUFFER_INFO info{};
     bool midLine = GetConsoleScreenBufferInfo(con, &info) && info.dwCursorPosition.X > 0;
     if (midLine) text = L"\r\n" + text;
     bool ok = WriteConsoleW(con, text.c_str(), DWORD(text.size()), &n, nullptr);
-    if (ok && midLine) {
+    std::wstring shell = parentProcessName();
+    if (ok && midLine && (shell == L"powershell.exe" || shell == L"pwsh.exe")) {
         INPUT_RECORD enter[2] = {};
         for (int i = 0; i < 2; ++i) {   // pressed and let go
             enter[i].EventType = KEY_EVENT;

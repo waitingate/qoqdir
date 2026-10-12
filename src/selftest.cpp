@@ -3,9 +3,14 @@
 
 #include "app.h"
 
+#include "crashlog.h"
+
 #include <dbt.h>
+#include <initguid.h>
+#include <oleacc.h>
 #include <shellapi.h>
 
+#include <cstdio>
 #include <functional>
 #include <thread>
 
@@ -129,6 +134,7 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
     SelfTest& t = *selfTest_;
     t.dir = dir;
     t.logPath = logPath;
+    crashLogIn(dir);   // a crash or hang during the test is logged beside its own log
     if (HANDLE f = CreateFileW(logPath.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
         f != INVALID_HANDLE_VALUE)
         CloseHandle(f);   // the log starts empty; every step then appends its line (selfTestLog)
@@ -209,6 +215,23 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
         });
     add(L"a drive without a disk fails quietly, without Windows' \"No Disk\" box", nullptr,
         [] { return (GetErrorMode() & SEM_FAILCRITICALERRORS) != 0; });
+    // Screen readers read a button's accessible name; a tooltip shows it to everyone else (5.1).
+    add(L"the toolbar buttons say what they do and their keys, to screen readers and in tooltips", nullptr, [this] {
+        const std::pair<HWND, const wchar_t*> named[] = {{back_, L"Back (Alt+Left)"}, {forward_, L"Forward (Alt+Right)"},
+                                                          {up_, L"Up (Backspace)"}, {refresh_, L"Refresh (F5)"}};
+        for (auto [h, text] : named) {
+            Com<IAccessible> acc;
+            if (FAILED(AccessibleObjectFromWindow(h, OBJID_CLIENT, IID_IAccessible, reinterpret_cast<void**>(acc.put())))) return false;
+            VARIANT self{};
+            self.vt = VT_I4;
+            self.lVal = CHILDID_SELF;
+            BSTR name = nullptr;
+            bool ok = SUCCEEDED(acc->get_accName(self, &name)) && name && std::wstring(name) == text;
+            SysFreeString(name);
+            if (!ok) return false;
+        }
+        return SendMessageW(tips_, TTM_GETTOOLCOUNT, 0, 0) == 4;
+    });
     add(L"typing in the list filters it, and the status bar says so the first time",
         [=, this] { SetFocus(list_.hwnd()); selfTestType(L"file"); },
         [=, this] {
@@ -1626,6 +1649,25 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
             return selfTest_->note.find(L"copied") == std::wstring::npos &&
                    selfTest_->note.find(L"clipboard") != std::wstring::npos;
         });
+    // 4.10: a window that answers nothing for 5 s gets a line in the crash log saying where its thread is. Last: a
+    // hung window gets a ghost window from Windows meanwhile, which can take the focus from the steps after it.
+    // The test's own long steps (making and removing 10,000 files) leave such lines too: a new one must appear.
+    static std::string crashLog;   // as it was before the stall
+    auto readCrashLog = [=] {
+        std::string text;
+        if (FILE* f = _wfopen(joinPath(dir, L"qoqdir-crash.log").c_str(), L"rb")) {
+            char buf[4096];
+            for (size_t n; (n = fread(buf, 1, sizeof buf, f)) > 0;) text.append(buf, n);
+            fclose(f);
+        }
+        return text;
+    };
+    add(L"a window thread stuck for 7 s leaves a line in the crash log naming where it is",
+        [=] { crashLog = readCrashLog(); Sleep(7000); },
+        [=] {
+            std::string added = readCrashLog().substr(crashLog.size());
+            return added.find("Not responding") != std::string::npos && added.find("exe+0x") != std::string::npos;
+        }, 15000);
 
     // Its own timer callback, so the app's code doesn't mention the self-test (qoqdir.exe has none).
     SetTimer(wnd_, kSelfTestTimer, 50, [](HWND w, UINT, UINT_PTR, DWORD) {

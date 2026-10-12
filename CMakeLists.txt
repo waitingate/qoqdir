@@ -45,11 +45,11 @@ target_link_options(${PROJECT_NAME} PRIVATE -municode)
 
 add_executable(${PROJECT_NAME}-test WIN32 src/main.cpp src/selftest.cpp res/qoqdir.rc)
 target_compile_definitions(${PROJECT_NAME}-test PRIVATE QOQDIR_SELFTEST)
-target_link_libraries(${PROJECT_NAME}-test PRIVATE app)
+target_link_libraries(${PROJECT_NAME}-test PRIVATE app oleacc)
 target_link_options(${PROJECT_NAME}-test PRIVATE -municode)
 
 enable_testing()
-add_executable(unit_tests tests/unit-tests.cpp)
+add_executable(unit_tests tests/unit-tests.cpp src/crashlog.cpp)
 target_link_libraries(unit_tests PRIVATE core)
 target_include_directories(unit_tests PRIVATE src)
 add_test(NAME unit_tests COMMAND unit_tests)

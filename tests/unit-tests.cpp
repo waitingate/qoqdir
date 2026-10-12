@@ -1,8 +1,11 @@
 // Tests for the path and folder rules. Run: ctest --test-dir build  (or build\unit_tests.exe)
+#include "crashlog.h"
 #include "folder.h"
 
 #include <algorithm>
 #include <cstdio>
+#include <cstring>
+#include <stdexcept>
 
 static int failures = 0;
 
@@ -45,7 +48,45 @@ static std::wstring names(const std::vector<Item>& items) {
     return s;
 }
 
-int main() {
+// Runs this program again with one argument and TEMP moved to `temp` (the child inherits it); its exit code, or -1.
+static int runSelf(const wchar_t* arg, const std::wstring& temp) {
+    wchar_t exe[MAX_PATH];
+    GetModuleFileNameW(nullptr, exe, MAX_PATH);
+    std::wstring cmd = L"\"" + std::wstring(exe) + L"\" " + arg;
+    SetEnvironmentVariableW(L"TEMP", temp.c_str());
+    SetEnvironmentVariableW(L"TMP", temp.c_str());
+    STARTUPINFOW si{};
+    si.cb = sizeof si;
+    PROCESS_INFORMATION pi{};
+    if (!CreateProcessW(nullptr, cmd.data(), nullptr, nullptr, FALSE, CREATE_NO_WINDOW, nullptr, nullptr, &si, &pi)) return -1;
+    WaitForSingleObject(pi.hProcess, 10000);
+    DWORD code = 0;
+    GetExitCodeProcess(pi.hProcess, &code);
+    CloseHandle(pi.hThread);
+    CloseHandle(pi.hProcess);
+    return int(code);
+}
+
+static std::string readFile(const std::wstring& path) {
+    std::string text;
+    if (FILE* f = _wfopen(path.c_str(), L"rb")) {
+        char buf[4096];
+        for (size_t n; (n = fread(buf, 1, sizeof buf, f)) > 0;) text.append(buf, n);
+        fclose(f);
+    }
+    return text;
+}
+
+int main(int argc, char** argv) {
+    if (argc > 1 && strcmp(argv[1], "--throw") == 0) {   // the crash-log test below: an exception nothing catches
+        installCrashLog();
+        throw std::out_of_range("map::at");
+    }
+    if (argc > 1 && strcmp(argv[1], "--parent") == 0) {   // the parent-process test below: started by this program
+        wchar_t exe[MAX_PATH];
+        GetModuleFileNameW(nullptr, exe, MAX_PATH);
+        return parentProcessName() == toLower(leafName(exe)) ? 0 : 5;
+    }
     // parentPath
     CHECK_EQ(parentPath(L"C:\\Users\\me"), L"C:\\Users");
     CHECK_EQ(parentPath(L"C:\\Users"), L"C:\\");
@@ -275,6 +316,23 @@ int main() {
         Listing stopped = listFolder(sys, false, [] { return true; });
         CHECK(stopped.error == ERROR_OPERATION_ABORTED && stopped.items.empty());
         CHECK(listFolder(sys, false, [] { return false; }).items.size() > 256);
+    }
+
+    // An exception nothing catches stops the program with exit code 3, and the crash log names it (4.10).
+    {
+        wchar_t temp[MAX_PATH] = {};
+        GetTempPathW(MAX_PATH, temp);
+        std::wstring dir = joinPath(temp, L"qoqdir-unit-tests");
+        CreateDirectoryW(dir.c_str(), nullptr);
+        std::wstring log = joinPath(dir, L"qoqdir-crash.log");
+        DeleteFileW(log.c_str());
+        CHECK(runSelf(L"--throw", dir) == 3);
+        std::string line = readFile(log);
+        CHECK(line.find("std::out_of_range") != std::string::npos && line.find("map::at") != std::string::npos);
+        // The program this one was started from is named (main.cpp sends PowerShell, and only PowerShell, an Enter).
+        CHECK(runSelf(L"--parent", dir) == 0);
+        DeleteFileW(log.c_str());
+        RemoveDirectoryW(dir.c_str());
     }
 
     if (failures) {

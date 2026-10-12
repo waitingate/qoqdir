@@ -1,5 +1,7 @@
 #include "folder.h"
 
+#include <tlhelp32.h>
+
 #include <algorithm>
 #include <numeric>
 #include <unordered_map>
@@ -127,6 +129,21 @@ std::wstring expandVars(const std::wstring& text) {
 std::wstring resolveArgument(const std::wstring& arg) {
     // "D:" alone means the drive's root (as in Explorer), not Windows' "current folder on D:".
     return normalizePath(fullPath(arg.size() == 2 && arg[1] == L':' ? arg + L'\\' : arg));
+}
+
+std::wstring parentProcessName() {
+    HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+    if (snap == INVALID_HANDLE_VALUE) return L"";
+    DWORD me = GetCurrentProcessId(), parent = 0;
+    std::wstring name;
+    PROCESSENTRY32W e{};
+    e.dwSize = sizeof e;
+    for (BOOL ok = Process32FirstW(snap, &e); ok; ok = Process32NextW(snap, &e))
+        if (e.th32ProcessID == me) parent = e.th32ParentProcessID;
+    for (BOOL ok = parent && Process32FirstW(snap, &e); ok; ok = Process32NextW(snap, &e))
+        if (e.th32ProcessID == parent) name = toLower(e.szExeFile);
+    CloseHandle(snap);
+    return name;
 }
 
 CommandLine parseCommandLine(const std::vector<std::wstring>& args) {

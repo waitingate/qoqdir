@@ -151,13 +151,15 @@ fn print_help(text: &str) -> bool {
         };
         let (con, input) = (open("CONOUT$"), open("CONIN$"));
         // cmd and PowerShell don't wait for a window program, so they may be waiting for the next command already,
-        // the cursor past column 0. Print below that line, then send Enter so a fresh input line follows the help.
-        // Without it PowerShell 7 draws the next typed line over the help.
+        // the cursor past column 0: print below that line. PowerShell then gets an Enter, so a fresh input line
+        // follows the help: its input line would otherwise be drawn over the help as soon as a key is typed. cmd
+        // draws nothing over it, and a .bat file must get none (a pause after qoqdir would take it).
         let mut info = CONSOLE_SCREEN_BUFFER_INFO::default();
         let mid_line = GetConsoleScreenBufferInfo(con, &mut info).is_ok() && info.dwCursorPosition.X > 0;
         let text: Vec<u16> = if mid_line { "\r\n" } else { "" }.encode_utf16().chain(text.encode_utf16()).collect();
         let ok = WriteConsoleW(con, &text, None, None).is_ok();
-        if ok && mid_line {
+        let shell = folder::parent_process_name();
+        if ok && mid_line && shell.is_some_and(|s| s == "powershell.exe" || s == "pwsh.exe") {
             let key = |down: bool| INPUT_RECORD {
                 EventType: KEY_EVENT as u16,
                 Event: INPUT_RECORD_0 {

@@ -27,6 +27,7 @@ std::wstring normalizePath(std::wstring text);
 
 std::wstring expandVars(const std::wstring& text);     // only for what the user typed (5.3)
 std::wstring resolveArgument(const std::wstring& arg); // a command-line folder, relative to the current one
+std::wstring parentProcessName();   // the program this one was started from ("powershell.exe"), lower case; "" if unknown
 
 // The command line: qoqdir [switches] [folders...] (see 5.10 in docs/SPEC.md).
 struct CommandLine {

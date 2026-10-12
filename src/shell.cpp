@@ -167,17 +167,23 @@ struct TypeInfo {
     std::wstring type;
 };
 
-// Icon and type name depend only on the extension: one cached shell call each, with no disk access.
-const TypeInfo& typeInfo(const Item& it) {
-    static std::unordered_map<std::wstring, TypeInfo> cache;
-    std::wstring key = it.isDir() ? L"\\" : extensionOf(it.name);
-    auto found = cache.find(key);
-    if (found != cache.end()) return found->second;
+std::wstring typeKey(const Item& it) { return it.isDir() ? L"\\" : extensionOf(it.name); }
+
+// Icon and type name depend only on the extension: one shell call, with no disk access (but the type's icon handler).
+TypeInfo askType(const Item& it) {
     SHFILEINFOW sfi{};
-    std::wstring probe = it.isDir() ? L"folder" : L"file" + key;
+    std::wstring probe = it.isDir() ? L"folder" : L"file" + typeKey(it);
     SHGetFileInfoW(probe.c_str(), it.isDir() ? FILE_ATTRIBUTE_DIRECTORY : FILE_ATTRIBUTE_NORMAL, &sfi, sizeof sfi,
                    SHGFI_USEFILEATTRIBUTES | SHGFI_SYSICONINDEX | SHGFI_SMALLICON | SHGFI_TYPENAME);
-    return cache.emplace(key, TypeInfo{sfi.iIcon, sfi.szTypeName}).first->second;
+    return {sfi.iIcon, sfi.szTypeName};
+}
+
+// Cached for the UI thread: the folder icon, and the few items a load did not fill in (fillTypes).
+const TypeInfo& typeInfo(const Item& it) {
+    static std::unordered_map<std::wstring, TypeInfo> cache;
+    auto [at, fresh] = cache.try_emplace(typeKey(it));
+    if (fresh) at->second = askType(it);
+    return at->second;
 }
 
 std::unordered_map<std::wstring, int> g_ownIcons;   // full path -> icon; UI thread only
@@ -214,6 +220,17 @@ int iconFor(const std::wstring& path, const Item& it) {
         if (found != g_ownIcons.end()) return found->second;
     }
     return typeInfo(it).icon;
+}
+
+void fillTypes(std::vector<Item>& items) {
+    std::unordered_map<std::wstring, TypeInfo> seen;
+    for (Item& it : items) {
+        if (!it.type.empty()) continue;   // a drive comes with its own
+        auto [at, fresh] = seen.try_emplace(typeKey(it));
+        if (fresh) at->second = askType(it);
+        it.type = at->second.type;
+        if (!hasOwnIcon(it)) it.icon = at->second.icon;
+    }
 }
 
 int folderIcon() {

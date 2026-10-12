@@ -1,27 +1,40 @@
 //! Spec 4.10: an internal bug stops the program and %TEMP%\qoqdir-crash.log says why. Hooks: panics (the panic
-//! hook) and CPU faults (`on_crash`). A fault's line is built in a stack buffer and written with Win32 calls
-//! (the heap may be what broke); addresses are exe offsets (ASLR).
+//! hook), CPU faults (`on_crash`) and a window that stops answering (`watch_for_hangs`). A fault's line is built in
+//! a stack buffer and written with Win32 calls (the heap may be what broke); addresses are exe offsets (ASLR).
 
 use std::fmt;
 use std::io::Write;
+use std::path::Path;
 use std::sync::OnceLock;
 
-use windows::Win32::Foundation::CloseHandle;
+use windows::Win32::Foundation::{CloseHandle, HMODULE, HWND};
 use windows::Win32::Storage::FileSystem::{
     CreateFileW, FILE_APPEND_DATA, FILE_ATTRIBUTE_NORMAL, FILE_SHARE_READ, OPEN_ALWAYS, WriteFile,
 };
-use windows::Win32::System::Diagnostics::Debug::{EXCEPTION_POINTERS, IMAGE_NT_HEADERS64, SetUnhandledExceptionFilter};
-use windows::Win32::System::LibraryLoader::GetModuleHandleW;
+use windows::Win32::System::Diagnostics::Debug::{
+    CONTEXT, CONTEXT_CONTROL_AMD64, CONTEXT_INTEGER_AMD64, EXCEPTION_POINTERS, GetThreadContext, IMAGE_NT_HEADERS64,
+    RtlLookupFunctionEntry, RtlVirtualUnwind, SetUnhandledExceptionFilter, UNW_FLAG_NHANDLER,
+};
+use windows::Win32::System::LibraryLoader::{
+    GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS, GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT, GetModuleFileNameW,
+    GetModuleHandleExW, GetModuleHandleW,
+};
 use windows::Win32::System::SystemInformation::GetLocalTime;
 use windows::Win32::System::SystemServices::IMAGE_DOS_HEADER;
-use windows::Win32::System::Threading::{GetCurrentProcess, SetThreadStackGuarantee, TerminateProcess};
+use windows::Win32::System::Threading::{
+    GetCurrentProcess, GetCurrentThreadId, OpenThread, ResumeThread, SetThreadStackGuarantee, SuspendThread,
+    THREAD_GET_CONTEXT, THREAD_SUSPEND_RESUME, TerminateProcess,
+};
+use windows::Win32::UI::WindowsAndMessaging::{IsHungAppWindow, IsWindow};
+use windows::core::PCWSTR;
 
 use crate::APP_NAME;
-use crate::util::{pcwstr, wide};
+use crate::util::{from_wide, pcwstr, wide};
 
 const EXCEPTION_EXECUTE_HANDLER: i32 = 1;
 
 static LOG_PATH: OnceLock<Vec<u16>> = OnceLock::new();
+static LOG_DIR: OnceLock<Vec<u16>> = OnceLock::new(); // set by log_in: the log there instead
 static EXE: OnceLock<(usize, usize)> = OnceLock::new(); // where the exe is loaded, and its size
 
 /// Call once, first thing in main.
@@ -47,6 +60,12 @@ pub fn install() {
     }));
 }
 
+/// The log goes into this folder from now on (a self-test keeps its own).
+#[cfg_attr(not(feature = "selftest"), allow(dead_code))]
+pub fn log_in(dir: &Path) {
+    let _ = LOG_DIR.set(wide(dir.join(format!("{}-crash.log", APP_NAME.to_lowercase()))));
+}
+
 /// "exe+0x1234" for an address in the exe; the bare address for one in a system DLL or a shell extension.
 struct Where(usize);
 
@@ -65,9 +84,90 @@ unsafe extern "system" fn on_crash(e: *const EXCEPTION_POINTERS) -> i32 {
     EXCEPTION_EXECUTE_HANDLER // ends the process without Windows' own error window
 }
 
+// ---------------------------------------------------------------- hangs
+
+/// One frame as "exe+0x1234" or "name.dll+0x1234" (the bare address when it is in no module).
+fn frame_text(pc: u64) -> String {
+    let mut m = HMODULE::default();
+    let flags = GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT;
+    if unsafe { GetModuleHandleExW(flags, PCWSTR(pc as usize as *const u16), &mut m) }.is_err() || m.is_invalid() {
+        return format!("0x{pc:x}");
+    }
+    let base = m.0 as usize as u64;
+    if EXE.get().is_some_and(|&(exe, _)| exe as u64 == base) {
+        return format!("exe+0x{:x}", pc - base);
+    }
+    let mut buf = [0u16; 260];
+    let n = unsafe { GetModuleFileNameW(Some(m), &mut buf) } as usize;
+    let path = from_wide(&buf[..n]);
+    let name = Path::new(&path).file_name().map_or(path.clone(), |n| n.to_os_string());
+    format!("{}+0x{:x}", name.to_string_lossy(), pc - base)
+}
+
+#[repr(C, align(16))]
+struct Aligned(CONTEXT); // GetThreadContext wants a 16-byte aligned record
+
+/// Once Windows calls the window not responding (5 s without a message read), logs where its thread is: each frame of
+/// its stack as an exe offset or a DLL name, so a hung shell extension names itself. Call from the window's thread.
+/// Every second, once per hang. (A thread's stack in this process is readable; a function without unwind data is a
+/// leaf, whose return address is on top of the stack.)
+pub fn watch_for_hangs(window: HWND) {
+    let (wnd, thread) = (window.0 as isize, unsafe { GetCurrentThreadId() });
+    std::thread::spawn(move || {
+        let wnd = HWND(wnd as *mut _);
+        let mut said = false;
+        loop {
+            std::thread::sleep(std::time::Duration::from_secs(1));
+            unsafe {
+                if !IsWindow(Some(wnd)).as_bool() {
+                    return;
+                }
+                if !IsHungAppWindow(wnd).as_bool() {
+                    said = false;
+                    continue;
+                }
+            }
+            if said {
+                continue;
+            }
+            said = true;
+            let mut line = String::from("Not responding for 5 s; the window thread is at");
+            unsafe {
+                if let Ok(t) = OpenThread(THREAD_GET_CONTEXT | THREAD_SUSPEND_RESUME, false, thread) {
+                    if SuspendThread(t) != u32::MAX {
+                        let flags = CONTEXT_CONTROL_AMD64 | CONTEXT_INTEGER_AMD64;
+                        let mut c = Aligned(CONTEXT { ContextFlags: flags, ..Default::default() });
+                        if GetThreadContext(t, &mut c.0).is_ok() {
+                            for i in 0..24 {
+                                if c.0.Rip == 0 || line.len() > 1000 {
+                                    break;
+                                }
+                                line.push_str(if i == 0 { " " } else { " < " });
+                                line.push_str(&frame_text(c.0.Rip));
+                                let mut base = 0u64;
+                                let f = RtlLookupFunctionEntry(c.0.Rip, &mut base, None);
+                                if f.is_null() {
+                                    c.0.Rip = *(c.0.Rsp as *const u64);
+                                    c.0.Rsp += 8;
+                                    continue;
+                                }
+                                let (mut handler, mut frame) = (std::ptr::null_mut(), 0u64);
+                                let _ = RtlVirtualUnwind(UNW_FLAG_NHANDLER, base, c.0.Rip, f, &mut c.0, &mut handler, &mut frame, None);
+                            }
+                        }
+                        ResumeThread(t);
+                    }
+                    let _ = CloseHandle(t);
+                }
+            }
+            log(format_args!("{line}"));
+        }
+    });
+}
+
 /// Appends "date time  what" to the log.
 fn log(what: fmt::Arguments) {
-    let Some(path) = LOG_PATH.get() else { return };
+    let Some(path) = LOG_DIR.get().or(LOG_PATH.get()) else { return };
     let mut line = [0u8; 4096];
     let n = {
         let mut w = std::io::Cursor::new(&mut line[..]);

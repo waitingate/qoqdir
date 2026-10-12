@@ -33,18 +33,20 @@ use windows::Win32::UI::Controls::{
     TVE_EXPAND, TVGN_CARET, TVGN_CHILD, TVGN_DROPHILITE, TVGN_NEXT, TVGN_ROOT, TVHITTESTINFO, TVHT_ONITEMBUTTON, TVIF_CHILDREN,
     TVIF_IMAGE,
     TVIF_TEXT, TVIS_EXPANDED, TVITEMW, TVM_EXPAND, TVM_GETCOUNT, TVM_GETINDENT, TVM_GETITEMRECT, TVM_GETITEMSTATE,
-    TVM_GETITEMW, TVM_GETNEXTITEM, TVM_HITTEST, TVM_SELECTITEM,
+    TVM_GETITEMW, TVM_GETNEXTITEM, TVM_HITTEST, TVM_SELECTITEM, TTM_GETTOOLCOUNT,
 };
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     GetFocus, VIRTUAL_KEY, VK_BACK, VK_DELETE, VK_DOWN, VK_ESCAPE, VK_F2, VK_F5, VK_LEFT, VK_NEXT, VK_PRIOR, VK_RETURN,
     VK_RIGHT, VK_TAB,
 };
+use windows::Win32::System::Variant::VARIANT;
+use windows::Win32::UI::Accessibility::{AccessibleObjectFromWindow, IAccessible};
 use windows::Win32::UI::Shell::{
     DROPFILES, FOLDERID_ComputerFolder, FOLDERID_Desktop, SHFILEINFOW, SHGFI_DISPLAYNAME, SHGFI_SMALLICON,
     SHGFI_SYSICONINDEX, SHGetFileInfoW, SHGetKnownFolderIDList, StrCmpLogicalW,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    BM_CLICK, FindWindowExW, GCLP_HBRBACKGROUND, GWLP_USERDATA, GetClassLongPtrW, GetClientRect, GetWindowLongPtrW, GetWindowRect, GetWindowTextLengthW, IsWindowVisible,
+    BM_CLICK, CHILDID_SELF, FindWindowExW, OBJID_CLIENT, GCLP_HBRBACKGROUND, GWLP_USERDATA, GetClassLongPtrW, GetClientRect, GetWindowLongPtrW, GetWindowRect, GetWindowTextLengthW, IsWindowVisible,
     KillTimer, PostMessageW, SW_SHOWMINNOACTIVE, SW_SHOWNOACTIVATE, SetTimer, ShowWindow, WM_CHAR, WM_CLOSE,
     WM_DEVICECHANGE, WM_DPICHANGED, WM_KEYDOWN, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONUP, WM_MOUSEMOVE, WM_MOUSEWHEEL,
     WM_SYSKEYDOWN, WM_TIMER,
@@ -55,6 +57,8 @@ use crate::folder::{Item, Listing, Location, SortKey, exists, is_directory, is_s
 use crate::shell::{
     copy_to_clipboard, data_object_at, item_menu_at, known_folder, paste_into, shortcut_target, type_name,
 };
+use windows::core::Interface;
+
 use crate::util::{Pidl, focus, from_wide, pcwstr, scale, send, set_text, wide, window_text};
 
 type Act = Rc<dyn Fn(&App)>;
@@ -125,6 +129,7 @@ thread_local! {
     static KEY_MS: Cell<u128> = const { Cell::new(0) }; // how long a key press kept the window busy
     static ROWS: Cell<usize> = const { Cell::new(0) };  // list rows before a refresh that must wait
     static TOP: Cell<usize> = const { Cell::new(0) };   // a scroll position to come back to
+    static CRASH_LOG_LEN: Cell<usize> = const { Cell::new(0) }; // the crash log's length before a stall
     // Before a scaling change: the dots per inch, the row height, the first column's width and the window's place.
     static BEFORE: Cell<(u32, i32, i32, RECT)> = const { Cell::new((0, 0, 0, RECT { left: 0, top: 0, right: 0, bottom: 0 })) };
     static EFFECT: Cell<u32> = const { Cell::new(0) };  // what a simulated drag was allowed to do
@@ -562,6 +567,7 @@ impl App {
 
     pub fn start_self_test(&self) {
         let _ = std::fs::write(log_path(), ""); // the log starts empty; every step then appends its line
+        crate::crashlog::log_in(&test_dir()); // a crash or hang during the test is logged beside its own log
         let dir = test_dir;
         let mut s = Steps::default();
 
@@ -578,6 +584,16 @@ impl App {
         s.check("a drive without a disk fails quietly, without Windows' \"No Disk\" box", |_| {
             let mode = unsafe { GetErrorMode() };
             mode & SEM_FAILCRITICALERRORS.0 != 0
+        });
+        // Screen readers read a button's accessible name; a tooltip shows it to everyone else (5.1).
+        s.check("the toolbar buttons say what they do and their keys, to screen readers and in tooltips", |a| {
+            let named = [(a.back, "Back (Alt+Left)"), (a.forward, "Forward (Alt+Right)"), (a.up, "Up (Backspace)"), (a.refresh, "Refresh (F5)")];
+            let name_of = |h: HWND| unsafe {
+                let mut acc: Option<IAccessible> = None;
+                AccessibleObjectFromWindow(h, OBJID_CLIENT.0 as u32, &IAccessible::IID, &mut acc as *mut _ as *mut _).ok()?;
+                acc?.get_accName(&VARIANT::from(CHILDID_SELF as i32)).ok().map(|n| n.to_string())
+            };
+            named.iter().all(|&(h, text)| name_of(h).as_deref() == Some(text)) && send(a.tips, TTM_GETTOOLCOUNT, 0, 0) == 4
         });
         s.add(
             "typing in the list filters it, and the status bar says so the first time",
@@ -2363,6 +2379,22 @@ impl App {
                 !status.contains("copied") && status.contains("clipboard")
             },
         );
+        // 4.10: a window that answers nothing for 5 s gets a line in the crash log saying where its thread is. Last: a
+        // hung window gets a ghost window from Windows meanwhile, which can take the focus from the steps after it.
+        // The test's own long steps (making and removing 10,000 files) leave such lines too: a new one must appear.
+        let crash_log = move || std::fs::read_to_string(dir().join("qoqdir-crash.log")).unwrap_or_default();
+        s.add(
+            "a window thread stuck for 7 s leaves a line in the crash log naming where it is",
+            move |_| {
+                CRASH_LOG_LEN.set(crash_log().len());
+                std::thread::sleep(Duration::from_secs(7));
+            },
+            move |_| {
+                let added = crash_log().get(CRASH_LOG_LEN.get()..).unwrap_or("").to_string();
+                added.contains("Not responding") && added.contains("exe+0x")
+            },
+        )
+        .wait(15000);
 
         RUN.set(Some(SelfTest { steps: s.0, index: 0, started: None, busy: false, failures: 0 }));
         self.quiet.set(true); // the steps trigger errors on purpose: no beeps

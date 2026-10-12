@@ -41,7 +41,8 @@ Notes for working on the code. `SPEC.md` decides what is right: section 4
   box and, after reading the command line, moves the working folder to System32,
   so the start folder can still be renamed or ejected.
 - `crashlog.cpp`: writes `%TEMP%\qoqdir-crash.log` on a crash, a failed library
-  check or `abort()`.
+  check, an exception nothing caught or `abort()`, and a line saying where the
+  window's thread is when it stops answering.
 - `res/qoqdir.rc`, `res/qoqdir.manifest`, `res/qoqdir.ico` (next to `src/`): the
   manifest (modern controls, high DPI, long paths), the version block and the
   icon, which `scripts/make-icon.ps1` draws (`BUILDING.md`, section 4). The Rust

@@ -210,17 +210,47 @@ pub fn set_theme(control: HWND, name: &str) {
 }
 
 /// Icon and type name depend only on the extension: one cached shell call each, with no disk access.
+fn type_key(it: &Item) -> String {
+    if it.is_dir() { "\\".to_string() } else { extension_of(&it.name) }
+}
+
+/// Icon and type name depend only on the extension: one shell call, with no disk access (but the type's icon handler).
+fn ask_type(it: &Item) -> (i32, OsString) {
+    let (probe, attrs) = if it.is_dir() {
+        (wide("folder"), FILE_ATTRIBUTE_DIRECTORY)
+    } else {
+        (wide(format!("file{}", type_key(it))), FILE_ATTRIBUTE_NORMAL)
+    };
+    let flags = SHGFI_USEFILEATTRIBUTES | SHGFI_SYSICONINDEX | SHGFI_SMALLICON | SHGFI_TYPENAME;
+    file_info(&probe, attrs, flags).map(|s| (s.iIcon, from_wide(&s.szTypeName))).unwrap_or_default()
+}
+
+/// Cached for the UI thread: the folder icon, and the few items a load did not fill in (`fill_types`).
 fn type_info(it: &Item) -> (i32, OsString) {
-    let key = if it.is_dir() { "\\".to_string() } else { extension_of(&it.name) };
+    let key = type_key(it);
     if let Some(found) = TYPES.with(|t| t.borrow().get(&key).cloned()) {
         return found;
     }
-    let (probe, attrs) =
-        if it.is_dir() { (wide("folder"), FILE_ATTRIBUTE_DIRECTORY) } else { (wide(format!("file{key}")), FILE_ATTRIBUTE_NORMAL) };
-    let flags = SHGFI_USEFILEATTRIBUTES | SHGFI_SYSICONINDEX | SHGFI_SMALLICON | SHGFI_TYPENAME;
-    let info = file_info(&probe, attrs, flags).map(|s| (s.iIcon, from_wide(&s.szTypeName))).unwrap_or_default();
+    let info = ask_type(it);
     TYPES.with(|t| t.borrow_mut().insert(key, info.clone()));
     info
+}
+
+/// Each item's type name and, unless it has an icon of its own, its icon, from the shell's answer for the extension,
+/// asked once per extension. Worker thread: a file type's icon handler (a DLL some program installed) can hang, and
+/// asked here it hangs the load, not the window.
+pub fn fill_types(items: &mut [Item]) {
+    let mut seen: HashMap<String, (i32, OsString)> = HashMap::new();
+    for it in items.iter_mut() {
+        if it.type_text.is_some() {
+            continue; // a drive comes with its own
+        }
+        let (icon, text) = seen.entry(type_key(it)).or_insert_with(|| ask_type(it)).clone();
+        it.type_text = Some(text);
+        if !has_own_icon(it) {
+            it.icon = icon;
+        }
+    }
 }
 
 /// .exe, .lnk and the like have their own icon, read on a worker thread (`read_own_icons`): it may need the network.

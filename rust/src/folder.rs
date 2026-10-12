@@ -19,7 +19,12 @@ use windows::Win32::Storage::FileSystem::{
     GetFileAttributesExW, GetFileAttributesW, GetFileExInfoStandard, GetLogicalDrives, INVALID_FILE_ATTRIBUTES,
     WIN32_FILE_ATTRIBUTE_DATA, WIN32_FIND_DATAW,
 };
+use windows::Win32::Foundation::CloseHandle;
+use windows::Win32::System::Diagnostics::ToolHelp::{
+    CreateToolhelp32Snapshot, PROCESSENTRY32W, Process32FirstW, Process32NextW, TH32CS_SNAPPROCESS,
+};
 use windows::Win32::System::Environment::ExpandEnvironmentStringsW;
+use windows::Win32::System::Threading::GetCurrentProcessId;
 use windows::Win32::System::Time::{FileTimeToSystemTime, SystemTimeToTzSpecificLocalTime};
 use windows::Win32::UI::Shell::{
     SHFILEINFOW, SHGFI_DISPLAYNAME, SHGFI_SMALLICON, SHGFI_SYSICONINDEX, SHGFI_TYPENAME, SHGetFileInfoW,
@@ -237,6 +242,25 @@ pub struct CommandLine {
     pub help: bool,             // -h or -?
     pub self_test: bool,        // --selftest
     pub error: Option<String>,  // a mistake to show with the help
+}
+
+/// The program this one was started from, as its exe file name in lower case ("powershell.exe"); None if unknown.
+pub fn parent_process_name() -> Option<OsString> {
+    let mut processes = Vec::new(); // (id, parent id, exe name)
+    unsafe {
+        let snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0).ok()?;
+        let mut e = PROCESSENTRY32W { dwSize: size_of::<PROCESSENTRY32W>() as u32, ..Default::default() };
+        let mut more = Process32FirstW(snap, &mut e).is_ok();
+        while more {
+            let end = e.szExeFile.iter().position(|&c| c == 0).unwrap_or(e.szExeFile.len());
+            processes.push((e.th32ProcessID, e.th32ParentProcessID, from_wide(&e.szExeFile[..end])));
+            more = Process32NextW(snap, &mut e).is_ok();
+        }
+        let _ = CloseHandle(snap);
+    }
+    let me = unsafe { GetCurrentProcessId() };
+    let parent = processes.iter().find(|p| p.0 == me)?.1;
+    processes.into_iter().find(|p| p.0 == parent).map(|p| p.2.to_ascii_lowercase())
 }
 
 pub fn parse_command_line(args: &[OsString]) -> CommandLine {
@@ -893,5 +917,42 @@ mod tests {
         let stopped = list_folder(&system, false, Some(&|| true));
         assert!(stopped.error.is_some_and(|e| e.code() == ERROR_OPERATION_ABORTED.to_hresult()) && stopped.items.is_empty());
         assert!(list_folder(&system, false, Some(&|| false)).items.len() > 256);
+    }
+    /// Runs this test program again on one test, with `QOQDIR_CHILD` set and TEMP moved to `temp`; its exit code.
+    fn run_self(test: &str, child: &str, temp: &Path) -> i32 {
+        std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", test, "--nocapture"])
+            .env("QOQDIR_CHILD", child)
+            .env("TEMP", temp)
+            .env("TMP", temp)
+            .output()
+            .map_or(-1, |o| o.status.code().unwrap_or(-1))
+    }
+
+    // The program this one was started from is named (main.rs sends PowerShell, and only PowerShell, an Enter).
+    #[test]
+    fn parent_process() {
+        if std::env::var_os("QOQDIR_CHILD").is_some_and(|c| c == "parent") {
+            let me = std::env::current_exe().unwrap().file_name().unwrap().to_ascii_lowercase();
+            std::process::exit(if parent_process_name() == Some(me) { 0 } else { 5 });
+        }
+        assert_eq!(run_self("folder::tests::parent_process", "parent", &std::env::temp_dir()), 0);
+    }
+
+    // A panic stops the program with exit code 3, and the crash log says what and where (4.10).
+    #[test]
+    fn panic_is_logged() {
+        if std::env::var_os("QOQDIR_CHILD").is_some_and(|c| c == "panic") {
+            crate::crashlog::install();
+            panic!("the test's own panic");
+        }
+        let temp = std::env::temp_dir().join("qoqdir-unit-tests");
+        let _ = std::fs::create_dir(&temp);
+        let log = temp.join("qoqdir-crash.log");
+        let _ = std::fs::remove_file(&log);
+        assert_eq!(run_self("folder::tests::panic_is_logged", "panic", &temp), 3);
+        let text = std::fs::read_to_string(&log).unwrap_or_default();
+        assert!(text.contains("the test's own panic") && text.contains("folder.rs"), "{text}");
+        let _ = std::fs::remove_dir_all(&temp);
     }
 }

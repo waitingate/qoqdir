@@ -19,16 +19,19 @@ use windows::Win32::Graphics::Gdi::{
 use windows::Win32::Storage::FileSystem::CreateDirectoryW;
 use windows::Win32::System::Diagnostics::Debug::MessageBeep;
 use windows::Win32::System::LibraryLoader::GetModuleFileNameW;
+use windows::Win32::System::Com::{CLSCTX_INPROC_SERVER, CoCreateInstance};
 use windows::Win32::System::DataExchange::IsClipboardFormatAvailable;
 use windows::Win32::System::Ole::{CF_HDROP, IDropTarget, RegisterDragDrop, RevokeDragDrop};
 use windows::Win32::System::SystemServices::MK_LBUTTON;
 use windows::Win32::System::WindowsProgramming::{GetPrivateProfileStringW, WritePrivateProfileStringW};
+use windows::Win32::UI::Accessibility::{CLSID_AccPropServices, IAccPropServices, PROPID_ACC_NAME};
 use windows::Win32::UI::Controls::{
     EM_GETSEL, EM_REPLACESEL, EM_SETCUEBANNER, EM_SETSEL, LVIR_LABEL, LVIS_SELECTED, LVITEMW, LVM_CANCELEDITLABEL,
     LVHITTESTINFO, LVM_GETITEMRECT, LVM_HITTEST, LVM_SETITEMSTATE, LVN_BEGINDRAG, LVN_BEGINRDRAG, LVN_ENDLABELEDITW, LVN_ITEMACTIVATE,
     LVM_SETBKCOLOR, LVM_SETTEXTBKCOLOR, TVM_SETBKCOLOR, LVN_ITEMCHANGED, LVN_ODSTATECHANGED, NM_RCLICK, NMHDR, NMLVDISPINFOW, SB_SETPARTS, SB_SETTEXTW,
     TCHITTESTINFO, TCIF_TEXT, TCITEMW, TCM_DELETEALLITEMS, TCM_GETCURSEL, TCM_GETITEMRECT, TCM_HITTEST, TCM_INSERTITEMW,
-    TCM_SETCURSEL, TCM_SETMINTABWIDTH, TCN_SELCHANGE,
+    TCM_SETCURSEL, TCM_SETMINTABWIDTH, TCN_SELCHANGE, TOOLTIPS_CLASSW, TTF_IDISHWND, TTF_SUBCLASS, TTM_ADDTOOLW,
+    TTS_ALWAYSTIP, TTTOOLINFOW,
 };
 use windows::Win32::UI::HiDpi::{GetDpiForSystem, GetDpiForWindow, SystemParametersInfoForDpi};
 use windows::Win32::UI::Input::KeyboardAndMouse::{
@@ -38,12 +41,12 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
 };
 use windows::Win32::UI::Shell::{DefSubclassProc, FOLDERID_Profile, SHACF_FILESYS_DIRS, SHAutoComplete, SetWindowSubclass};
 use windows::Win32::UI::WindowsAndMessaging::{
-    AppendMenuW, CW_USEDEFAULT, CreatePopupMenu, CreateWindowExW, DefWindowProcW, DestroyWindow, GCLP_HBRBACKGROUND,
+    AppendMenuW, CHILDID_SELF, CW_USEDEFAULT, CreatePopupMenu, CreateWindowExW, DefWindowProcW, DestroyWindow, GCLP_HBRBACKGROUND,
     GWLP_USERDATA, GetClientRect, GetCursorPos, GetParent, GetWindowLongPtrW, GetWindowPlacement, GetWindowRect,
     HMENU, HTCLIENT, IDC_ARROW, IDC_SIZEWE, IsChild, KillTimer, WPF_RESTORETOMAXIMIZED, LoadCursorW, LoadIconW, MB_ICONQUESTION,
     IDCANCEL, IDYES, MB_ICONWARNING, MB_OKCANCEL, MB_YESNOCANCEL, MF_GRAYED, MF_SEPARATOR, MF_STRING, MINMAXINFO, MSG,
     MessageBoxW, MoveWindow,
-    NONCLIENTMETRICSW, PostMessageW, PostQuitMessage, RegisterClassExW, SIZE_MINIMIZED, SPI_GETHIGHCONTRAST,
+    NONCLIENTMETRICSW, OBJID_CLIENT, PostMessageW, PostQuitMessage, RegisterClassExW, SIZE_MINIMIZED, SPI_GETHIGHCONTRAST,
     SPI_GETNONCLIENTMETRICS, SW_SHOWMAXIMIZED, SW_SHOWNOACTIVATE, SW_SHOWNORMAL, SWP_NOACTIVATE, SWP_NOZORDER, SetClassLongPtrW,
     SetCursor, SetTimer, SetWindowLongPtrW, SetWindowPlacement, SetWindowPos, ShowWindow, SystemParametersInfoW, TPM_RETURNCMD,
     TPM_RIGHTBUTTON, TrackPopupMenuEx, WINDOW_EX_STYLE, WINDOW_STYLE, WINDOWPLACEMENT, WM_ACTIVATE, WM_APP,
@@ -51,7 +54,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
     WM_DPICHANGED, WM_DRAWITEM, WM_ENDSESSION, WM_GETMINMAXINFO, WM_INITMENUPOPUP, WM_KEYDOWN, WM_LBUTTONDBLCLK,
     WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONUP, WM_MEASUREITEM, WM_MENUCHAR, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_NOTIFY, WM_SETCURSOR, WM_SETFONT, WM_SIZE,
     WM_SYSCOLORCHANGE, WM_SYSKEYDOWN, WM_TIMER, WNDCLASSEXW, WS_CHILD, WS_CLIPCHILDREN, WS_EX_CLIENTEDGE, WS_OVERLAPPEDWINDOW,
-    WS_TABSTOP, WS_VISIBLE,
+    WS_POPUP, WS_TABSTOP, WS_VISIBLE,
 };
 use windows::core::{PCWSTR, PWSTR, w};
 
@@ -62,7 +65,7 @@ use crate::folder::{
     is_relative_path, is_shortcut, list_folder, normalize, row_after_deleting,
 };
 use crate::shell::{
-    FolderWatch, IconBatch, OwnItem, acknowledge_change, has_own_icon, read_own_icons, remember_icons, background_menu, bookmark_folder, copy_to_clipboard, delete_items, drag_out, open_in_explorer,
+    FolderWatch, IconBatch, OwnItem, acknowledge_change, fill_types, has_own_icon, read_own_icons, remember_icons, background_menu, bookmark_folder, copy_to_clipboard, delete_items, drag_out, open_in_explorer,
     shortcut_target, forward_menu_message, in_background, invoke_verb, item_menu, item_menu_at, known_folder, new_drop_target, open_file,
     paste_into, post, rename_item, run_command, save_folder_shortcuts, saved_folders, show_menu,
 };
@@ -189,10 +192,12 @@ pub struct Key {
 
 pub struct App {
     pub wnd: HWND,
-    back: HWND,
-    forward: HWND,
-    up: HWND,
+    pub back: HWND,
+    pub forward: HWND,
+    pub up: HWND,
     pub refresh: HWND,
+    #[cfg_attr(not(feature = "selftest"), allow(dead_code))] // only the self-test asks the tooltips anything
+    pub tips: HWND,
     pub address: HWND,
     pub filter: HWND,
     pub tab_bar: HWND,
@@ -414,6 +419,38 @@ impl App {
             // Windows' plain tabs, as in its dialogs (the current one white and taller), all one width (show_tabs).
             let tab_bar = make(w!("SysTabControl32"), w!(""), TCS_FOCUSNEVER, 0, ID_TABS);
             let plus = make(w!("BUTTON"), w!("+"), 0, 0, ID_PLUS);
+            // Each button's tooltip says what it does and its key, and screen readers read the same as its name (5.1).
+            let tips = CreateWindowExW(
+                WINDOW_EX_STYLE(0),
+                TOOLTIPS_CLASSW,
+                None,
+                WINDOW_STYLE(WS_POPUP.0 | TTS_ALWAYSTIP),
+                CW_USEDEFAULT,
+                CW_USEDEFAULT,
+                CW_USEDEFAULT,
+                CW_USEDEFAULT,
+                Some(wnd),
+                None,
+                Some(instance),
+                None,
+            )
+            .unwrap_or_default();
+            let names: Option<IAccPropServices> = CoCreateInstance(&CLSID_AccPropServices, None, CLSCTX_INPROC_SERVER).ok();
+            for (h, text) in [(back, "Back (Alt+Left)"), (forward, "Forward (Alt+Right)"), (up, "Up (Backspace)"), (refresh, "Refresh (F5)")] {
+                let text = wide(text);
+                let info = TTTOOLINFOW {
+                    cbSize: size_of::<TTTOOLINFOW>() as u32,
+                    uFlags: TTF_IDISHWND | TTF_SUBCLASS,
+                    hwnd: wnd,
+                    uId: h.0 as usize,
+                    lpszText: PWSTR(text.as_ptr() as *mut _),
+                    ..Default::default()
+                };
+                send(tips, TTM_ADDTOOLW, 0, &info as *const _ as isize);
+                if let Some(names) = &names {
+                    let _ = names.SetHwndPropStr(h, OBJID_CLIENT.0 as u32, CHILDID_SELF, PROPID_ACC_NAME, pcwstr(&text));
+                }
+            }
             let exe = {
                 let mut buf = [0u16; 32768];
                 let n = GetModuleFileNameW(None, &mut buf) as usize;
@@ -439,6 +476,7 @@ impl App {
                 forward,
                 up,
                 refresh,
+                tips,
                 address,
                 filter,
                 tab_bar,
@@ -532,6 +570,7 @@ impl App {
             let (location, view) = app.with_tab(|t| (t.location.clone(), t.view.clone()));
             app.open(location, Nav::Switch, view);
             app.focus_list();
+            crate::crashlog::watch_for_hangs(wnd);
             Some(app)
         }
     }
@@ -1467,7 +1506,10 @@ impl App {
         in_background(move || {
             let replaced = || NEWEST_LOAD.load(Ordering::SeqCst) != generation;
             // Hidden items too: Ctrl+H only shows or hides them.
-            let listing = list_folder(&location, true, Some(&replaced));
+            let mut listing = list_folder(&location, true, Some(&replaced));
+            if !replaced() {
+                fill_types(&mut listing.items); // the shell's type names and icons, off the window's thread
+            }
             let own: Vec<OsString> = listing.items.iter().filter(|it| has_own_icon(it)).map(|it| it.name.clone()).collect();
             post(wnd, WM_APP_LOADED, generation as usize, Box::new(listing));
             // Then the icons that need a disk (or network) lookup, so they never hold up the list.

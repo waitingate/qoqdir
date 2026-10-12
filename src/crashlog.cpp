@@ -1,15 +1,21 @@
 #include "crashlog.h"
 
 #include "folder.h"
+
+#include <string>
 #include "version.h"
 
 #include <csignal>
 #include <cstdio>
 #include <cstdlib>
+#include <cxxabi.h>
+#include <exception>
+#include <typeinfo>
 
 // Spec 4.10: an internal bug stops the program and %TEMP%\qoqdir-crash.log says why. Hooks: CPU faults
-// (onCrash), failed _GLIBCXX_ASSERTIONS checks (at the bottom) and abort() (onAbort). Lines are built in
-// stack buffers and written with Win32 calls: the heap may be what broke. Addresses are exe offsets (ASLR);
+// (onCrash), failed _GLIBCXX_ASSERTIONS checks (at the bottom), an exception nothing caught (onTerminate) and
+// abort() (onAbort). Lines are built in stack buffers and written with Win32 calls: the heap may be what broke
+// (naming an exception's type is the one heap use, and only then). Addresses are exe offsets (ASLR);
 // to name one, use the debug copy release.ps1 keeps: addr2line -e qoqdir-<version>-debug.exe 0x140000000+offset
 
 namespace {
@@ -29,9 +35,7 @@ const char* describe(const void* p, char* out, size_t size) {
     return out;
 }
 
-void logCrash(const char* what) {
-    if (logged) return;   // a failed assertion is logged with its text; the abort() it leads to adds nothing
-    logged = true;
+void writeLine(const char* what) {
     HANDLE f = CreateFileW(logPath, FILE_APPEND_DATA, FILE_SHARE_READ, nullptr, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL,
                            nullptr);
     if (f == INVALID_HANDLE_VALUE) return;
@@ -43,6 +47,12 @@ void logCrash(const char* what) {
     DWORD written = 0;
     if (n > 0) WriteFile(f, line, DWORD(n < int(sizeof line) ? n : int(sizeof line) - 1), &written, nullptr);
     CloseHandle(f);
+}
+
+void logCrash(const char* what) {
+    if (logged) return;   // a failed assertion is logged with its text; the abort() it leads to adds nothing
+    logged = true;
+    writeLine(what);
 }
 
 LONG WINAPI onCrash(EXCEPTION_POINTERS* e) {
@@ -60,7 +70,101 @@ void onAbort(int) {
     TerminateProcess(GetCurrentProcess(), 3);
 }
 
+// An exception nothing caught: its type and message, then abort() as the library would.
+void onTerminate() {
+    char what[1024];
+    try {
+        if (std::exception_ptr e = std::current_exception()) std::rethrow_exception(e);
+        logCrash("terminate() was called with no exception");
+    } catch (const std::exception& e) {
+        int status = 0;
+        char* name = abi::__cxa_demangle(typeid(e).name(), nullptr, nullptr, &status);
+        snprintf(what, sizeof what, "Uncaught %s: %s", status == 0 && name ? name : typeid(e).name(), e.what());
+        free(name);
+        logCrash(what);
+    } catch (...) {
+        logCrash("Uncaught exception of a type that is not a std::exception");
+    }
+    abort();
+}
+
+// ---------------------------------------------------------------- hangs
+
+HWND g_watched = nullptr;
+DWORD g_windowThread = 0;
+
+// One frame as "exe+0x1234" or "name.dll+0x1234" (the bare address when it is in no module).
+const char* frameText(DWORD64 pc, char* out, size_t size) {
+    HMODULE m = nullptr;
+    if (!GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                            reinterpret_cast<LPCWSTR>(pc), &m) || !m) {
+        snprintf(out, size, "0x%llx", static_cast<unsigned long long>(pc));
+        return out;
+    }
+    auto offset = static_cast<unsigned long long>(pc - reinterpret_cast<DWORD64>(m));
+    if (reinterpret_cast<const char*>(m) == exeBase) {
+        snprintf(out, size, "exe+0x%llx", offset);
+        return out;
+    }
+    wchar_t path[MAX_PATH] = {};
+    GetModuleFileNameW(m, path, MAX_PATH);
+    const wchar_t* name = wcsrchr(path, L'\\');
+    snprintf(out, size, "%ls+0x%llx", name ? name + 1 : path, offset);
+    return out;
+}
+
+// Every second: once the window is hung, its thread's stack, once per hang. (A thread's stack in this process is
+// readable; a function without unwind data is a leaf, whose return address is on top of the stack.)
+DWORD WINAPI hangWatch(void*) {
+    bool said = false;
+    for (;; Sleep(1000)) {
+        if (!IsWindow(g_watched)) return 0;
+        if (!IsHungAppWindow(g_watched)) {
+            said = false;
+            continue;
+        }
+        if (said) continue;
+        said = true;
+        char line[1200];
+        int n = snprintf(line, sizeof line, "Not responding for 5 s; the window thread is at");
+        HANDLE t = OpenThread(THREAD_GET_CONTEXT | THREAD_SUSPEND_RESUME, FALSE, g_windowThread);
+        if (t && SuspendThread(t) != DWORD(-1)) {
+            CONTEXT c{};
+            c.ContextFlags = CONTEXT_CONTROL | CONTEXT_INTEGER;
+            if (GetThreadContext(t, &c)) {
+                for (int i = 0; i < 24 && c.Rip && n < int(sizeof line) - 100; ++i) {
+                    char frame[300];
+                    n += snprintf(line + n, sizeof line - size_t(n), "%s %s", i ? " <" : "", frameText(c.Rip, frame, sizeof frame));
+                    DWORD64 base = 0;
+                    RUNTIME_FUNCTION* fn = RtlLookupFunctionEntry(c.Rip, &base, nullptr);
+                    if (!fn) {
+                        c.Rip = *reinterpret_cast<DWORD64*>(c.Rsp);
+                        c.Rsp += 8;
+                        continue;
+                    }
+                    void* handler = nullptr;
+                    DWORD64 frameBase = 0;
+                    RtlVirtualUnwind(UNW_FLAG_NHANDLER, base, c.Rip, fn, &c, &handler, &frameBase, nullptr);
+                }
+            }
+            ResumeThread(t);
+        }
+        if (t) CloseHandle(t);
+        writeLine(line);
+    }
+}
+
 }  // namespace
+
+void crashLogIn(const std::wstring& dir) {
+    lstrcpynW(logPath, joinPath(dir, toLower(kAppName) + L"-crash.log").c_str(), MAX_PATH);
+}
+
+void watchForHangs(HWND window) {
+    g_watched = window;
+    g_windowThread = GetCurrentThreadId();
+    if (HANDLE t = CreateThread(nullptr, 0, hangWatch, nullptr, 0, nullptr)) CloseHandle(t);
+}
 
 void installCrashLog() {
     wchar_t temp[MAX_PATH] = {};
@@ -72,6 +176,7 @@ void installCrashLog() {
     ULONG guard = 64 * 1024;   // after a stack overflow the filter runs on what is left of the stack: keep room
     SetThreadStackGuarantee(&guard);
     SetUnhandledExceptionFilter(onCrash);
+    std::set_terminate(onTerminate);
     signal(SIGABRT, onAbort);
     _set_error_mode(_OUT_TO_STDERR);   // or msvcrt's abort() first shows a "Microsoft Visual C++ Runtime Library" box
 }

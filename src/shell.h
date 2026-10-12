@@ -22,6 +22,10 @@ struct IconBatch {
 IconBatch readOwnIcons(const std::wstring& dir, const std::vector<std::wstring>& names);   // worker thread
 void rememberIcons(const IconBatch& batch);                                                 // UI thread
 int folderIcon();
+// Each item's type name and, unless it has an icon of its own, its icon, from the shell's answer for the extension,
+// asked once per extension. Worker thread: a file type's icon handler (a DLL some program installed) can hang, and
+// asked here it hangs the load, not the window.
+void fillTypes(std::vector<Item>& items);
 const std::wstring& typeName(const Item& it);          // UI thread only (cached)
 std::wstring knownFolder(REFKNOWNFOLDERID id);
 

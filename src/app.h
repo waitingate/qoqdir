@@ -148,7 +148,7 @@ private:
     bool useSettings_ = true;
 
     HWND wnd_ = nullptr, back_ = nullptr, forward_ = nullptr, up_ = nullptr, refresh_ = nullptr, address_ = nullptr,
-         filter_ = nullptr, tabBar_ = nullptr, plus_ = nullptr, status_ = nullptr, lastFocus_ = nullptr;
+         filter_ = nullptr, tabBar_ = nullptr, plus_ = nullptr, status_ = nullptr, tips_ = nullptr, lastFocus_ = nullptr;
     FileList list_;
     FolderTree tree_;
     Com<IDropTarget> tabDrop_;      // files dropped on a tab go to its folder

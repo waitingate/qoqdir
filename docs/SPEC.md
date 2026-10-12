@@ -103,6 +103,10 @@ These describe what the user sees. Each must hold in every situation.
   disk, refreshes.
 - If a load takes more than about a quarter second, the status bar says
   "Loading…" until the folder arrives or the load is replaced.
+- The shell is asked about the file types in a folder (their names and icons) on
+  the loader thread too: a file type's icon handler, a DLL some program
+  installed, can hang, and then it hangs the load, not the window. (Explorer
+  hangs on such a folder.)
 
 ### 4.2 The newest request wins
 - A new navigation (another folder, Back, another tab) replaces any load still
@@ -191,7 +195,13 @@ Targets on an ordinary SSD laptop with a folder of 10,000 files (faster is fine)
 ### 4.10 Crashes
 - On an internal bug the program stops at once instead of running on with
   corrupt memory, and when it can, it writes the reason to
-  `%TEMP%\qoqdir-crash.log`, after the time and the version.
+  `%TEMP%\qoqdir-crash.log`, after the time and the version: the fault's
+  address, the failed check, or an exception nothing caught, with its type and
+  message (a panic's message and place in the Rust version).
+- A window that answers nothing for 5 s (Windows calls it not responding) gets a
+  line in the same log saying where its thread is: each frame of its stack as an
+  exe offset or a DLL name, so a hung shell extension names itself. The program
+  goes on; one line per hang.
 
 ## 5. Features
 
@@ -206,7 +216,9 @@ Targets on an ordinary SSD laptop with a folder of 10,000 files (faster is fine)
 
 The window title is the folder's name alone (`This PC` for This PC), as in
 Explorer; the window's icon says which program it is.
-Back, Forward and Up are disabled when they can't do anything.
+Back, Forward and Up are disabled when they can't do anything. Each of the four
+buttons has a tooltip that names it with its key ("Back (Alt+Left)"), and screen
+readers read the same as the button's name.
 
 ### 5.2 Look
 - Window, list and tree have a soft gray background, RGB(235, 235, 235)
@@ -488,9 +500,11 @@ qoqdir [options] [folder ...]
   else to the terminal it was typed in, else (a shortcut, Run) to a box titled
   with the version. cmd and PowerShell don't wait for a window program, so they
   may be waiting for the next command before the help: then the help goes below
-  that line and Qoqdir sends the terminal an Enter, so a fresh input line
-  follows the help. No Enter when the cursor is at the start of a line, as in a
-  `.bat` file, which waits.
+  that line. PowerShell (powershell.exe or pwsh.exe) also gets an Enter, so a
+  fresh input line follows the help: its input line would otherwise be drawn
+  over the help as soon as a key is typed. cmd gets none, as it draws nothing
+  over the help, and nor does a `.bat` file, where a `pause` after qoqdir would
+  take it.
 - The command-line help is short, in plain words, at most 72 columns: version,
   usage, options, examples, notes on quotes and scripts, and the files next to
   the exe.
@@ -551,6 +565,11 @@ At least these, with concrete examples:
 - Listing a real folder: no `.` or `..`, a missing folder gives an error, This PC
   lists at least one drive, and a path that is a file is reported as one.
 - Spotting shortcuts by extension (`.lnk`, `.url`, any letter case).
+- The crash log: a program that throws an exception nothing catches (a panic in
+  the Rust version) ends with exit code 3, and the log line names the
+  exception's type and message (the panic's message and place).
+- The parent process: a program this one started names it (its exe file name,
+  lower case).
 
 ### 7.2 Self-test (`qoqdir-test --selftest`)
 `qoqdir-test.exe` is the same compiled app as `qoqdir.exe` plus the self-test,
@@ -710,6 +729,9 @@ result:
     `Bookmarks\<name>.lnk`, and the tree shows it. A drag held over This PC in
     the tree is refused, and the status bar says only a folder on this PC takes
     a drop.
+65. The four toolbar buttons carry the tooltips and accessible names of 5.1.
+66. Last, a window thread stuck for 7 s leaves a line in the crash log naming
+    where it is (the self-test's crash log is in its own folder).
 
 ### 7.3 Command-line checks
 Run on a copy of the exe in a temp folder:
