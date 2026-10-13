@@ -109,8 +109,11 @@ struct Aligned(CONTEXT); // GetThreadContext wants a 16-byte aligned record
 
 /// Once Windows calls the window not responding (5 s without a message read), logs where its thread is: each frame of
 /// its stack as an exe offset or a DLL name, so a hung shell extension names itself. Call from the window's thread.
-/// Every second, once per hang. (A thread's stack in this process is readable; a function without unwind data is a
-/// leaf, whose return address is on top of the stack.)
+/// Every second, once per hang. While the thread is stopped only its registers are read and the frames walked, into
+/// an array on the stack (a thread's stack in this process is readable; a function without unwind data is a leaf,
+/// whose return address is on top of the stack). The frames are named once it runs again: naming a module allocates
+/// and takes a loader lock, and a thread hung inside a DLL load (a shell extension) holds both, so the watcher would
+/// wait for the very thread it has stopped, for good.
 pub fn watch_for_hangs(window: HWND) {
     let (wnd, thread) = (window.0 as isize, unsafe { GetCurrentThreadId() });
     std::thread::spawn(move || {
@@ -131,19 +134,17 @@ pub fn watch_for_hangs(window: HWND) {
                 continue;
             }
             said = true;
-            let mut line = String::from("Not responding for 5 s; the window thread is at");
+            let mut frames = [0u64; 24];
+            let mut count = 0;
             unsafe {
                 if let Ok(t) = OpenThread(THREAD_GET_CONTEXT | THREAD_SUSPEND_RESUME, false, thread) {
                     if SuspendThread(t) != u32::MAX {
                         let flags = CONTEXT_CONTROL_AMD64 | CONTEXT_INTEGER_AMD64;
                         let mut c = Aligned(CONTEXT { ContextFlags: flags, ..Default::default() });
                         if GetThreadContext(t, &mut c.0).is_ok() {
-                            for i in 0..24 {
-                                if c.0.Rip == 0 || line.len() > 1000 {
-                                    break;
-                                }
-                                line.push_str(if i == 0 { " " } else { " < " });
-                                line.push_str(&frame_text(c.0.Rip));
+                            while count < frames.len() && c.0.Rip != 0 {
+                                frames[count] = c.0.Rip;
+                                count += 1;
                                 let mut base = 0u64;
                                 let f = RtlLookupFunctionEntry(c.0.Rip, &mut base, None);
                                 if f.is_null() {
@@ -159,6 +160,14 @@ pub fn watch_for_hangs(window: HWND) {
                     }
                     let _ = CloseHandle(t);
                 }
+            }
+            let mut line = String::from("Not responding for 5 s; the window thread is at");
+            for (i, &pc) in frames[..count].iter().enumerate() {
+                if line.len() > 1000 {
+                    break;
+                }
+                line.push_str(if i == 0 { " " } else { " < " });
+                line.push_str(&frame_text(pc));
             }
             log(format_args!("{line}"));
         }

@@ -113,8 +113,11 @@ const char* frameText(DWORD64 pc, char* out, size_t size) {
     return out;
 }
 
-// Every second: once the window is hung, its thread's stack, once per hang. (A thread's stack in this process is
-// readable; a function without unwind data is a leaf, whose return address is on top of the stack.)
+// Every second: once the window is hung, its thread's stack, once per hang. While the thread is stopped only its
+// registers are read and the frames walked (a thread's stack in this process is readable; a function without
+// unwind data is a leaf, whose return address is on top of the stack). The frames are named once it runs again:
+// naming a module takes a loader lock, and a thread hung inside a DLL load (a shell extension) holds that lock, so
+// the watcher would wait for the very thread it has stopped, for good.
 DWORD WINAPI hangWatch(void*) {
     bool said = false;
     for (;; Sleep(1000)) {
@@ -125,16 +128,15 @@ DWORD WINAPI hangWatch(void*) {
         }
         if (said) continue;
         said = true;
-        char line[1200];
-        int n = snprintf(line, sizeof line, "Not responding for 5 s; the window thread is at");
+        DWORD64 frames[24];
+        int count = 0;
         HANDLE t = OpenThread(THREAD_GET_CONTEXT | THREAD_SUSPEND_RESUME, FALSE, g_windowThread);
         if (t && SuspendThread(t) != DWORD(-1)) {
             CONTEXT c{};
             c.ContextFlags = CONTEXT_CONTROL | CONTEXT_INTEGER;
             if (GetThreadContext(t, &c)) {
-                for (int i = 0; i < 24 && c.Rip && n < int(sizeof line) - 100; ++i) {
-                    char frame[300];
-                    n += snprintf(line + n, sizeof line - size_t(n), "%s %s", i ? " <" : "", frameText(c.Rip, frame, sizeof frame));
+                for (; count < 24 && c.Rip; ++count) {
+                    frames[count] = c.Rip;
                     DWORD64 base = 0;
                     RUNTIME_FUNCTION* fn = RtlLookupFunctionEntry(c.Rip, &base, nullptr);
                     if (!fn) {
@@ -150,6 +152,12 @@ DWORD WINAPI hangWatch(void*) {
             ResumeThread(t);
         }
         if (t) CloseHandle(t);
+        char line[1200];
+        int n = snprintf(line, sizeof line, "Not responding for 5 s; the window thread is at");
+        for (int i = 0; i < count && n < int(sizeof line) - 100; ++i) {
+            char frame[300];
+            n += snprintf(line + n, sizeof line - size_t(n), "%s %s", i ? " <" : "", frameText(frames[i], frame, sizeof frame));
+        }
         writeLine(line);
     }
 }
