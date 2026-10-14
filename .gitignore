@@ -1,8 +1,28 @@
-# Build output (rebuilt from source)
+# Build output (rebuilt from source), also from a build by hand in src\
 /build/
 /build-*/
 /rust/target/
 /release/
+*.o
+*.obj
+*.exe
+*.dll
+*.pdb
 
-# Settings written next to a test exe
+# What the program writes next to its exe when run from here, and logs
 *.ini
+Bookmarks/
+*.lnk
+*.url
+*.log
+
+# Archives, editor files and leftovers
+*.zip
+*.7z
+*.bak
+*.orig
+*~
+.vs/
+.vscode/
+.idea/
+Thumbs.db
