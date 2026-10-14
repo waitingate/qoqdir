@@ -1592,6 +1592,21 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
         [=, this] { return at(path(L"big")) && listed(L"aaa late.dat"); });
     add(L"(remove that file too)", [=, this] { DeleteFileW(path(L"big\\aaa late.dat").c_str()); refresh(); },
         [=, this] { return idle() && !listed(L"aaa late.dat"); });
+    // Shown by a tab switch, This PC must get its own watch and the folder shown before must lose its: a change there
+    // would reload This PC for nothing, and This PC's own changes would go unseen (4.5).
+    add(L"(a tab for This PC, shown by switching to it)", [=, this] { newTab(L"", true); },
+        [=, this] { return at(L"") && tabs_.size() == 2 && active_ == 1; });
+    auto unwatched = std::make_shared<std::pair<int, ULONGLONG>>();   // loads done so far, and when the check began
+    add(L"switching to a This PC tab drops the other tab's watch: a change in that folder reloads nothing (4.5)",
+        [=, this] { *unwatched = {loadsDone_, 0}; writeFile(path(L"big\\zz unwatched.dat")); },
+        [=, this] {
+            if (!unwatched->second) unwatched->second = GetTickCount64();
+            selfTest_->note = std::to_wstring(loadsDone_ - unwatched->first) + L" reload(s)";
+            return GetTickCount64() - unwatched->second >= 1500 && loadsDone_ == unwatched->first;   // 1.5 s of nothing
+        });
+    add(L"(remove that file and close the tab)",
+        [=, this] { DeleteFileW(path(L"big\\zz unwatched.dat").c_str()); closeTab(1); },
+        [=, this] { return at(path(L"big")) && tabs_.size() == 1 && !listed(L"zz unwatched.dat"); });
 
     add(L"copies 10,000 selected files to the clipboard",
         [=, this] {

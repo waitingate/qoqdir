@@ -730,7 +730,9 @@ result:
     the tree is refused, and the status bar says only a folder on this PC takes
     a drop.
 65. The four toolbar buttons carry the tooltips and accessible names of 5.1.
-66. Last, a window thread stuck for 7 s leaves a line in the crash log naming
+66. Shown by a tab switch, This PC gets its own change watch and the folder shown
+    before loses its: a file made in that folder reloads nothing.
+67. Last, a window thread stuck for 7 s leaves a line in the crash log naming
     where it is (the self-test's crash log is in its own folder).
 
 ### 7.3 Command-line checks

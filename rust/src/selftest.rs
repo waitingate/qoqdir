@@ -136,6 +136,7 @@ thread_local! {
     static DRAGGED: RefCell<Option<IDataObject>> = const { RefCell::new(None) }; // what a simulated drag carries
     static COUNT: Cell<u32> = const { Cell::new(0) };   // a load count to compare with
     static LOADS: Cell<(u32, u32)> = const { Cell::new((0, 0)) };
+    static UNWATCHED: Cell<(u32, Option<Instant>)> = const { Cell::new((0, None)) }; // loads done so far, and when the check began
     static FLAG: Cell<bool> = const { Cell::new(false) };
     static NEXT: RefCell<OsString> = const { RefCell::new(OsString::new()) }; // the item after the one Delete removes
     static RUN: RefCell<Option<SelfTest>> = const { RefCell::new(None) }; // the steps, and how far the run is
@@ -2326,6 +2327,33 @@ impl App {
                 a.refresh(ViewState::default());
             },
             |a| a.idle() && !a.listed("aaa late.dat"),
+        );
+        // Shown by a tab switch, This PC must get its own watch and the folder shown before must lose its: a change
+        // there would reload This PC for nothing, and This PC's own changes would go unseen (4.5).
+        s.add("(a tab for This PC, shown by switching to it)", |a| a.new_tab(Location::ThisPc, true), |a| {
+            a.at_pc() && a.tabs() == 2 && a.active() == 1
+        });
+        s.add(
+            "switching to a This PC tab drops the other tab's watch: a change in that folder reloads nothing (4.5)",
+            |a| {
+                UNWATCHED.set((a.loads_done.get(), None));
+                write_file(&p("big\\zz unwatched.dat"));
+            },
+            |a| {
+                let (loads, since) = UNWATCHED.get();
+                let since = since.unwrap_or_else(Instant::now);
+                UNWATCHED.set((loads, Some(since)));
+                note(format!("{} reload(s)", a.loads_done.get() - loads));
+                since.elapsed() >= Duration::from_millis(1500) && a.loads_done.get() == loads // 1.5 s of nothing
+            },
+        );
+        s.add(
+            "(remove that file and close the tab)",
+            |a| {
+                let _ = std::fs::remove_file(p("big\\zz unwatched.dat"));
+                a.close_tab(1);
+            },
+            |a| a.at(&p("big")) && a.tabs() == 1 && !a.listed("zz unwatched.dat"),
         );
 
         s.add(

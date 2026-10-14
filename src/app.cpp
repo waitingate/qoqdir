@@ -921,8 +921,9 @@ void App::onLoaded(Listing&& listing, UINT generation) {
     if (view.top < 0 || requested) list_.ensureVisible(row);   // ...but what the user just made or renamed shows
     if (view.rename && row >= 0) list_.rename(row);
 
-    // The watch stays while the folder shown stays: setting one up costs 25-75 ms, and a reload is not a change.
-    if (!sameFolder) watch_ = FolderWatch(wnd_, WM_APP_CHANGED, t.path);
+    // The watch stays while the folder shown stays: setting one up costs 25-75 ms, and a reload is not a change. A tab
+    // switch always sets one: the list was emptied for it, so for This PC "the same folder" would be the empty list.
+    if (!sameFolder || p.nav == Nav::Switch) watch_ = FolderWatch(wnd_, WM_APP_CHANGED, t.path);
     // A change during the read, before the watch was there, is missed by both: the folder's own time tells.
     FILETIME now = folderWritten(t.path);
     if (CompareFileTime(&now, &written) != 0) queueRefresh();

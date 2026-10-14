@@ -1628,8 +1628,9 @@ impl App {
             self.list.rename(row);
         }
 
-        // The watch stays while the folder shown stays: setting one up costs 25-75 ms, and a reload is not a change.
-        if !same_folder {
+        // The watch stays while the folder shown stays: setting one up costs 25-75 ms, and a reload is not a change. A
+        // tab switch always sets one: the list was emptied for it, so for This PC "the same folder" would be the empty list.
+        if !same_folder || pending.nav == Nav::Switch {
             let watch = FolderWatch::new(self.wnd, WM_APP_CHANGED, &location);
             let old_watch = self.st.borrow_mut().watch.replace(watch);
             drop(old_watch);
