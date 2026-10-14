@@ -113,11 +113,34 @@ const char* frameText(DWORD64 pc, char* out, size_t size) {
     return out;
 }
 
-// Every second: once the window is hung, its thread's stack, once per hang. While the thread is stopped only its
-// registers are read and the frames walked (a thread's stack in this process is readable; a function without
-// unwind data is a leaf, whose return address is on top of the stack). The frames are named once it runs again:
-// naming a module takes a loader lock, and a thread hung inside a DLL load (a shell extension) holds that lock, so
-// the watcher would wait for the very thread it has stopped, for good.
+// The unwind entry for pc, from its module's own exception table. RtlLookupFunctionEntry would do this, but it takes
+// the loader's table lock: a thread stopped while the loader holds it (a DLL being mapped) would never be resumed.
+RUNTIME_FUNCTION* functionEntry(DWORD64 pc, DWORD64* base) {
+    MEMORY_BASIC_INFORMATION mbi{};
+    if (!VirtualQuery(reinterpret_cast<void*>(pc), &mbi, sizeof mbi) || mbi.Type != MEM_IMAGE) return nullptr;
+    auto image = static_cast<char*>(mbi.AllocationBase);
+    auto nt = reinterpret_cast<const IMAGE_NT_HEADERS*>(image + reinterpret_cast<const IMAGE_DOS_HEADER*>(image)->e_lfanew);
+    const IMAGE_DATA_DIRECTORY& dir = nt->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_EXCEPTION];
+    auto table = reinterpret_cast<RUNTIME_FUNCTION*>(image + dir.VirtualAddress);
+    DWORD rva = DWORD(pc - reinterpret_cast<DWORD64>(image));
+    for (size_t lo = 0, hi = dir.Size / sizeof(RUNTIME_FUNCTION); lo < hi;) {
+        size_t mid = (lo + hi) / 2;
+        if (rva < table[mid].BeginAddress) hi = mid;
+        else if (rva >= table[mid].EndAddress) lo = mid + 1;
+        else {
+            *base = reinterpret_cast<DWORD64>(image);
+            RUNTIME_FUNCTION* f = &table[mid];
+            return f->UnwindData & 1 ? reinterpret_cast<RUNTIME_FUNCTION*>(image + (f->UnwindData & ~1u)) : f;   // indirect
+        }
+    }
+    return nullptr;
+}
+
+// Every second: once the window is hung, its thread's stack, once per hang. While the thread is stopped nothing that
+// takes a lock runs: its registers are read and the frames walked from the modules' own unwind tables (a thread's
+// stack in this process is readable; a function without unwind data is a leaf, whose return address is on top of the
+// stack). The frames are named once it runs again: naming a module takes a loader lock, and a thread hung inside a
+// DLL load (a shell extension) holds that lock, so the watcher would wait for the very thread it has stopped, for good.
 DWORD WINAPI hangWatch(void*) {
     bool said = false;
     for (;; Sleep(1000)) {
@@ -138,7 +161,7 @@ DWORD WINAPI hangWatch(void*) {
                 for (; count < 24 && c.Rip; ++count) {
                     frames[count] = c.Rip;
                     DWORD64 base = 0;
-                    RUNTIME_FUNCTION* fn = RtlLookupFunctionEntry(c.Rip, &base, nullptr);
+                    RUNTIME_FUNCTION* fn = functionEntry(c.Rip, &base);
                     if (!fn) {
                         c.Rip = *reinterpret_cast<DWORD64*>(c.Rsp);
                         c.Rsp += 8;

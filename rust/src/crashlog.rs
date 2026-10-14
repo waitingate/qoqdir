@@ -12,13 +12,15 @@ use windows::Win32::Storage::FileSystem::{
     CreateFileW, FILE_APPEND_DATA, FILE_ATTRIBUTE_NORMAL, FILE_SHARE_READ, OPEN_ALWAYS, WriteFile,
 };
 use windows::Win32::System::Diagnostics::Debug::{
-    CONTEXT, CONTEXT_CONTROL_AMD64, CONTEXT_INTEGER_AMD64, EXCEPTION_POINTERS, GetThreadContext, IMAGE_NT_HEADERS64,
-    RtlLookupFunctionEntry, RtlVirtualUnwind, SetUnhandledExceptionFilter, UNW_FLAG_NHANDLER,
+    CONTEXT, CONTEXT_CONTROL_AMD64, CONTEXT_INTEGER_AMD64, EXCEPTION_POINTERS, GetThreadContext,
+    IMAGE_DIRECTORY_ENTRY_EXCEPTION, IMAGE_NT_HEADERS64, IMAGE_RUNTIME_FUNCTION_ENTRY, RtlVirtualUnwind,
+    SetUnhandledExceptionFilter, UNW_FLAG_NHANDLER,
 };
 use windows::Win32::System::LibraryLoader::{
     GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS, GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT, GetModuleFileNameW,
     GetModuleHandleExW, GetModuleHandleW,
 };
+use windows::Win32::System::Memory::{MEM_IMAGE, MEMORY_BASIC_INFORMATION, VirtualQuery};
 use windows::Win32::System::SystemInformation::GetLocalTime;
 use windows::Win32::System::SystemServices::IMAGE_DOS_HEADER;
 use windows::Win32::System::Threading::{
@@ -107,13 +109,38 @@ fn frame_text(pc: u64) -> String {
 #[repr(C, align(16))]
 struct Aligned(CONTEXT); // GetThreadContext wants a 16-byte aligned record
 
+/// The unwind entry for `pc`, from its module's own exception table, with the module's base. RtlLookupFunctionEntry
+/// would do this, but it takes the loader's table lock: a thread stopped while the loader holds it (a DLL being
+/// mapped) would never be resumed.
+fn function_entry(pc: u64) -> Option<(u64, *const IMAGE_RUNTIME_FUNCTION_ENTRY)> {
+    let mut mbi = MEMORY_BASIC_INFORMATION::default();
+    let known = unsafe { VirtualQuery(Some(pc as usize as *const _), &mut mbi, size_of::<MEMORY_BASIC_INFORMATION>()) } != 0;
+    if !known || mbi.Type != MEM_IMAGE {
+        return None;
+    }
+    let image = mbi.AllocationBase as usize;
+    let entries = unsafe {
+        let dos = &*(image as *const IMAGE_DOS_HEADER);
+        let nt = &*((image + dos.e_lfanew as usize) as *const IMAGE_NT_HEADERS64);
+        let dir = nt.OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_EXCEPTION.0 as usize];
+        let table = (image + dir.VirtualAddress as usize) as *const IMAGE_RUNTIME_FUNCTION_ENTRY;
+        std::slice::from_raw_parts(table, dir.Size as usize / size_of::<IMAGE_RUNTIME_FUNCTION_ENTRY>())
+    };
+    let rva = (pc - image as u64) as u32;
+    let f = entries.get(entries.partition_point(|e| e.EndAddress <= rva)).filter(|e| e.BeginAddress <= rva)?;
+    let unwind = unsafe { f.Anonymous.UnwindData };
+    let f: *const IMAGE_RUNTIME_FUNCTION_ENTRY =
+        if unwind & 1 != 0 { (image + (unwind & !1) as usize) as *const _ } else { f }; // an indirect entry
+    Some((image as u64, f))
+}
+
 /// Once Windows calls the window not responding (5 s without a message read), logs where its thread is: each frame of
 /// its stack as an exe offset or a DLL name, so a hung shell extension names itself. Call from the window's thread.
-/// Every second, once per hang. While the thread is stopped only its registers are read and the frames walked, into
-/// an array on the stack (a thread's stack in this process is readable; a function without unwind data is a leaf,
-/// whose return address is on top of the stack). The frames are named once it runs again: naming a module allocates
-/// and takes a loader lock, and a thread hung inside a DLL load (a shell extension) holds both, so the watcher would
-/// wait for the very thread it has stopped, for good.
+/// Every second, once per hang. While the thread is stopped nothing that takes a lock runs: its registers are read and
+/// the frames walked from the modules' own unwind tables, into an array on the stack (a thread's stack in this process
+/// is readable; a function without unwind data is a leaf, whose return address is on top of the stack). The frames are
+/// named once it runs again: naming a module allocates and takes a loader lock, and a thread hung inside a DLL load (a
+/// shell extension) holds both, so the watcher would wait for the very thread it has stopped, for good.
 pub fn watch_for_hangs(window: HWND) {
     let (wnd, thread) = (window.0 as isize, unsafe { GetCurrentThreadId() });
     std::thread::spawn(move || {
@@ -145,13 +172,11 @@ pub fn watch_for_hangs(window: HWND) {
                             while count < frames.len() && c.0.Rip != 0 {
                                 frames[count] = c.0.Rip;
                                 count += 1;
-                                let mut base = 0u64;
-                                let f = RtlLookupFunctionEntry(c.0.Rip, &mut base, None);
-                                if f.is_null() {
+                                let Some((base, f)) = function_entry(c.0.Rip) else {
                                     c.0.Rip = *(c.0.Rsp as *const u64);
                                     c.0.Rsp += 8;
                                     continue;
-                                }
+                                };
                                 let (mut handler, mut frame) = (std::ptr::null_mut(), 0u64);
                                 let _ = RtlVirtualUnwind(UNW_FLAG_NHANDLER, base, c.0.Rip, f, &mut c.0, &mut handler, &mut frame, None);
                             }
