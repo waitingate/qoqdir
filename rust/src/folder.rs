@@ -305,7 +305,7 @@ pub fn parse_command_line(args: &[OsString]) -> CommandLine {
 pub struct Item {
     pub name: OsString,              // file name, or "C:\" for a drive
     pub label: Option<OsString>,     // shown instead of name (drives)
-    pub type_text: Option<OsString>, // type shown in the list; filled in by the file list (Type sort uses it)
+    pub type_text: Option<OsString>, // the type name shown, from the shell: the loader fills it (fill_types), the list what is left
     pub size: u64,
     pub modified: u64, // FILETIME as one number
     pub attrs: u32,

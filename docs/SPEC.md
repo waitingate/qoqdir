@@ -107,6 +107,11 @@ These describe what the user sees. Each must hold in every situation.
   the loader thread too: a file type's icon handler, a DLL some program
   installed, can hang, and then it hangs the load, not the window. (Explorer
   hangs on such a folder.)
+- Known limit: once a folder has loaded, its modified time is read and its
+  change watch set up on the window thread, and opening a shortcut reads the
+  .lnk file there. A server that stops answering in those moments holds the
+  window for Windows' own timeout (about 20 s); one that was off from the start
+  never does, since the load itself fails on the loader thread.
 
 ### 4.2 The newest request wins
 - A new navigation (another folder, Back, another tab) replaces any load still

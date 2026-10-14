@@ -43,7 +43,7 @@ CommandLine parseCommandLine(const std::vector<std::wstring>& args);
 struct Item {
     std::wstring name;    // file name, or "C:\" for a drive
     std::wstring label;   // text to show instead of name (drives only)
-    std::wstring type;    // type text to show; filled in by the file list (sorting by Type uses it)
+    std::wstring type;    // the type name shown, from the shell: the loader fills it (fillTypes), the list what is left
     uint64_t size = 0;
     FILETIME modified{};
     DWORD attrs = 0;
