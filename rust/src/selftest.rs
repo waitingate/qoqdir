@@ -46,10 +46,10 @@ use windows::Win32::UI::Shell::{
     SHGFI_SYSICONINDEX, SHGetFileInfoW, SHGetKnownFolderIDList, StrCmpLogicalW,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    BM_CLICK, CHILDID_SELF, FindWindowExW, OBJID_CLIENT, GCLP_HBRBACKGROUND, GWLP_USERDATA, GetClassLongPtrW, GetClientRect, GetWindowLongPtrW, GetWindowRect, GetWindowTextLengthW, IsWindowVisible,
+    BM_CLICK, CHILDID_SELF, FindWindowExW, HTCLIENT, OBJID_CLIENT, GCLP_HBRBACKGROUND, GWLP_USERDATA, GetClassLongPtrW, GetClientRect, GetWindowLongPtrW, GetWindowRect, GetWindowTextLengthW, IsWindowVisible,
     KillTimer, PostMessageW, SW_SHOWMINNOACTIVE, SW_SHOWNOACTIVATE, SetTimer, ShowWindow, WM_CHAR, WM_CLOSE,
-    WM_DEVICECHANGE, WM_DPICHANGED, WM_KEYDOWN, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONUP, WM_MOUSEMOVE, WM_MOUSEWHEEL,
-    WM_SYSKEYDOWN, WM_TIMER,
+    WM_DEVICECHANGE, WM_DPICHANGED, WM_KEYDOWN, WM_LBUTTONDBLCLK, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONUP, WM_MOUSEMOVE, WM_MOUSEWHEEL,
+    WM_NCHITTEST, WM_SYSKEYDOWN, WM_TIMER,
 };
 
 use crate::app::{App, Key, Nav, TIMER_LOADING, TIMER_REFRESH, ViewState};
@@ -1004,6 +1004,26 @@ impl App {
         });
         // Keeps the test folder's own tab.
         s.add("(close the other tabs)", |a| a.close_other_tabs(1), move |a| a.idle() && a.tabs() == 1 && a.at(&dir()));
+        s.add(
+            "a double-click on a tab opens no tab; one on the empty bar right of the tabs opens one, as \"+\" does",
+            |a| {
+                let r = tab_rect(a, 0);
+                let y = (r.top + r.bottom) / 2;
+                for x in [(r.left + r.right) / 2, r.right + scale(20, a.dpi.get())] {
+                    // on the tab, then right of it
+                    send(a.tab_bar, WM_LBUTTONDBLCLK, MK_LBUTTON.0 as usize, packed(x, y));
+                    send(a.tab_bar, WM_LBUTTONUP, 0, packed(x, y));
+                }
+            },
+            move |a| {
+                let r = tab_rect(a, a.tabs() - 1); // a real click lands only where the bar says it is its own: right of the last tab
+                let mut pt = POINT { x: r.right + scale(20, a.dpi.get()), y: (r.top + r.bottom) / 2 };
+                let _ = unsafe { ClientToScreen(a.tab_bar, &mut pt) };
+                let takes_click = send(a.tab_bar, WM_NCHITTEST, 0, packed(pt.x, pt.y)) == HTCLIENT as isize;
+                a.idle() && takes_click && a.tabs() == 2 && a.active() == 1 && a.at(&dir())
+            },
+        );
+        s.add("(close it)", |a| a.close_tab(1), move |a| a.idle() && a.tabs() == 1 && a.at(&dir()));
         s.check("a lone tab is 150 wide at 100% scaling", |a| tab_width(a) == scale(150, a.dpi.get()));
         let long_name = || Location::dir(p("a folder with a name too long for its tab")); // never opened: only its caption
         s.add(

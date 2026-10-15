@@ -5,6 +5,8 @@ detail list. It is meant to be started from Windows Terminal. One portable exe,
 written in C++ and plain Win32: no runtime, no installer, and no network code (no
 updates, no telemetry).
 
+![The Qoqdir window: tabs, a folder tree with bookmarks, and the file list](docs/screenshot.png)
+
 ## Download
 
 Get `qoqdir-<version>.zip` from the [Releases](../../releases) page and unzip it
@@ -74,11 +76,12 @@ save them first.
 | Esc | clear the filter |
 | F1 | the main keys |
 
-Middle-click a folder to open it in a background tab. New tabs always go at the
-end. Drag a tab along the bar to move it, and turn the mouse wheel over the tabs
-to switch between them. Drop files on a tab, or on a folder or bookmark in the
-tree, to move or copy them there, as Explorer would; a closed folder in the tree
-opens when you hold the drag over it. (The tree takes drops on local drives only.)
+Middle-click a folder to open it in a background tab, or double-click the empty
+part of the tab bar for a new tab. New tabs always go at the end. Drag a tab
+along the bar to move it, and turn the mouse wheel over the tabs to switch
+between them. Drop files on a tab, or on a folder or bookmark in the tree, to
+move or copy them there, as Explorer would; a closed folder in the tree opens
+when you hold the drag over it. (The tree takes drops on local drives only.)
 
 For what Qoqdir doesn't do, thumbnails and searching inside subfolders,
 right-click the empty space: Open in Explorer and Search in Explorer open that

@@ -526,6 +526,25 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
         });
     add(L"(close the other tabs)", [=, this] { closeOtherTabs(1); },   // keeps the test folder's own tab
         [=, this] { return idle() && tabs_.size() == 1 && at(dir); });
+    add(L"a double-click on a tab opens no tab; one on the empty bar right of the tabs opens one, as \"+\" does",
+        [=, this] {
+            RECT r{};
+            TabCtrl_GetItemRect(tabBar_, 0, &r);
+            int y = (r.top + r.bottom) / 2;
+            for (int x : {(r.left + r.right) / 2, r.right + scale(20, dpi_)}) {   // on the tab, then right of it
+                SendMessageW(tabBar_, WM_LBUTTONDBLCLK, MK_LBUTTON, MAKELPARAM(x, y));
+                SendMessageW(tabBar_, WM_LBUTTONUP, 0, MAKELPARAM(x, y));
+            }
+        },
+        [=, this] {
+            RECT r{};   // a real click lands only where the bar says it is its own: right of the last tab
+            TabCtrl_GetItemRect(tabBar_, TabCtrl_GetItemCount(tabBar_) - 1, &r);
+            POINT pt{r.right + scale(20, dpi_), (r.top + r.bottom) / 2};
+            ClientToScreen(tabBar_, &pt);
+            bool takesClick = SendMessageW(tabBar_, WM_NCHITTEST, 0, MAKELPARAM(pt.x, pt.y)) == HTCLIENT;
+            return idle() && takesClick && tabs_.size() == 2 && active_ == 1 && at(dir);
+        });
+    add(L"(close it)", [=, this] { closeTab(1); }, [=, this] { return idle() && tabs_.size() == 1 && at(dir); });
     add(L"a lone tab is 150 wide at 100% scaling", nullptr, [=, this] { return tabWidth() == scale(150, dpi_); });
     std::wstring longName = path(L"a folder with a name too long for its tab");   // never opened: only its caption
     auto openTabsPast = [=, this](int width) {   // background tabs until more are open than fit at that width

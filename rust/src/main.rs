@@ -58,7 +58,7 @@ const KEYS: &str = "Navigation
   Refresh: F5
 
 Tabs
-  New tab: Ctrl+T
+  New tab: Ctrl+T or double-click the tab bar
   Close tab: Ctrl+W
   Save tabs: Ctrl+S
   Open saved tabs: Ctrl+O

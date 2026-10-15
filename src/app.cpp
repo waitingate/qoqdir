@@ -70,16 +70,20 @@ bool opensInTab(const std::optional<std::wstring>& target) {
 }
 
 // The tab bar. A press is handled here, not by the control: it makes the tab current at once and starts a drag along
-// the bar that moves it. A middle-click closes a tab.
+// the bar that moves it. A middle-click closes a tab; a double-click on the empty part of the bar is the "+" button.
 LRESULT CALLBACK tabBarProc(HWND h, UINT msg, WPARAM wp, LPARAM lp, UINT_PTR, DWORD_PTR) {
     TCHITTESTINFO hit{};
     hit.pt = {GET_X_LPARAM(lp), GET_Y_LPARAM(lp)};
     switch (msg) {
+    case WM_NCHITTEST:   // the control answers "not mine" off the tabs, and a click there would go to the window behind
+        return HTCLIENT;
     case WM_LBUTTONDOWN:
     case WM_LBUTTONDBLCLK:
         if (int index = TabCtrl_HitTest(h, &hit); index >= 0) {
             if (index != TabCtrl_GetCurSel(h)) SendMessageW(GetParent(h), WM_APP_PRESSTAB, WPARAM(index), 0);
             SetCapture(h);   // the drag lasts until the button comes up, even outside the bar
+        } else if (msg == WM_LBUTTONDBLCLK) {
+            PostMessageW(GetParent(h), WM_COMMAND, MAKEWPARAM(ID_PLUS, BN_CLICKED), 0);
         }
         return 0;
     case WM_MOUSEMOVE:

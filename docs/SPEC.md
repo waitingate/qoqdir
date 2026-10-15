@@ -215,7 +215,8 @@ Targets on an ordinary SSD laptop with a folder of 10,000 files (faster is fine)
    Windows' icon font, as tall as the text; Refresh does what F5 does), the
    address bar (it stretches), and the filter box, 120 pixels wide at 100%
    scaling, with the hint "Filter".
-2. The tabs, with a "+" button at the right for a new tab.
+2. The tabs, with a "+" button at the right for a new tab (a double-click on the
+   empty part of the bar does the same).
 3. The folder tree on the left, a splitter, the file list on the right.
 4. Status bar: item counts and selection size on the left, messages on the right.
 
@@ -371,7 +372,9 @@ readers read the same as the button's name.
 ### 5.7 Tabs
 - Any number of tabs. Each has its own folder, Back/Forward history and
   remembered view (selection, focus, scroll).
-- New tab (Ctrl+T or "+") opens the current folder and switches to it.
+- New tab (Ctrl+T, "+", or a double-click on the empty part of the tab bar)
+  opens the current folder and switches to it. A double-click on a tab only
+  presses it.
 - Every new tab (Ctrl+T, "+", a middle-click, Ctrl+Enter, "Duplicate tab") goes
   at the end of the tab bar, so the newest is always the last one.
 - Close a tab with Ctrl+W, a middle-click on it, or its context menu. The last
@@ -687,6 +690,9 @@ result:
     shows the next tab each time and stops at the last; turned up, it goes back and
     stops at the first.
 46. Ctrl+T from the first tab adds the new tab at the end, after all the others.
+    With one tab left, a double-click on it opens no tab; a double-click on the
+    empty bar right of it opens one, as "+" does (the bar must claim that spot
+    as its own in the hit test, or Windows hands the click to the window behind).
 47. In the tree (a drag simulated inside the process): This PC refuses a file; a
     closed folder in Bookmarks lights up, opens after a moment while the drag is
     held over it, and a drop copies the file into it.

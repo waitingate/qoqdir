@@ -52,7 +52,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
     TPM_RIGHTBUTTON, TrackPopupMenuEx, WINDOW_EX_STYLE, WINDOW_STYLE, WINDOWPLACEMENT, WM_ACTIVATE, WM_APP,
     WM_APPCOMMAND, WM_CAPTURECHANGED, WM_CHAR, WM_CLOSE, WM_COMMAND, WM_CONTEXTMENU, WM_DESTROY, WM_DEVICECHANGE,
     WM_DPICHANGED, WM_DRAWITEM, WM_ENDSESSION, WM_GETMINMAXINFO, WM_INITMENUPOPUP, WM_KEYDOWN, WM_LBUTTONDBLCLK,
-    WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONUP, WM_MEASUREITEM, WM_MENUCHAR, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_NOTIFY, WM_SETCURSOR, WM_SETFONT, WM_SIZE,
+    WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONUP, WM_MEASUREITEM, WM_MENUCHAR, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_NCHITTEST, WM_NOTIFY, WM_SETCURSOR, WM_SETFONT, WM_SIZE,
     WM_SYSCOLORCHANGE, WM_SYSKEYDOWN, WM_TIMER, WNDCLASSEXW, WS_CHILD, WS_CLIPCHILDREN, WS_EX_CLIENTEDGE, WS_OVERLAPPEDWINDOW,
     WS_POPUP, WS_TABSTOP, WS_VISIBLE,
 };
@@ -301,19 +301,26 @@ fn opens_in_tab(target: &Location) -> bool {
 }
 
 /// The tab bar. A press is handled here, not by the control: it makes the tab current at once and starts a drag along
-/// the bar that moves it. A middle-click closes a tab.
+/// the bar that moves it. A middle-click closes a tab; a double-click on the empty part of the bar is the "+" button.
 unsafe extern "system" fn tab_bar_proc(h: HWND, msg: u32, wp: WPARAM, lp: LPARAM, _: usize, _: usize) -> LRESULT {
     let mut hit = TCHITTESTINFO { pt: point_from(lp), ..Default::default() };
     let mut tab_at_point = || usize::try_from(send(h, TCM_HITTEST, 0, &mut hit as *mut _ as isize)).ok();
     let parent = unsafe { GetParent(h) }.unwrap_or_default();
     let captured = || unsafe { GetCapture() } == h;
     match msg {
+        // The control answers "not mine" off the tabs, and a click there would go to the window behind.
+        WM_NCHITTEST => return LRESULT(HTCLIENT as isize),
         WM_LBUTTONDOWN | WM_LBUTTONDBLCLK => {
             if let Some(index) = tab_at_point() {
                 if send(h, TCM_GETCURSEL, 0, 0) != index as isize {
                     send(parent, WM_APP_PRESSTAB, index, 0);
                 }
                 unsafe { SetCapture(h) }; // the drag lasts until the button comes up, even outside the bar
+            } else if msg == WM_LBUTTONDBLCLK {
+                let plus = ID_PLUS as u16 as usize | ((BN_CLICKED as usize) << 16);
+                unsafe {
+                    let _ = PostMessageW(Some(parent), WM_COMMAND, WPARAM(plus), LPARAM(0));
+                }
             }
             return LRESULT(0);
         }

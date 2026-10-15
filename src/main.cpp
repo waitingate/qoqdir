@@ -26,7 +26,7 @@ const wchar_t kKeys[] =
     L"  Refresh: F5\n"
     L"\n"
     L"Tabs\n"
-    L"  New tab: Ctrl+T\n"
+    L"  New tab: Ctrl+T or double-click the tab bar\n"
     L"  Close tab: Ctrl+W\n"
     L"  Save tabs: Ctrl+S\n"
     L"  Open saved tabs: Ctrl+O\n"
