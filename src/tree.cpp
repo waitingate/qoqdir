@@ -130,7 +130,9 @@ void FolderTree::reread(HTREEITEM n) {
     item.mask = TVIF_CHILDREN;
     item.hItem = n;
     TreeView_GetItem(tv_, &item);
-    if (TreeView_GetChild(tv_, n) || (!item.cChildren && !isShortcut(pathOf(n)))) startReading(n, true);
+    // An empty Bookmarks keeps its arrow (addChildren), so the arrow can't tell: its last read does.
+    bool emptyRoot = bookmarksEmpty_ && n == TreeView_GetRoot(tv_);
+    if (TreeView_GetChild(tv_, n) || (!item.cChildren && !isShortcut(pathOf(n))) || emptyRoot) startReading(n, true);
 }
 
 HTREEITEM FolderTree::add(HTREEITEM parent, const std::wstring& path, const std::wstring& text, int icon, bool leaf,
@@ -192,6 +194,7 @@ void FolderTree::addChildren(const TreeBatch& batch) {
         return;
     }
     if (batch.failed) return;   // keep what is shown, and the arrow: expanding again tries again
+    if (batch.node == TreeView_GetRoot(tv_)) bookmarksEmpty_ = batch.children.empty();   // reread() reads it again
     // Read again (refresh): a folder whose subfolders are the same stays as it is. Otherwise they are put in afresh,
     // and what was open below closes (an open list changed item by item is slow: Windows repaints it for each).
     if (HTREEITEM c = TreeView_GetChild(tv_, batch.node)) {

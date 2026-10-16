@@ -194,5 +194,6 @@ private:
     } rename_;
 
     FolderWatch watch_;
+    FolderWatch bookmarksWatch_;   // the Bookmarks node follows its folder whatever the list shows (5.5)
     std::wstring ini_;
 };

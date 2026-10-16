@@ -320,15 +320,18 @@ readers read the same as the button's name.
   known to have no subfolders.
 - Collapsing and expanding a node again shows its subfolders as they are now.
 - F5 (and Ctrl+R and the Refresh button) reads again every folder whose
-  subfolders are shown, and every one known to have none. A folder whose
-  subfolders are the same stays as it is; one whose subfolders changed shows them
-  afresh, and what was open below it closes (an open list changed item by item is
-  slow: Windows repaints it for each).
+  subfolders are shown, every one known to have none, and an empty Bookmarks
+  (which keeps its arrow, 5.6). A folder whose subfolders are the same stays as
+  it is; one whose subfolders changed shows them afresh, and what was open below
+  it closes (an open list changed item by item is slow: Windows repaints it for
+  each).
 - The tree follows the folder shown: when its subfolders (or, under Bookmarks,
   its shortcuts) change, by Qoqdir or another program, its node is read again as
-  F5 would. After a command from a
-  node's menu, the node's parent is read again, so a folder deleted there leaves
-  the tree.
+  F5 would. The Bookmarks node is followed whatever is shown, so a shortcut
+  dropped on it, or made in its folder by another program, shows at once (a
+  group folder inside Bookmarks is followed while shown, like any other). After
+  a command from a node's menu, the node's parent is read again, so a folder
+  deleted there leaves the tree.
 - Clicking a node, or moving to it with the keyboard, opens it in this tab, and
   clicking the selected node opens it again. Middle-click opens a new background
   tab.
@@ -353,9 +356,10 @@ readers read the same as the button's name.
   like any file: Alt+drag a folder into Bookmarks, or choose "Bookmark this
   folder" on its tab's menu, which writes the shortcut and shows it in the tree.
 - The Bookmarks node is open at start and lists its subfolders and then its
-  shortcuts. A folder inside Bookmarks lists its own the same way when expanded,
-  so bookmarks can be grouped. Shortcuts show the name and icon Windows gives
-  them ("Work", not "Work.lnk") and have no expand arrow.
+  shortcuts; while empty it keeps its arrow, and shows the first bookmark as
+  soon as it is made. A folder inside Bookmarks lists its own the same way when
+  expanded, so bookmarks can be grouped. Shortcuts show the name and icon Windows
+  gives them ("Work", not "Work.lnk") and have no expand arrow.
 - Choosing a bookmark shortcut in the tree works like opening it in the list
   (5.4): a folder opens in this tab, anything else is opened by Windows, and an
   unreachable folder gives the status message, never a Windows popup.
@@ -653,6 +657,7 @@ result:
 25. In a folder with a program in it, the program's own icon arrives later.
 26. Sorting by Type puts the Type column in order.
 27. The Bookmarks folder exists and is the first tree root, labelled "Bookmarks".
+    While it is empty it keeps its arrow, and F5 lists a folder made in it.
 28. Context menus can be built for This PC, a drive and a file.
 29. Dropping a file (a drag simulated inside the process) on a second tab copies
     it into that tab's folder. While the file is over that tab, it shows as the
@@ -737,9 +742,10 @@ result:
     shortcut made through that letter to `pack\target`; once the letter is gone,
     opening the shortcut shows `pack\target`.
 64. "Bookmark this folder" for the tab showing the test folder writes
-    `Bookmarks\<name>.lnk`, and the tree shows it. A drag held over This PC in
-    the tree is refused, and the status bar says only a folder on this PC takes
-    a drop.
+    `Bookmarks\<name>.lnk`, and the tree shows it. A shortcut made in Bookmarks
+    by another program while another folder is shown appears in the tree, and
+    leaves it when deleted. A drag held over This PC in the tree is refused, and
+    the status bar says only a folder on this PC takes a drop.
 65. The four toolbar buttons carry the tooltips and accessible names of 5.1.
 66. Shown by a tab switch, This PC gets its own change watch and the folder shown
     before loses its: a file made in that folder reloads nothing.

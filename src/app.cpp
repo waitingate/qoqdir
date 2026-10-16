@@ -17,7 +17,8 @@ namespace {
 enum : int { ID_BACK = 100, ID_FORWARD, ID_UP, ID_ADDRESS, ID_FILTER, ID_TABS, ID_PLUS, ID_TREE, ID_LIST, ID_STATUS, ID_REFRESH };
 enum : UINT {
     WM_APP_LOADED = WM_APP + 1, WM_APP_CHANGED, WM_APP_CLOSETAB, WM_APP_RENAME, WM_APP_ICONS, WM_APP_TREE,
-    WM_APP_MIDDLECLICK, WM_APP_TABS_SAVED, WM_APP_TABS_READ, WM_APP_PRESSTAB, WM_APP_DRAGTAB, WM_APP_TREE_ICONS
+    WM_APP_MIDDLECLICK, WM_APP_TABS_SAVED, WM_APP_TABS_READ, WM_APP_PRESSTAB, WM_APP_DRAGTAB, WM_APP_TREE_ICONS,
+    WM_APP_BOOKMARKS
 };
 
 constexpr size_t kMaxHistory = 100;
@@ -152,6 +153,7 @@ bool App::create(HINSTANCE instance, const CommandLine& cmd, bool useSettings) {
     std::wstring bookmarks = joinPath(useSettings ? parentPath(exe) : cmd.folders.at(0), L"Bookmarks");
     CreateDirectoryW(bookmarks.c_str(), nullptr);   // fails harmlessly if it exists
     tree_.create(wnd_, ID_TREE, WM_APP_TREE, WM_APP_TREE_ICONS, bookmarks);
+    bookmarksWatch_ = FolderWatch(wnd_, WM_APP_BOOKMARKS, bookmarks);
     list_.create(wnd_, ID_LIST);
     status_ = make(STATUSCLASSNAMEW, L"", SBARS_SIZEGRIP, 0, ID_STATUS);
     // Each button's tooltip says what it does and its key, and screen readers read the same as its name (5.1).
@@ -379,6 +381,10 @@ LRESULT App::onMessage(UINT msg, WPARAM wp, LPARAM lp) {
         acknowledgeChange(wp, lp);
         queueRefresh();
         return 0;
+    case WM_APP_BOOKMARKS:   // a shortcut or folder came or went in Bookmarks: a drop on its node, or another program
+        acknowledgeChange(wp, lp);
+        tree_.refreshFolder(tree_.bookmarks());
+        return 0;
     case WM_APP_ICONS: {   // the shown folder's own icons (a late batch for a folder no longer shown is of no use)
         std::unique_ptr<IconBatch> batch(reinterpret_cast<IconBatch*>(lp));
         if (samePath(list_.dir(), batch->dir)) {
@@ -506,6 +512,7 @@ LRESULT App::onMessage(UINT msg, WPARAM wp, LPARAM lp) {
     }
     case WM_DESTROY:
         watch_ = {};
+        bookmarksWatch_ = {};
         RevokeDragDrop(list_.hwnd());
         RevokeDragDrop(tabBar_);
         RevokeDragDrop(tree_.hwnd());

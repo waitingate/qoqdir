@@ -1804,13 +1804,13 @@ impl App {
             },
         );
         s.add(
-            "an empty Bookmarks node keeps its arrow and lists a bookmark added later",
+            "an empty Bookmarks node keeps its arrow, and F5 lists a bookmark added later",
             |a| {
-                let _ = std::fs::create_dir(p("Bookmarks\\one")); // the startup read found Bookmarks empty
-                a.tree_select(a.tree_root());
-                a.tree_key(VK_RIGHT); // expand, as the user would
+                FLAG.set(a.tree_item(a.tree_root(), TVIF_CHILDREN).cChildren.0 == 1); // the startup read found Bookmarks empty
+                let _ = std::fs::create_dir(p("Bookmarks\\one"));
+                a.press(VK_F5, 0);
             },
-            |a| a.bookmark_nodes() == "one",
+            |a| FLAG.get() && a.bookmark_nodes() == "one",
         );
         s.add(
             "Bookmarks shows its folders and shortcuts in the tree, open from the start",
@@ -2138,6 +2138,19 @@ impl App {
                 let name = dir().file_name().unwrap_or_default().to_string_lossy().into_owned();
                 let _ = std::fs::remove_file(p(&format!("Bookmarks\\{name}.lnk")));
                 a.tree.refresh_folder(a.tree.bookmarks());
+            },
+            |a| a.bookmark_nodes() == "one,two,sub",
+        );
+        s.add(
+            "a shortcut another program makes in Bookmarks (or an Alt+drag onto its node) shows in the tree while another \
+             folder is shown (5.5)",
+            |_| make_shortcut(&p("Bookmarks\\dropped.lnk"), p("sub")),
+            |a| a.bookmark_nodes() == "one,two,dropped,sub",
+        );
+        s.add(
+            "(and leaves the tree when deleted)",
+            |_| {
+                let _ = std::fs::remove_file(p("Bookmarks\\dropped.lnk"));
             },
             |a| a.bookmark_nodes() == "one,two,sub",
         );

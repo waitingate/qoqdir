@@ -60,6 +60,7 @@ pub struct FolderTree {
     reads: Cell<u32>,                         // numbers every read started
     paths: RefCell<HashMap<isize, Location>>, // each node's folder (or shortcut); a node leaves it when deleted
     reading: RefCell<HashMap<isize, u32>>,    // nodes whose subfolders are being read, by read number
+    bookmarks_empty: Cell<bool>,              // Bookmarks was read and found empty (it keeps its arrow)
     open_at: Cell<u64>,                       // when the node a drag lights up opens (0: done)
     drop_folder: RefCell<Option<Location>>,   // and where a drop on that node goes
 }
@@ -174,6 +175,7 @@ impl FolderTree {
             reads: Cell::new(0),
             paths: RefCell::new(HashMap::new()),
             reading: RefCell::new(HashMap::new()),
+            bookmarks_empty: Cell::new(false),
             open_at: Cell::new(0),
             drop_folder: RefCell::new(None),
         }
@@ -243,7 +245,9 @@ impl FolderTree {
         let mut item = TVITEMW { mask: TVIF_CHILDREN, hItem: HTREEITEM(node), ..Default::default() };
         send(self.hwnd, TVM_GETITEMW, 0, &mut item as *mut _ as isize);
         let none = item.cChildren.0 == 0 && !is_shortcut(&self.location_of(HTREEITEM(node)).text());
-        if send(self.hwnd, TVM_GETNEXTITEM, TVGN_CHILD as usize, node) != 0 || none {
+        // An empty Bookmarks keeps its arrow (add_children), so the arrow can't tell: its last read does.
+        let empty_root = self.bookmarks_empty.get() && node == self.root();
+        if send(self.hwnd, TVM_GETNEXTITEM, TVGN_CHILD as usize, node) != 0 || none || empty_root {
             self.start_reading(HTREEITEM(node), true);
         }
     }
@@ -333,6 +337,9 @@ impl FolderTree {
         let node = HTREEITEM(batch.node);
         if batch.failed {
             return; // keep what is shown, and the arrow: expanding again tries again
+        }
+        if batch.node == self.root() {
+            self.bookmarks_empty.set(batch.children.is_empty()); // reread() reads it again
         }
         // Read again (refresh): a folder whose subfolders are the same stays as it is. Otherwise they are put in afresh,
         // and what was open below closes (an open list changed item by item is slow: Windows repaints it for each).

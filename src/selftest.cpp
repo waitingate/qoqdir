@@ -1170,13 +1170,18 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
             return *twoRoots && roots.starts_with(L"Bookmarks," + std::wstring(sfi.szDisplayName) + L",") &&
                    roots.ends_with(L",This PC");
         });
-    add(L"an empty Bookmarks node keeps its arrow and lists a bookmark added later",
+    auto arrow = std::make_shared<bool>(false);
+    add(L"an empty Bookmarks node keeps its arrow, and F5 lists a bookmark added later",
         [=, this] {
-            CreateDirectoryW(path(L"Bookmarks\\one").c_str(), nullptr);   // the startup read found Bookmarks empty
-            TreeView_SelectItem(tree_.hwnd(), TreeView_GetRoot(tree_.hwnd()));
-            SendMessageW(tree_.hwnd(), WM_KEYDOWN, VK_RIGHT, 0);   // expand, as the user would
+            TVITEMW item{};
+            item.mask = TVIF_CHILDREN;
+            item.hItem = TreeView_GetRoot(tree_.hwnd());
+            TreeView_GetItem(tree_.hwnd(), &item);
+            *arrow = item.cChildren == 1;   // the startup read found Bookmarks empty
+            CreateDirectoryW(path(L"Bookmarks\\one").c_str(), nullptr);
+            selfTestKey(VK_F5);
         },
-        [=] { return bookmarkNodes() == L"one"; });
+        [=] { return *arrow && bookmarkNodes() == L"one"; });
     add(L"Bookmarks shows its folders and shortcuts in the tree, open from the start",
         [=, this] {
             CreateDirectoryW(path(L"Bookmarks\\one").c_str(), nullptr);
@@ -1443,6 +1448,13 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
             DeleteFileW(path(L"Bookmarks\\" + leafName(dir) + L".lnk").c_str());
             tree_.refreshFolder(tree_.bookmarks());
         },
+        [=, this] { return bookmarkNodes() == L"one,two,sub"; });
+    add(L"a shortcut another program makes in Bookmarks (or an Alt+drag onto its node) shows in the tree while another "
+        L"folder is shown (5.5)",
+        [=, this] { makeShortcut(path(L"Bookmarks\\dropped.lnk"), path(L"sub")); },
+        [=, this] { return bookmarkNodes() == L"one,two,dropped,sub"; });
+    add(L"(and leaves the tree when deleted)",
+        [=, this] { DeleteFileW(path(L"Bookmarks\\dropped.lnk").c_str()); },
         [=, this] { return bookmarkNodes() == L"one,two,sub"; });
 
     // Speed: a folder with 10,000 files.

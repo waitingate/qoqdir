@@ -96,6 +96,7 @@ const WM_APP_TABS_READ: u32 = WM_APP + 9;
 const WM_APP_PRESSTAB: u32 = WM_APP + 10;
 const WM_APP_DRAGTAB: u32 = WM_APP + 11;
 const WM_APP_TREE_ICONS: u32 = WM_APP + 12;
+const WM_APP_BOOKMARKS: u32 = WM_APP + 13;
 
 pub const TIMER_REFRESH: usize = 1;
 const TIMER_STATUS: usize = 2;
@@ -176,6 +177,7 @@ pub struct State {
     pub queued_view: Option<(Location, ViewState)>,
     rename: Option<(PathBuf, OsString)>, // done after the edit box has closed
     pub watch: Option<FolderWatch>,
+    bookmarks_watch: Option<FolderWatch>, // the Bookmarks node follows its folder whatever the list shows (5.5)
     last_focus: Option<HWND>,
 }
 
@@ -470,6 +472,7 @@ impl App {
             };
             let _ = std::fs::create_dir(&bookmarks); // fails harmlessly if it exists
             let tree = FolderTree::create(wnd, ID_TREE, WM_APP_TREE, WM_APP_TREE_ICONS, Location::dir(bookmarks));
+            let bookmarks_watch = FolderWatch::new(wnd, WM_APP_BOOKMARKS, tree.bookmarks());
             let list = FileList::create(wnd, ID_LIST);
             const SBARS_SIZEGRIP: u32 = 0x100;
             let status = make(w!("msctls_statusbar32"), w!(""), SBARS_SIZEGRIP, 0, ID_STATUS);
@@ -519,6 +522,7 @@ impl App {
                     queued_view: None,
                     rename: None,
                     watch: None,
+                    bookmarks_watch: Some(bookmarks_watch),
                     last_focus: None,
                 }),
                 quiet: Cell::new(false),
@@ -796,6 +800,12 @@ impl App {
                     self.queue_refresh();
                     return LRESULT(0);
                 }
+                WM_APP_BOOKMARKS => {
+                    // A shortcut or folder came or went in Bookmarks: a drop on its node, or another program.
+                    acknowledge_change(wp, lp);
+                    self.tree.refresh_folder(self.tree.bookmarks());
+                    return LRESULT(0);
+                }
                 WM_APP_ICONS => {
                     // The shown folder's own icons (a late batch for a folder no longer shown is of no use).
                     let batch = Box::from_raw(lp.0 as *mut IconBatch);
@@ -955,6 +965,7 @@ impl App {
                 }
                 WM_DESTROY => {
                     self.st.borrow_mut().watch = None;
+                    self.st.borrow_mut().bookmarks_watch = None;
                     let _ = RevokeDragDrop(self.list.hwnd());
                     let _ = RevokeDragDrop(self.tab_bar);
                     let _ = RevokeDragDrop(self.tree.hwnd());

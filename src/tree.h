@@ -56,6 +56,7 @@ private:
     unsigned reads_ = 0;                      // numbers every read started
     std::map<HTREEITEM, std::wstring> paths_;   // each node's folder (or shortcut); a node leaves it when deleted
     std::map<HTREEITEM, unsigned> reading_;   // nodes whose subfolders are being read, by read number
+    bool bookmarksEmpty_ = false;             // Bookmarks was read and found empty (it keeps its arrow)
     ULONGLONG openAt_ = 0;                    // when the node a drag lights up opens (0: done)
     std::optional<std::wstring> dropFolder_;  // and where a drop on that node goes
 };
