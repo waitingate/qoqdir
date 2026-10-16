@@ -257,8 +257,9 @@ readers read the same as the button's name.
   - `..` (up, like the Up button) or the name of a subfolder of the current
     folder: opened in this tab;
   - anything else runs as a command, the way the Windows Run box (Win+R) would:
-    `cmd`, `notepad file.txt`, a web address. It runs in the current folder. If
-    Windows can't run it, the status bar says `Can't find "<text>"` and it beeps.
+    `cmd`, `notepad file.txt`, a web address. It runs in the current folder,
+    with its `%VARIABLES%` expanded as the Run box does. If Windows can't run
+    it, the status bar says `Can't find "<text>"` and it beeps.
     One difference: text that starts with a full path is always a path, so
     `"C:\Tools\app.exe" file.txt` doesn't run (`C:\Tools\app.exe` alone does).
     A program named without a folder (`cmd`, `code`) is the one on the PATH, as

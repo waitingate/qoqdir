@@ -1030,7 +1030,8 @@ bool App::refresh(ViewState view) {
 
 void App::goToTyped() {
     std::wstring text = windowText(address_);
-    std::wstring path = normalizePath(expandVars(text));   // only what the user typed has its %VARS% expanded
+    std::wstring typed = expandVars(text);   // only what the user typed has its %VARS% expanded (a command's too)
+    std::wstring path = normalizePath(typed);
     // "..", subfolder names and relative paths (".\x", "a\b") open here: Windows would use Explorer (4.4).
     bool relative = isRelativePath(path);
     if (path == L"..") path = parentPath(tab().path);
@@ -1044,7 +1045,7 @@ void App::goToTyped() {
     }
     // A command ("cmd", a web address...), run in the folder shown: a dead tab folder would hold up its start.
     // On This PC a relative place has no folder (Windows would open its own start folder in Explorer).
-    if ((relative && tab().path.empty()) || !runCommand(wnd_, text, list_.dir())) {
+    if ((relative && tab().path.empty()) || !runCommand(wnd_, typed, list_.dir())) {
         setMessage(L"Can't find \"" + text + L"\"");
         focusEdit(address_);   // left selected, like a bad path, so it can be corrected (5.3)
         warn();

@@ -1788,7 +1788,8 @@ impl App {
 
     fn go_to_typed(&self) {
         let text = window_text(self.address);
-        let mut location = normalize(&expand_vars(&text)); // only what the user typed has its %VARS% expanded
+        let typed = expand_vars(&text); // only what the user typed has its %VARS% expanded (a command's too)
+        let mut location = normalize(&typed);
         // "..", subfolder names and relative paths (".\x", "a\b") open here: Windows would use Explorer (4.4).
         let relative = is_relative_path(&location.text());
         let here = self.location();
@@ -1808,7 +1809,7 @@ impl App {
         // A command ("cmd", a web address...), run in the folder shown: a dead tab folder would hold up its start.
         // On This PC a relative place has no folder (Windows would open its own start folder in Explorer).
         let shown = self.list.location();
-        if (relative && matches!(here, Location::ThisPc)) || !run_command(self.wnd, &text, shown.path()) {
+        if (relative && matches!(here, Location::ThisPc)) || !run_command(self.wnd, &typed, shown.path()) {
             self.set_message(&format!("Can't find \"{}\"", text.to_string_lossy()));
             focus_edit(self.address); // left selected, like a bad path, so it can be corrected (5.3)
             self.warn();
