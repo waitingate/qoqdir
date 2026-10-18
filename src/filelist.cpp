@@ -1,3 +1,4 @@
+// The file list (filelist.h): the virtual ListView's rows, sorting, filtering and selection.
 #include "filelist.h"
 
 #include "shell.h"

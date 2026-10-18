@@ -1,3 +1,4 @@
+// Paths, folder reading, sorting and filtering (folder.h): the part with no UI, which the unit tests cover.
 #include "folder.h"
 
 #include <tlhelp32.h>

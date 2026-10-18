@@ -1,3 +1,4 @@
+// The Windows shell at work (shell.h): icons and types, menus, clipboard, drag and drop, opening things.
 #include "shell.h"
 
 #include <shellapi.h>

@@ -1,3 +1,4 @@
+// The main window (app.h): what the user does in it, and how the folder loads come back to it.
 #include "app.h"
 
 #include "crashlog.h"

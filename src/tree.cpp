@@ -1,3 +1,4 @@
+// The folder tree (tree.h): reads on worker threads, their batches of children, and drops onto nodes.
 #include "tree.h"
 
 #include "shell.h"

@@ -1,3 +1,4 @@
+// The exe's resources: its manifest, its icon and the version block that the exe's Properties show.
 #include <winuser.h>
 #include <winver.h>
 #include "../src/version.h"

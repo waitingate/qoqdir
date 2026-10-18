@@ -1,3 +1,4 @@
+// The entry point: the command line, the two help texts, the message loop.
 #include "app.h"
 #include "crashlog.h"
 #include "shell.h"
