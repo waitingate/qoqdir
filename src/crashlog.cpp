@@ -24,7 +24,9 @@
 
 namespace {
 
-wchar_t logPath[32768];   // %TEMP% can be longer than MAX_PATH (the manifest allows long paths)
+// Room for a %TEMP% longer than MAX_PATH (the manifest allows long paths), but not the full 32 K: with
+// -fdata-sections a zeroed array lands in .data here, so every element of it is a byte in the exe.
+wchar_t logPath[2048];
 const char* exeBase = nullptr;
 SIZE_T exeSize = 0;
 bool logged = false;
