@@ -807,5 +807,6 @@ Build and test in this order, each step passing its tests before the next:
    a README (build steps, command line, keys, Bookmarks, which files it writes).
 
 Done means every unit test and self-test step passes, the command-line checks
-pass, no unexpected window appears during the self-test, and the code is small
-and readable.
+pass, the exe checks pass (one file under 1 MB, importing only DLLs Windows
+protects), no unexpected window appears during the self-test, and the code is
+small and readable.

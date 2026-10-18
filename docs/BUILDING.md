@@ -276,9 +276,10 @@ and in `rust\Cargo.toml`, commit, then:
 powershell -File scripts\release.ps1
 ```
 
-It builds that commit in a clean copy, runs the unit tests, the command-line
-checks on the exe that ships and the self-test on `qoqdir-test.exe`, and leaves
-in `release\`:
+It stops if the three versions disagree (both lines of `version.h`, and
+`Cargo.toml`), builds that commit in a clean copy, runs the unit tests, the exe
+checks and the command-line checks on the exe that ships and the self-test on
+`qoqdir-test.exe`, and leaves in `release\`:
 
 - `qoqdir-<version>.zip` to publish (the exe, README, LICENSE and the
   third-party notices); it prints the zip's SHA-256 for the release notes.
@@ -289,10 +290,11 @@ in `release\`:
 ## 6. The build on GitHub
 
 `.github\workflows\build.yml` runs on every push and pull request. It builds the
-C++ version with MSYS2's GCC on a Windows runner, checks that `qoqdir.exe` needs
-no MinGW DLLs and stays under 1 MB, and runs the unit tests, the self-test with
-the popup watch and the command-line checks. The exe and the logs are kept with
-the run. The Rust version isn't built there.
+C++ version with MSYS2's GCC on a Windows runner (a warning fails it there too,
+`-Werror` being in `CMakeLists.txt`), then runs the same checks as
+`scripts\build.ps1 -Test` for that version: the unit tests, `tests\exe-checks.ps1`,
+the self-test with the popup watch and the command-line checks. The exe and the
+logs are kept with the run. The Rust version isn't built there.
 
 ## 7. When something goes wrong
 

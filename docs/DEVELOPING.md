@@ -25,9 +25,10 @@ Notes for working on the code. `SPEC.md` decides what is right: section 4
 - `util.h`: owners for Windows resources (`Com<T>`, `Pidl`, `Menu`, `Font`)
   and `kAppName`. Nothing is freed by hand.
 - `folder.cpp` (library `core`): paths, command line, `listFolder`, sorting,
-  filtering. No UI and no COM, so it is all unit-tested. `""` means This PC. Only
-  typed text gets its `%VARS%` expanded, since a folder may really be named
-  `%TEMP%`.
+  filtering, and the small helpers everything else shares (`fileInfo` around
+  `SHGetFileInfoW`, `toUtf8`). No UI and no COM, so it is all unit-tested. `""`
+  means This PC. Only typed text gets its `%VARS%` expanded, since a folder may
+  really be named `%TEMP%`.
 - `shell.cpp`: everything that talks to the Windows shell. Copy, paste, delete,
   rename, context menus, icons and type names come from Windows so they behave
   like Explorer. Don't write your own. `uiObject` looks items up through their
@@ -130,8 +131,8 @@ instead of corrupting data, and the crash log says where.
   the manifest). Windows looks for any other imported DLL next to the exe first:
   load it at run time from System32, as `setTheme` does with uxtheme.dll.
 - "Qoqdir" in titles and messages, lowercase `qoqdir` in file names.
-- Git stores every file with LF line endings (Git for Windows shows them with CRLF
-  in the working folder).
+- Git stores every file with LF line endings, whatever the PC's own setting
+  (`.gitattributes`); Git for Windows shows them with CRLF in the working folder.
 - 4-space indent, lines up to about 120 columns, members end in `_`. Comments
   say why, not what.
 - Each file pair has the same section headers (`// ---- name`) in the same
