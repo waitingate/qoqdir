@@ -23,6 +23,7 @@ use windows::Win32::System::Com::{CLSCTX_INPROC_SERVER, CoCreateInstance};
 use windows::Win32::System::DataExchange::IsClipboardFormatAvailable;
 use windows::Win32::System::Ole::{CF_HDROP, IDropTarget, RegisterDragDrop, RevokeDragDrop};
 use windows::Win32::System::SystemServices::MK_LBUTTON;
+use windows::Win32::System::Threading::{GetStartupInfoW, STARTF_USESHOWWINDOW, STARTUPINFOW};
 use windows::Win32::System::WindowsProgramming::{GetPrivateProfileStringW, WritePrivateProfileStringW};
 use windows::Win32::UI::Accessibility::{CLSID_AccPropServices, IAccPropServices, PROPID_ACC_NAME};
 use windows::Win32::UI::Controls::{
@@ -47,7 +48,8 @@ use windows::Win32::UI::WindowsAndMessaging::{
     IDCANCEL, IDYES, MB_ICONWARNING, MB_OKCANCEL, MB_YESNOCANCEL, MF_GRAYED, MF_SEPARATOR, MF_STRING, MINMAXINFO, MSG,
     MessageBoxW, MoveWindow,
     NONCLIENTMETRICSW, OBJID_CLIENT, PostMessageW, PostQuitMessage, RegisterClassExW, SIZE_MINIMIZED, SPI_GETHIGHCONTRAST,
-    SPI_GETNONCLIENTMETRICS, SW_SHOWMAXIMIZED, SW_SHOWNOACTIVATE, SW_SHOWNORMAL, SWP_NOACTIVATE, SWP_NOZORDER, SetClassLongPtrW,
+    SHOW_WINDOW_CMD, SPI_GETNONCLIENTMETRICS, SW_SHOWMAXIMIZED, SW_SHOWMINNOACTIVE, SW_SHOWNA, SW_SHOWNOACTIVATE,
+    SW_SHOWNORMAL, SWP_NOACTIVATE, SWP_NOZORDER, SetClassLongPtrW,
     SetCursor, SetTimer, SetWindowLongPtrW, SetWindowPlacement, SetWindowPos, ShowWindow, SystemParametersInfoW, TPM_RETURNCMD,
     TPM_RIGHTBUTTON, TrackPopupMenuEx, WINDOW_EX_STYLE, WINDOW_STYLE, WINDOWPLACEMENT, WM_ACTIVATE, WM_APP,
     WM_APPCOMMAND, WM_CAPTURECHANGED, WM_CHAR, WM_CLOSE, WM_COMMAND, WM_CONTEXTMENU, WM_DESTROY, WM_DEVICECHANGE,
@@ -226,6 +228,7 @@ pub struct App {
     pub loads_done: Cell<u32>,   // folder reads that reported back (self-test)
     pub loads_wasted: Cell<u32>, // ...of which a newer load had replaced, yet they read the whole folder (self-test)
     use_settings: bool,
+    start_quiet: Cell<bool>, // started with a request for no focus (STARTF_USESHOWWINDOW, 5.10): none is taken
     ini: Vec<u16>, // settings file
     pub st: RefCell<State>,
     pub quiet: Cell<bool>, // no beeps (set by the self-test, which triggers errors on purpose)
@@ -513,6 +516,7 @@ impl App {
                 loads_done: Cell::new(0),
                 loads_wasted: Cell::new(0),
                 use_settings,
+                start_quiet: Cell::new(false),
                 ini,
                 st: RefCell::new(State {
                     tabs: Vec::new(),
@@ -580,7 +584,9 @@ impl App {
             app.show_tabs();
             let (location, view) = app.with_tab(|t| (t.location.clone(), t.view.clone()));
             app.open(location, Nav::Switch, view);
-            app.focus_list();
+            if !app.start_quiet.get() {
+                app.focus_list(); // giving a control the focus activates the window, which a quiet start may not
+            }
             crate::crashlog::watch_for_hangs(wnd);
             Some(app)
         }
@@ -601,7 +607,7 @@ impl App {
         f(&mut st.tabs[active])
     }
 
-    fn location(&self) -> Location {
+    pub(crate) fn location(&self) -> Location {
         self.with_tab(|t| t.location.clone())
     }
 
@@ -964,8 +970,13 @@ impl App {
                     return LRESULT(0);
                 }
                 WM_DESTROY => {
-                    self.st.borrow_mut().watch = None;
-                    self.st.borrow_mut().bookmarks_watch = None;
+                    // Taken out first, dropped after: deregistering a watch talks to the shell, which can send this
+                    // window a message meanwhile, and a handler that borrows `st` then would abort the app.
+                    let watches = {
+                        let mut st = self.st.borrow_mut();
+                        (st.watch.take(), st.bookmarks_watch.take())
+                    };
+                    drop(watches);
                     let _ = RevokeDragDrop(self.list.hwnd());
                     let _ = RevokeDragDrop(self.tab_bar);
                     let _ = RevokeDragDrop(self.tree.hwnd());
@@ -1355,7 +1366,11 @@ impl App {
             return true;
         }
         if alt && is(VK_RETURN) && focused == list {
-            // The selection's properties, or with nothing selected the folder's own.
+            // The selection's properties, or with nothing selected the folder's own. A tab not available (4.3) or
+            // still switching shows an empty list with no folder: "" would be This PC's.
+            if !self.list.location().same(&self.location()) {
+                return true;
+            }
             let (dir, items) = (self.list.location(), self.list.selected_items());
             let menu = if items.is_empty() { item_menu_at(self.wnd, &dir) } else { item_menu(self.wnd, &dir, &items) };
             invoke_verb(self.wnd, menu, "properties");
@@ -2274,11 +2289,25 @@ impl App {
             st.active = 0;
         }
 
+        // A self-test never steals the focus, nor does a start that asked for none (a script's STARTF_USESHOWWINDOW
+        // with SW_SHOWNOACTIVATE, as the command-line checks use): the window opens behind whatever has the focus.
+        let mut si = STARTUPINFOW { cb: size_of::<STARTUPINFOW>() as u32, ..Default::default() };
+        unsafe { GetStartupInfoW(&mut si) };
+        let asked = SHOW_WINDOW_CMD(si.wShowWindow as i32);
+        self.start_quiet
+            .set(si.dwFlags.contains(STARTF_USESHOWWINDOW) && [SW_SHOWNOACTIVATE, SW_SHOWMINNOACTIVE, SW_SHOWNA].contains(&asked));
+        let quiet = !self.use_settings || self.start_quiet.get();
         let (w, h) = (self.number("Width", 0), self.number("Height", 0));
         unsafe {
             if w > 0 && h > 0 {
                 let (x, y) = (self.number("X", 0), self.number("Y", 0));
-                let show = if self.number("Maximized", 0) != 0 { SW_SHOWMAXIMIZED } else { SW_SHOWNORMAL };
+                let show = if quiet {
+                    SW_SHOWNOACTIVATE
+                } else if self.number("Maximized", 0) != 0 {
+                    SW_SHOWMAXIMIZED
+                } else {
+                    SW_SHOWNORMAL
+                };
                 let wp = WINDOWPLACEMENT {
                     length: size_of::<WINDOWPLACEMENT>() as u32,
                     rcNormalPosition: RECT { left: x, top: y, right: x + w, bottom: y + h },
@@ -2292,8 +2321,7 @@ impl App {
                     let _ = SetWindowPlacement(self.wnd, &wp);
                 }
             } else {
-                // A self-test never steals focus.
-                let _ = ShowWindow(self.wnd, if self.use_settings { SW_SHOWNORMAL } else { SW_SHOWNOACTIVATE });
+                let _ = ShowWindow(self.wnd, if quiet { SW_SHOWNOACTIVATE } else { SW_SHOWNORMAL });
             }
         }
     }

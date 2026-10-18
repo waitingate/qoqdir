@@ -214,6 +214,14 @@ impl FolderTree {
             }
             pc = next;
         }
+        if send(self.hwnd, TVM_GETNEXTITEM, TVGN_CHILD as usize, pc) == 0 {
+            // No drives shown yet: their first read is still in flight (read again, so the drive that came or went is
+            // in the list), or This PC is closed and unread (its next expand reads them).
+            if self.reading.borrow_mut().remove(&pc).is_some() {
+                self.start_reading(HTREEITEM(pc), true);
+            }
+            return;
+        }
         let expanded = send(self.hwnd, TVM_GETITEMSTATE, pc as usize, TVIS_EXPANDED.0 as isize) & TVIS_EXPANDED.0 as isize != 0;
         self.reading.borrow_mut().remove(&pc);
         // Forget the drives; the next expand reads them.
@@ -452,9 +460,11 @@ impl FolderTree {
                 None
             }
             TVN_ITEMEXPANDEDW => {
-                // Forget the subfolders of a collapsed node: the next expand reads them fresh.
+                // Forget the subfolders of a collapsed node: the next expand reads them fresh. A read of them still in
+                // flight (F5, a drag held over it) is dropped too: its result would open the node again (4.5).
                 let tv = unsafe { &*(nm as *const NMTREEVIEWW) };
                 if tv.action.0 & TVE_COLLAPSE.0 != 0 {
+                    self.reading.borrow_mut().remove(&tv.itemNew.hItem.0);
                     send(self.hwnd, TVM_EXPAND, (TVE_COLLAPSE.0 | TVE_COLLAPSERESET.0) as usize, tv.itemNew.hItem.0);
                 }
                 None

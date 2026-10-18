@@ -211,7 +211,7 @@ bool App::create(HINSTANCE instance, const CommandLine& cmd, bool useSettings) {
     layout();
     showTabs();
     open(tab().path, Nav::Switch, tab().view);
-    focusList();
+    if (!startQuiet_) focusList();   // giving a control the focus activates the window, which a quiet start may not
     watchForHangs(wnd_);
     return true;
 }
@@ -752,6 +752,8 @@ bool App::onKey(const Key& key) {
     if (alt && k == VK_RIGHT) { goForward(); return true; }
     if (alt && k == VK_UP) { goUp(); return true; }
     if (alt && k == VK_RETURN && focus == list) {   // the selection's properties, or with nothing selected the folder's own
+        // A tab not available (4.3) or still switching shows an empty list with no folder: "" would be This PC's.
+        if (!samePath(list_.dir(), tab().path)) return true;
         std::vector<Item> items = list_.selectedItems();
         Com<IContextMenu> menu = items.empty() ? itemMenu(wnd_, list_.dir()) : itemMenu(wnd_, list_.dir(), items);
         invokeVerb(wnd_, menu.get(), "properties");
@@ -1376,18 +1378,26 @@ void App::loadSettings(const CommandLine& cmd) {
     if (tabs_.empty()) tabs_.push_back(makeTab(knownFolder(FOLDERID_Profile)));
     active_ = 0;
 
+    // A self-test never steals the focus, nor does a start that asked for none (a script's STARTF_USESHOWWINDOW
+    // with SW_SHOWNOACTIVATE, as the command-line checks use): the window opens behind whatever has the focus.
+    STARTUPINFOW si{};
+    si.cb = sizeof si;
+    GetStartupInfoW(&si);
+    startQuiet_ = (si.dwFlags & STARTF_USESHOWWINDOW) && (si.wShowWindow == SW_SHOWNOACTIVATE ||
+                                                          si.wShowWindow == SW_SHOWMINNOACTIVE || si.wShowWindow == SW_SHOWNA);
+    bool quiet = !useSettings_ || startQuiet_;
     int w = number(L"Width", 0), h = number(L"Height", 0);
     if (w > 0 && h > 0) {
         WINDOWPLACEMENT wp{};
         wp.length = sizeof wp;
         int x = number(L"X", 0), y = number(L"Y", 0);
         wp.rcNormalPosition = {x, y, x + w, y + h};
-        wp.showCmd = number(L"Maximized", 0) ? SW_SHOWMAXIMIZED : SW_SHOWNORMAL;
+        wp.showCmd = quiet ? SW_SHOWNOACTIVATE : number(L"Maximized", 0) ? SW_SHOWMAXIMIZED : SW_SHOWNORMAL;
         // A position on a monitor that is gone (a laptop undocked) would put the window out of sight.
         if (MonitorFromRect(&wp.rcNormalPosition, MONITOR_DEFAULTTONULL)) SetWindowPlacement(wnd_, &wp);
         else ShowWindow(wnd_, wp.showCmd);
     } else {
-        ShowWindow(wnd_, useSettings_ ? SW_SHOWNORMAL : SW_SHOWNOACTIVATE);   // a self-test never steals focus
+        ShowWindow(wnd_, quiet ? SW_SHOWNOACTIVATE : SW_SHOWNORMAL);
     }
 }
 

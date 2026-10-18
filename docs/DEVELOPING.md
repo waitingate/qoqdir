@@ -122,7 +122,10 @@ instead of corrupting data, and the crash log says where.
   (`setMessage`) with a beep (`warn()`), never during the self-test.
 - Anything that can block (reading a folder, `SHGetFileInfoW` on a real path, any
   network path) runs on a worker thread.
-- No exceptions. `_GLIBCXX_ASSERTIONS` and the signed overflow trap stay on.
+- No exceptions of our own: nothing is thrown or caught in the app's code. The
+  build keeps them enabled, since the library still throws (`bad_alloc`,
+  `out_of_range`); one nothing catches ends the program through the crash log
+  with exit code 3. `_GLIBCXX_ASSERTIONS` and the signed overflow trap stay on.
 - Link only DLLs that Windows protects (its KnownDLLs list, or comctl32 through
   the manifest). Windows looks for any other imported DLL next to the exe first:
   load it at run time from System32, as `setTheme` does with uxtheme.dll.

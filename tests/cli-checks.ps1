@@ -22,10 +22,18 @@ public class QoqdirHelp {
   [StructLayout(LayoutKind.Sequential)] struct PROCESS_INFORMATION { public IntPtr hProcess, hThread; public int dwProcessId, dwThreadId; }
   [DllImport("kernel32.dll", CharSet=CharSet.Unicode)] static extern bool CreateProcess(string app, StringBuilder cmd, IntPtr pa, IntPtr ta, bool inherit, uint flags, IntPtr env, string dir, ref STARTUPINFO si, out PROCESS_INFORMATION pi);
   [DllImport("kernel32.dll")] static extern bool CloseHandle(IntPtr h);
+  [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
   // Runs a command line with no console (DETACHED_PROCESS): what it starts has no terminal in reach, as from a shortcut.
   public static void StartDetached(string cmd) {
     var si = new STARTUPINFO(); si.cb = Marshal.SizeOf(si); PROCESS_INFORMATION pi;
     if (CreateProcess(null, new StringBuilder(cmd), IntPtr.Zero, IntPtr.Zero, false, 8, IntPtr.Zero, null, ref si, out pi)) { CloseHandle(pi.hThread); CloseHandle(pi.hProcess); }
+  }
+  // Runs a command line asking for a window that takes no focus (STARTF_USESHOWWINDOW with SW_SHOWNOACTIVATE), so the
+  // checks never pull the keyboard away from whoever is typing (7.2). Returns the process id, 0 when it didn't start.
+  public static int StartNoActivate(string cmd) {
+    var si = new STARTUPINFO(); si.cb = Marshal.SizeOf(si); si.dwFlags = 1; si.wShowWindow = 4; PROCESS_INFORMATION pi;
+    if (!CreateProcess(null, new StringBuilder(cmd), IntPtr.Zero, IntPtr.Zero, false, 0, IntPtr.Zero, null, ref si, out pi)) return 0;
+    CloseHandle(pi.hThread); CloseHandle(pi.hProcess); return pi.dwProcessId;
   }
   // A message box's text (its static control, id 0xFFFF), and its title.
   public static string Text(IntPtr box) { var s = new StringBuilder(8192); GetDlgItemText(box, 0xFFFF, s, s.Capacity); return s.ToString(); }
@@ -53,11 +61,19 @@ $failures = 0
 function Check([bool]$ok, [string]$what) {
   if ($ok) { "ok    $what" } else { "FAIL  $what"; $script:failures++ }
 }
+function StartQuiet([string]$exe, [string[]]$argList) {   # starts an exe with a window that takes no focus
+  $id = [QoqdirHelp]::StartNoActivate("`"$exe`" $($argList -join ' ')")
+  $p = if ($id) { Get-Process -Id $id -ErrorAction SilentlyContinue }
+  if ($p) { [void]$p.Handle }   # opened while it runs, so that its exit code can be read after it ends
+  $p
+}
+$tookFocus = $null   # whether the first window started became the foreground window
 function TitleAfterStart([string[]]$argList) {   # starts the copy, reads its window title, closes it
-  $p = if ($argList) { Start-Process $copy -ArgumentList $argList -PassThru } else { Start-Process $copy -PassThru }
+  $p = StartQuiet $copy $argList
   Start-Sleep -Milliseconds 2000
-  if ($p.HasExited) { return '' }   # it stopped by itself (the crash log says why)
+  if (-not $p -or $p.HasExited) { return '' }   # it stopped by itself (the crash log says why)
   $p.Refresh(); $title = $p.MainWindowTitle
+  if ($null -eq $script:tookFocus) { $script:tookFocus = [QoqdirHelp]::GetForegroundWindow() -eq $p.MainWindowHandle }
   [void]$p.CloseMainWindow(); [void]$p.WaitForExit(5000)
   $title
 }
@@ -84,12 +100,13 @@ function HelpBox([string]$arg) {   # starts the copy as a shortcut would, with n
 
 $title = TitleAfterStart @('--tab=C:\Users\Public', '-t="c:\users\public"')
 Check ($title -eq 'Public') "the same folder given twice (--tab=, then -t= with quotes) opens one tab: '$title'"
+Check ($tookFocus -eq $false) 'started by a script that asks for no focus (SW_SHOWNOACTIVATE), the window takes none'
 $ini = Join-Path $dir 'qoqdir.ini'
 Check (-not ((Test-Path $ini) -and (Select-String -Path $ini -Pattern ':\\' -Quiet))) 'qoqdir.ini holds no paths (saved tabs are shortcuts in Bookmarks)'
 Check (Test-Path (Join-Path $dir 'Bookmarks') -PathType Container) 'a Bookmarks folder is created next to the exe'
 $homeName = Split-Path ([Environment]::GetFolderPath('UserProfile')) -Leaf
 $title = TitleAfterStart @()
-Check ($title -eq $homeName) "no folders opens the home folder: '$title'"
+Check ($title -eq $homeName) "no folders opens the home folder$(if ($title -ne $homeName) { ": '$title'" })"   # the name stays out of a log that passes
 $r = HelpOutput '--help'   # the switch F1's help names (-h and -? are the same: unit tests)
 Check ($r.Code -eq 0 -and $r.Text -match '^Qoqdir \d' -and $r.Text -match 'Usage: qoqdir \[options\]' -and $r.Text -match '--tab="folder path"') `
   "--help writes the command-line help where its output goes (a pipe here) and exits with 0 (exit code $($r.Code))"
@@ -97,7 +114,7 @@ $r = HelpOutput '-x'
 Check ($r.Code -eq 1 -and $r.Text.StartsWith('Unknown option: -x') -and $r.Text -match 'Usage: qoqdir') `
   "-x writes the error, then the help, and exits with 1 (exit code $($r.Code))"
 # F1 in the window: posted to the file list as a key press would arrive (nothing global), then the box is closed.
-$p = Start-Process $copy -ArgumentList '--tab=C:\Users\Public' -PassThru
+$p = StartQuiet $copy '--tab=C:\Users\Public'
 Start-Sleep -Milliseconds 2000
 $p.Refresh()
 [void][QoqdirHelp]::PostMessage([QoqdirHelp]::GetDlgItem($p.MainWindowHandle, 108), 0x0100, [IntPtr]0x70, [IntPtr]::Zero)   # WM_KEYDOWN, VK_F1
@@ -124,7 +141,7 @@ New-Item -ItemType Directory $ro | Out-Null
 Copy-Item $Exe $ro
 $sid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
 [void](icacls $ro /deny "*${sid}:(OI)(CI)(WD,AD)")
-$p = Start-Process (Join-Path $ro (Split-Path $Exe -Leaf)) -ArgumentList '--tab=C:\Users\Public' -PassThru
+$p = StartQuiet (Join-Path $ro (Split-Path $Exe -Leaf)) '--tab=C:\Users\Public'
 Start-Sleep -Milliseconds 2000
 $p.Refresh(); $title = $p.MainWindowTitle; $box = [QoqdirHelp]::Dialog([uint32]$p.Id)
 [void]$p.CloseMainWindow(); [void]$p.WaitForExit(5000)

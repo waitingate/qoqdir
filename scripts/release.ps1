@@ -14,6 +14,13 @@ if (-not (Get-Command g++ -ErrorAction SilentlyContinue)) {
 }
 if (git status --porcelain) { throw 'Commit your changes first: a release is built from the last commit.' }
 $version = [regex]::Match((Get-Content src\version.h -Raw), 'QOQDIR_VERSION "([^"]+)"').Groups[1].Value
+# The three places that hold the version must agree: the exe's Properties and the crash log come from version.h's
+# two lines, the Rust version from Cargo.toml.
+$numbers = [regex]::Match((Get-Content src\version.h -Raw), 'QOQDIR_VERSION_NUMBERS (\d+), (\d+), (\d+)').Groups[1..3].Value -join '.'
+$cargo = [regex]::Match((Get-Content rust\Cargo.toml -Raw), '(?m)^version = "([^"]+)"').Groups[1].Value
+if ($numbers -ne $version -or $cargo -ne $version) {
+    throw "The versions differ: version.h says $version and $numbers, rust\Cargo.toml says $cargo."
+}
 $out = Join-Path $PWD 'release'
 $work = Join-Path $out 'work'
 if (Test-Path $work) { Remove-Item $work -Recurse -Force }
@@ -30,6 +37,15 @@ cmake --build "$work\build"; Check 'build'
 
 $exe = "$work\qoqdir.exe"
 strip -o $exe "$work\build\qoqdir.exe"; Check 'strip'
+# One exe under 1 MB that imports only DLLs Windows protects (spec 3): no MinGW runtime, nothing Windows would look
+# for next to the exe first.
+$size = (Get-Item $exe).Length
+if ($size -ge 1MB) { throw "qoqdir.exe is $size bytes: 1 MB or more" }
+$allowed = '^(KERNEL32|USER32|GDI32|ole32|OLEAUT32|SHELL32|SHLWAPI|COMCTL32|api-ms-win-crt-[a-z0-9-]+)\.dll$'
+$imports = @(objdump -p $exe | Select-String 'DLL Name: (\S+)' | ForEach-Object { $_.Matches[0].Groups[1].Value })
+$strangers = @($imports | Where-Object { $_ -notmatch $allowed })
+if ($strangers) { throw "qoqdir.exe imports DLLs Windows doesn't protect: $($strangers -join ', ')" }
+"$size bytes, imports: $($imports -join ', ')"
 powershell -NoProfile -ExecutionPolicy Bypass -File "$work\src\tests\cli-checks.ps1" -Exe $exe; Check 'CLI checks'
 powershell -NoProfile -ExecutionPolicy Bypass -File "$work\src\tests\watch-windows.ps1" -Exe "$work\build\qoqdir-test.exe"
 Check 'self-test'

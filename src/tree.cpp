@@ -107,6 +107,12 @@ void FolderTree::fill() {
 void FolderTree::refreshDrives() {
     HTREEITEM pc = TreeView_GetRoot(tv_);
     for (HTREEITEM n = pc; n; n = TreeView_GetNextSibling(tv_, n)) pc = n;   // This PC is the last root
+    if (!TreeView_GetChild(tv_, pc)) {
+        // No drives shown yet: their first read is still in flight (read again, so the drive that came or went is
+        // in the list), or This PC is closed and unread (its next expand reads them).
+        if (reading_.erase(pc)) startReading(pc, true);
+        return;
+    }
     bool expanded = (TreeView_GetItemState(tv_, pc, TVIS_EXPANDED) & TVIS_EXPANDED) != 0;
     reading_.erase(pc);
     TreeView_Expand(tv_, pc, TVE_COLLAPSE | TVE_COLLAPSERESET);   // forget the drives; the next expand reads them
@@ -283,9 +289,13 @@ bool FolderTree::onNotify(NMHDR* nm, std::wstring* open) {
         return false;
     }
     case TVN_ITEMEXPANDEDW: {
-        // Forget the subfolders of a collapsed node: the next expand reads them fresh.
+        // Forget the subfolders of a collapsed node: the next expand reads them fresh. A read of them still in
+        // flight (F5, a drag held over it) is dropped too: its result would open the node again (4.5).
         auto* tv = reinterpret_cast<NMTREEVIEWW*>(nm);
-        if (tv->action & TVE_COLLAPSE) TreeView_Expand(tv_, tv->itemNew.hItem, TVE_COLLAPSE | TVE_COLLAPSERESET);
+        if (tv->action & TVE_COLLAPSE) {
+            reading_.erase(tv->itemNew.hItem);
+            TreeView_Expand(tv_, tv->itemNew.hItem, TVE_COLLAPSE | TVE_COLLAPSERESET);
+        }
         return false;
     }
     case TVN_DELETEITEMW:

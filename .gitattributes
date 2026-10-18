@@ -1,0 +1,4 @@
+# Git stores every text file with LF line endings, whatever the PC's own setting (docs/DEVELOPING.md).
+* text=auto
+*.ico binary
+*.png binary

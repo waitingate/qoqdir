@@ -46,7 +46,7 @@ use windows::Win32::UI::Shell::{
     SHGFI_SYSICONINDEX, SHGetFileInfoW, SHGetKnownFolderIDList, StrCmpLogicalW,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    BM_CLICK, CHILDID_SELF, FindWindowExW, HTCLIENT, OBJID_CLIENT, GCLP_HBRBACKGROUND, GWLP_USERDATA, GetClassLongPtrW, GetClientRect, GetWindowLongPtrW, GetWindowRect, GetWindowTextLengthW, IsWindowVisible,
+    BM_CLICK, CHILDID_SELF, EnumWindows, FindWindowExW, HTCLIENT, OBJID_CLIENT, GCLP_HBRBACKGROUND, GWLP_USERDATA, GetClassLongPtrW, GetClientRect, GetWindowLongPtrW, GetWindowRect, GetWindowTextLengthW, IsWindowVisible,
     KillTimer, PostMessageW, SW_SHOWMINNOACTIVE, SW_SHOWNOACTIVATE, SetTimer, ShowWindow, WM_CHAR, WM_CLOSE,
     WM_DEVICECHANGE, WM_DPICHANGED, WM_KEYDOWN, WM_LBUTTONDBLCLK, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONUP, WM_MOUSEMOVE, WM_MOUSEWHEEL,
     WM_NCHITTEST, WM_SYSKEYDOWN, WM_TIMER,
@@ -163,6 +163,19 @@ fn text_of(h: HWND) -> String {
 }
 
 /// How long the current step has waited since its act.
+/// The windows on the screen (any program's), to see that an action opened none.
+fn visible_windows() -> Vec<isize> {
+    unsafe extern "system" fn each(h: HWND, p: windows::Win32::Foundation::LPARAM) -> windows::core::BOOL {
+        if unsafe { IsWindowVisible(h) }.as_bool() {
+            unsafe { &mut *(p.0 as *mut Vec<isize>) }.push(h.0 as isize);
+        }
+        true.into()
+    }
+    let mut list = Vec::new();
+    let _ = unsafe { EnumWindows(Some(each), windows::Win32::Foundation::LPARAM(&mut list as *mut Vec<isize> as isize)) };
+    list
+}
+
 fn step_ms() -> u128 {
     RUN.with_borrow(|run| run.as_ref().and_then(|t| t.started).map_or(0, |s| s.elapsed().as_millis()))
 }
@@ -667,8 +680,8 @@ impl App {
             },
         );
         s.add("(Esc puts the path back and returns to the list)", |a| a.press(VK_ESCAPE, 0), |a| {
-            let st = a.st.borrow();
-            text_of(a.address) == st.tabs[st.active].location.text().to_string_lossy() && unsafe { GetFocus() } == a.list.hwnd()
+            let location = a.location(); // not borrowed across the window call below
+            text_of(a.address) == location.text().to_string_lossy() && unsafe { GetFocus() } == a.list.hwnd()
         });
         // The tree's width (96-DPI units) before a drag, and what a drag far past the window's edge left it at.
         let drag = Rc::new(Cell::new((0, 0)));
@@ -1499,6 +1512,24 @@ impl App {
             },
             |_| KEY_MS.get() < 100,
         );
+        let windows_before = Rc::new(RefCell::new(Vec::new()));
+        let (before_act, before_done) = (windows_before.clone(), windows_before);
+        s.add(
+            "Alt+Enter in a tab that is not available opens nothing: there is no folder to show properties of",
+            move |a| {
+                *before_act.borrow_mut() = visible_windows();
+                focus(a.list.hwnd());
+                a.press(VK_RETURN, ALT);
+            },
+            move |_| {
+                // Still nothing new after a while (the empty list's "" would have opened This PC's System page).
+                if step_ms() < 1500 {
+                    return false;
+                }
+                let before = before_done.borrow();
+                visible_windows().iter().all(|h| before.contains(h))
+            },
+        );
         let reopen_home = move |a: &App| {
             {
                 let mut st = a.st.borrow_mut();
@@ -1612,7 +1643,8 @@ impl App {
             "a removed drive is noticed by a tab two folders deep (shown as not available)",
             |a| {
                 // Two levels down only WM_DEVICECHANGE tells: drop the watch, remove the folder, send it.
-                a.st.borrow_mut().watch = None;
+                let watch = a.st.borrow_mut().watch.take(); // dropped outside the borrow: it talks to the shell
+                drop(watch);
                 let _ = std::fs::remove_dir(p("sub\\deep"));
                 volume_change(a, DBT_DEVICEREMOVECOMPLETE);
             },
@@ -1804,6 +1836,18 @@ impl App {
             },
         );
         s.add(
+            "a drive change during the first read of the drives still lists them under This PC",
+            |a| {
+                a.tree.fill(); // This PC's read starts
+                volume_change(a, DBT_DEVICEARRIVAL); // before it lands
+            },
+            |a| {
+                let last = a.tree_last_root(); // This PC
+                let expanded = send(a.tree.hwnd(), TVM_GETITEMSTATE, last as usize, TVIS_EXPANDED.0 as isize) & TVIS_EXPANDED.0 as isize != 0;
+                a.tree_child(last) != 0 && expanded
+            },
+        );
+        s.add(
             "an empty Bookmarks node keeps its arrow, and F5 lists a bookmark added later",
             |a| {
                 FLAG.set(a.tree_item(a.tree_root(), TVIF_CHILDREN).cChildren.0 == 1); // the startup read found Bookmarks empty
@@ -1886,6 +1930,31 @@ impl App {
                 send(a.tree.hwnd(), TVM_EXPAND, TVE_EXPAND.0 as usize, a.tree_child(a.tree_root())); // "one"
             },
             |a| a.tree_child(a.tree_child(a.tree_root())) != 0, // "deep" is shown
+        );
+        s.add(
+            "collapsing a folder while F5 reads it again leaves it collapsed, with its arrow (4.5)",
+            |a| {
+                a.tree_select(a.tree_child(a.tree_root())); // "one", open
+                a.press(VK_F5, 0); // reads every open node again, "one" among them
+                a.tree_key(VK_LEFT); // collapsed before that read lands
+            },
+            |a| {
+                let one = a.tree_child(a.tree_root());
+                if step_ms() < 400 || a.is_loading() || one == 0 {
+                    return false;
+                }
+                let expanded = send(a.tree.hwnd(), TVM_GETITEMSTATE, one as usize, TVIS_EXPANDED.0 as isize) & TVIS_EXPANDED.0 as isize != 0;
+                !expanded && a.tree_child(one) == 0 && a.tree_item(one, TVIF_CHILDREN).cChildren.0 == 1 && a.bookmark_nodes() == "one,two,sub"
+            },
+        );
+        s.add(
+            "(expand it again)",
+            |a| {
+                // As the user would: TVM_EXPAND tells nothing about a node expanded before.
+                a.tree_select(a.tree_child(a.tree_root()));
+                a.tree_key(VK_RIGHT);
+            },
+            |a| a.tree_child(a.tree_child(a.tree_root())) != 0,
         );
         s.add(
             "a drive coming or going re-reads This PC and leaves the rest of the tree as it was (4.5)",

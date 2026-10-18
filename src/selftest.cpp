@@ -10,8 +10,10 @@
 #include <oleacc.h>
 #include <shellapi.h>
 
+#include <algorithm>
 #include <cstdio>
 #include <functional>
+#include <set>
 #include <thread>
 
 struct App::SelfTest {
@@ -902,6 +904,28 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
             selfTest_->note = L"took " + std::to_wstring(int(keyMs)) + L" ms";
         },
         [=, this] { return keyMs < 100; });
+    // The windows on the screen (any program's), to see that an action opened none.
+    auto visibleWindows = [] {
+        std::set<HWND> set;
+        EnumWindows([](HWND h, LPARAM p) -> BOOL {
+            if (IsWindowVisible(h)) reinterpret_cast<std::set<HWND>*>(p)->insert(h);
+            return TRUE;
+        }, reinterpret_cast<LPARAM>(&set));
+        return set;
+    };
+    auto windowsBefore = std::make_shared<std::set<HWND>>();
+    add(L"Alt+Enter in a tab that is not available opens nothing: there is no folder to show properties of",
+        [=, this] {
+            *windowsBefore = visibleWindows();
+            SetFocus(list_.hwnd());
+            selfTestKey(VK_RETURN, false, false, true);
+        },
+        [=, this] {
+            // Still nothing new after a while (the empty list's "" would have opened This PC's System page).
+            if (GetTickCount64() - selfTest_->startTick < 1500) return false;
+            std::set<HWND> now = visibleWindows();
+            return std::includes(windowsBefore->begin(), windowsBefore->end(), now.begin(), now.end());
+        });
     add(L"(back to the test folder)", [=, this] { tab().path = dir; open(dir, Nav::Refresh); }, [=, this] { return at(dir); });
     add(L"a shortcut to a folder that is gone says so here (no Windows dialog)",
         [=, this] {
@@ -1170,6 +1194,20 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
             return *twoRoots && roots.starts_with(L"Bookmarks," + std::wstring(sfi.szDisplayName) + L",") &&
                    roots.ends_with(L",This PC");
         });
+    add(L"a drive change during the first read of the drives still lists them under This PC",
+        [=, this] {
+            tree_.fill();   // This PC's read starts
+            DEV_BROADCAST_VOLUME vol{};
+            vol.dbcv_size = sizeof vol;
+            vol.dbcv_devicetype = DBT_DEVTYP_VOLUME;
+            SendMessageW(wnd_, WM_DEVICECHANGE, DBT_DEVICEARRIVAL, reinterpret_cast<LPARAM>(&vol));   // before it lands
+        },
+        [=, this] {
+            HWND tv = tree_.hwnd();
+            HTREEITEM last = TreeView_GetRoot(tv);
+            for (HTREEITEM n = last; n; n = TreeView_GetNextSibling(tv, n)) last = n;   // This PC
+            return TreeView_GetChild(tv, last) && (TreeView_GetItemState(tv, last, TVIS_EXPANDED) & TVIS_EXPANDED);
+        });
     auto arrow = std::make_shared<bool>(false);
     add(L"an empty Bookmarks node keeps its arrow, and F5 lists a bookmark added later",
         [=, this] {
@@ -1248,6 +1286,34 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
         [=, this] {
             HWND tv = tree_.hwnd();
             return TreeView_GetChild(tv, TreeView_GetChild(tv, TreeView_GetRoot(tv))) != nullptr;   // "deep" is shown
+        });
+    add(L"collapsing a folder while F5 reads it again leaves it collapsed, with its arrow (4.5)",
+        [=, this] {
+            HWND tv = tree_.hwnd();
+            TreeView_SelectItem(tv, TreeView_GetChild(tv, TreeView_GetRoot(tv)));   // "one", open
+            selfTestKey(VK_F5);                           // reads every open node again, "one" among them
+            SendMessageW(tv, WM_KEYDOWN, VK_LEFT, 0);    // collapsed before that read lands
+        },
+        [=, this] {
+            HWND tv = tree_.hwnd();
+            HTREEITEM one = TreeView_GetChild(tv, TreeView_GetRoot(tv));
+            if (GetTickCount64() - selfTest_->startTick < 400 || !at(dir) || !one) return false;
+            TVITEMW item{};
+            item.mask = TVIF_CHILDREN;
+            item.hItem = one;
+            TreeView_GetItem(tv, &item);
+            return !(TreeView_GetItemState(tv, one, TVIS_EXPANDED) & TVIS_EXPANDED) && !TreeView_GetChild(tv, one) &&
+                   item.cChildren == 1 && bookmarkNodes() == L"one,two,sub";
+        });
+    add(L"(expand it again)",
+        [=, this] {
+            HWND tv = tree_.hwnd();   // as the user would: TVM_EXPAND tells nothing about a node expanded before
+            TreeView_SelectItem(tv, TreeView_GetChild(tv, TreeView_GetRoot(tv)));
+            SendMessageW(tv, WM_KEYDOWN, VK_RIGHT, 0);
+        },
+        [=, this] {
+            HWND tv = tree_.hwnd();
+            return TreeView_GetChild(tv, TreeView_GetChild(tv, TreeView_GetRoot(tv))) != nullptr;
         });
     add(L"a drive coming or going re-reads This PC and leaves the rest of the tree as it was (4.5)",
         [=, this] {

@@ -41,13 +41,17 @@ while (-not $p.HasExited) {
   foreach ($w in [QoqdirWindows]::Visible().GetEnumerator()) {
     if ($before.ContainsKey($w.Key) -or $seen.Contains($w.Key) -or $w.Value -match "^pid $($p.Id) \[Qoqdir\]") { continue }
     $seen[$w.Key] = $w.Value
-    if ($w.Value -match "\[Ghost\] '.*Qoqdir") { $busy++ }   # Windows' stand-in for a window busy 5+ s
+    if ($w.Value -match '\[Ghost\] ') { $busy++ }   # Windows' stand-in for a window busy 5+ s (titled as the folder shown)
   }
   Start-Sleep -Milliseconds 200
 }
 "self-test (pid $($p.Id)) exit code: $($p.ExitCode)"
 if ($busy) { "Qoqdir's window was busy for 5+ seconds $busy time(s) (the self-test's own setup of 10,000 files, and of 10,000 folders, does this)" }
-$others = @($seen.Values | Where-Object { $_ -notmatch "\[Ghost\] '.*Qoqdir" })
+$others = @($seen.Values | Where-Object { $_ -notmatch '\[Ghost\] ' })
 if ($others) { 'new windows during the run:'; $others | ForEach-Object { "  $_" } } else { 'no new windows' }
 if (Test-Path $Log) { Get-Content -Encoding UTF8 $Log | Select-String 'FAIL|passed' }
+# A dialog or message box from the test's own process is a step that touched the desktop (7.2): the run fails on it,
+# as it does on a failed step. Other programs' windows can't be told from the user's own and are only listed.
+$dialogs = @($others | Where-Object { $_ -match "^pid $($p.Id) \[#32770\]" })
+if ($dialogs) { "FAIL  the self-test opened $($dialogs.Count) dialog(s) of its own"; if (-not $p.ExitCode) { exit 1 } }
 exit $p.ExitCode

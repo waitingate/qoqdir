@@ -756,7 +756,10 @@ result:
 ### 7.3 Command-line checks
 Run on a copy of the exe in a temp folder:
 - `--tab=C:\Users\Public -t="c:\users\public"` (the same folder, in both forms)
-  opens one window titled "Public".
+  opens one window titled "Public". Started with a request for no focus
+  (`STARTF_USESHOWWINDOW` with `SW_SHOWNOACTIVATE`, as the checks start every
+  window), it takes none: the checks never pull the keyboard away from the
+  user.
   After closing it, `qoqdir.ini` holds no tabs or paths, and a `Bookmarks` folder
   exists next to the exe.
 - No arguments: the home folder is shown.
