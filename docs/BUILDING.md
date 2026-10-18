@@ -26,53 +26,64 @@ Set these up once.
 
 ### MinGW-w64, for the C++ version
 
-GCC 13 with CMake and Ninja. The winlibs build
-`gcc-13.2.0-mingw-w64ucrt-11.0.1-r8` from winlibs.com (Win64, UCRT runtime, POSIX
-threads, without LLVM) has all three, and the releases are built with it. The
-file is `winlibs-x86_64-posix-seh-gcc-13.2.0-mingw-w64ucrt-11.0.1-r8.zip` (216
-MB; the `.7z` is 94 MB), on GitHub at
-https://github.com/brechtsanders/winlibs_mingw/releases/tag/13.2.0posix-18.1.5-11.0.1-ucrt-r8
-with a `.sha256` file beside it. The archive holds one folder, `mingw64`: put it
-in your own programs folder, `%LOCALAPPDATA%\Programs`
-(`C:\Users\<you>\AppData\Local\Programs`), so that
-`%LOCALAPPDATA%\Programs\mingw64\bin\g++.exe` exists; no admin rights are
-needed. `scripts\build.ps1` and `scripts\release.ps1` look there, and then in
-`C:\mingw64`, when the tools aren't on the PATH. Any other folder works as long
-as its path has no spaces (MinGW's tools dislike them; with a space in your
-user name, use `C:\mingw64`, which any user may create) and its `bin` goes on
-the PATH. Then in each new terminal:
+GCC 13 with CMake and Ninja, in one archive from winlibs. The releases are
+built with it.
+
+1. Download `winlibs-x86_64-posix-seh-gcc-13.2.0-mingw-w64ucrt-11.0.1-r8.zip`
+   (216 MB) or the `.7z` (94 MB) from
+   https://github.com/brechtsanders/winlibs_mingw/releases/tag/13.2.0posix-18.1.5-11.0.1-ucrt-r8.
+   A `.sha256` file is beside it. On winlibs.com it is the Win64 link "without
+   LLVM/Clang/LLD/LLDB" under GCC 13.2.0, UCRT, release 8: Win64, UCRT runtime,
+   POSIX threads.
+2. Unpack it. The archive holds one folder, `mingw64`. Put it in
+   `%LOCALAPPDATA%\Programs`, so that
+   `%LOCALAPPDATA%\Programs\mingw64\bin\g++.exe` exists. No admin rights are
+   needed.
+3. In each new terminal:
 
 ```powershell
 $env:PATH = "$env:LOCALAPPDATA\Programs\mingw64\bin;" + $env:PATH
 g++ --version
 ```
 
-Its `windres` also puts the icon into the Rust exe. MSYS2's UCRT64 GCC works too
-(the build on GitHub uses it).
+`scripts\build.ps1` and `scripts\release.ps1` do step 3 themselves: when g++
+isn't on the PATH they look in `%LOCALAPPDATA%\Programs\mingw64`, then in
+`C:\mingw64`.
+
+Any other folder works if its path has no spaces, which MinGW's tools dislike.
+With a space in your user name, use `C:\mingw64`: any user may create a folder
+at the root of `C:`. The compiler's `windres` also puts the icon into the Rust
+exe. MSYS2's UCRT64 GCC works too (the build on GitHub uses it).
 
 ### Rust, for the Rust version
 
-A portable install in `C:\rust` for the GNU target; nothing else on the system
-changes:
+A portable install for the GNU target, in `%LOCALAPPDATA%\Programs\rust`. No
+admin rights, and nothing else on the system changes.
 
-```powershell
-New-Item -ItemType Directory -Force C:\rust
-Invoke-WebRequest https://static.rust-lang.org/rustup/dist/x86_64-pc-windows-gnu/rustup-init.exe -OutFile C:\rust\rustup-init.exe
-$env:RUSTUP_HOME = 'C:\rust\rustup'; $env:CARGO_HOME = 'C:\rust\cargo'
-C:\rust\rustup-init.exe -y --no-modify-path --profile minimal -c clippy --default-host x86_64-pc-windows-gnu --default-toolchain stable
-```
+1. Install, in PowerShell. It downloads about 200 MB and takes a few minutes:
 
-Save these lines as `C:\rust\rust-env.ps1`, and run `. C:\rust\rust-env.ps1` in
-each new terminal:
+   ```powershell
+   $R = "$env:LOCALAPPDATA\Programs\rust"; New-Item -ItemType Directory -Force $R
+   Invoke-WebRequest https://static.rust-lang.org/rustup/dist/x86_64-pc-windows-gnu/rustup-init.exe -OutFile $R\rustup-init.exe
+   $env:RUSTUP_HOME = "$R\rustup"; $env:CARGO_HOME = "$R\cargo"
+   & $R\rustup-init.exe -y --no-modify-path --profile minimal -c clippy --default-host x86_64-pc-windows-gnu --default-toolchain stable
+   ```
 
-```powershell
-$env:RUSTUP_HOME = Join-Path $PSScriptRoot 'rustup'
-$env:CARGO_HOME  = Join-Path $PSScriptRoot 'cargo'
-$env:PATH = (Join-Path $PSScriptRoot 'cargo\bin') + ';' + $env:PATH
-```
+2. Save these three lines as `rust-env.ps1` in that folder:
 
-The code needs Rust 1.85 or newer (edition 2024). `rustup update` updates Rust;
-deleting `C:\rust` removes it.
+   ```powershell
+   $env:RUSTUP_HOME = Join-Path $PSScriptRoot 'rustup'
+   $env:CARGO_HOME  = Join-Path $PSScriptRoot 'cargo'
+   $env:PATH = (Join-Path $PSScriptRoot 'cargo\bin') + ';' + $env:PATH
+   ```
+
+3. In each new terminal: `. $env:LOCALAPPDATA\Programs\rust\rust-env.ps1`.
+   `scripts\build.ps1` does this itself: when cargo isn't on the PATH it looks
+   there, then in `C:\rust`.
+
+The code needs Rust 1.91 or newer (`rust-version` in `Cargo.toml`, which clippy
+checks the code against). `rustup update` updates Rust; deleting the folder
+removes it.
 
 ### PowerShell scripts
 
@@ -94,8 +105,8 @@ powershell -File scripts\build.ps1
 ```
 
 It takes the tools from the PATH, or else from `%LOCALAPPDATA%\Programs\mingw64`
-or `C:\mingw64`, and `C:\rust`, and builds the C++ version (a compiler warning
-stops it) and both Rust builds.
+or `C:\mingw64` and from `%LOCALAPPDATA%\Programs\rust` or `C:\rust`, and
+builds the C++ version (a compiler warning stops it) and both Rust builds.
 
 ### The C++ version by hand
 
@@ -104,7 +115,7 @@ cmake -S . -B build -G Ninja      # once; Release unless told otherwise
 cmake --build build
 ```
 
-`qoqdir.exe` is statically linked: one file of about 500 KB, with no DLLs beside
+`qoqdir.exe` is statically linked: one file of about 570 KB, with no DLLs beside
 it. GCC's runtime checks are on, so a bad index or a signed integer overflow
 stops the program and writes the reason to `%TEMP%\qoqdir-crash.log` instead of
 running on with wrong data. A build to step through with `gdb` (it comes with
@@ -142,6 +153,14 @@ cargo build --release --features selftest --target-dir target\selftest   # the s
 ```
 
 The self-test build gets its own folder, so it never replaces your exe.
+
+A build by hand puts the Rust folder's path into the exe: the crates' panic
+messages name their source files, which live under `cargo\registry` there. On
+a per-user install that path holds your user name. `scripts\build.ps1` avoids
+this by building with
+`$env:RUSTFLAGS = "--remap-path-prefix=<the Rust folder>\cargo=cargo"`, which
+leaves only `cargo\...` in the exe. Set the same before building an exe by
+hand that leaves the PC.
 
 ## 3. Test
 
@@ -277,7 +296,7 @@ the run. The Rust version isn't built there.
   not on the PATH (`scripts\build.ps1` adds it, section 1).
 - The Rust build fails in `dlltool` (it did on the first build machine): point
   cargo at MinGW's, with the full path of `dlltool.exe` in your `mingw64\bin`,
-  in `C:\rust\cargo\config.toml`:
+  in `cargo\config.toml` inside the Rust folder:
 
   ```toml
   [target.x86_64-pc-windows-gnu]

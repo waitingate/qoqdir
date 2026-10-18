@@ -147,25 +147,20 @@ version) and your Windows version.
 
 ## Build
 
-Needs MinGW-w64 GCC 13 with CMake and Ninja, on Windows 10 or 11 x64. No
-Visual Studio and nothing to install: the winlibs build the releases are made
-with has all three in one archive.
+Windows 10 or 11, x64. One download holds the compiler and the build tools.
+Nothing gets installed, and no admin rights are needed.
 
-1. Download `winlibs-x86_64-posix-seh-gcc-13.2.0-mingw-w64ucrt-11.0.1-r8.zip`
-   (216 MB; the `.7z` is 94 MB). On https://winlibs.com/ it is under "GCC
-   13.2.0 (with POSIX threads) + LLVM/Clang/LLD/LLDB 18.1.5 + MinGW-w64 11.0.1
-   (UCRT) - release 8": take the Win64 link marked without LLVM/Clang/LLD/LLDB.
-   The links there go to the same files on GitHub:
-   https://github.com/brechtsanders/winlibs_mingw/releases/tag/13.2.0posix-18.1.5-11.0.1-ucrt-r8
-2. Unpack it. The archive holds one folder, `mingw64`: put it in your own
-   programs folder, `%LOCALAPPDATA%\Programs` (that is
-   `C:\Users\<you>\AppData\Local\Programs`, where per-user programs go), so
-   that `%LOCALAPPDATA%\Programs\mingw64\bin\g++.exe` exists. No admin rights
-   are needed. Any other folder works too, such as `C:\mingw64` (use that if
-   your user name has a space in it: MinGW's tools dislike spaces in paths);
-   then write its `bin` in the first line below instead. To remove the
-   compiler later, delete the folder.
-3. In PowerShell, in this folder:
+1. Get the compiler: MinGW-w64 GCC 13.2 from winlibs, with CMake and Ninja
+   inside. The file is
+   `winlibs-x86_64-posix-seh-gcc-13.2.0-mingw-w64ucrt-11.0.1-r8.zip` (216 MB,
+   or the `.7z` at 94 MB), from
+   https://github.com/brechtsanders/winlibs_mingw/releases/tag/13.2.0posix-18.1.5-11.0.1-ucrt-r8.
+   On https://winlibs.com/ it is the Win64 link "without LLVM/Clang/LLD/LLDB"
+   under GCC 13.2.0, UCRT, release 8.
+2. Unpack it. The archive holds one folder, `mingw64`. Put that folder in
+   `%LOCALAPPDATA%\Programs`, so that
+   `%LOCALAPPDATA%\Programs\mingw64\bin\g++.exe` exists.
+3. Build. In PowerShell, in this folder:
 
 ```powershell
 $env:PATH = "$env:LOCALAPPDATA\Programs\mingw64\bin;" + $env:PATH
@@ -173,11 +168,34 @@ cmake -S . -B build -G Ninja
 cmake --build build
 ```
 
-That gives `build\qoqdir.exe`, statically linked. `docs/BUILDING.md` covers the
-rest: setting up the tools, the Rust version, the tests, `scripts\build.ps1`
-(which builds and checks both versions) and making a release. GitHub Actions
-builds the C++ version on every push and runs its tests
+The result is `build\qoqdir.exe`, one statically linked file. To remove the
+compiler later, delete its folder.
+
+Notes. `%LOCALAPPDATA%` is `C:\Users\<you>\AppData\Local`. The compiler can go
+in any folder whose path has no spaces, such as `C:\mingw64`; then write that
+folder's `bin` in the PATH line instead. `docs/BUILDING.md` has the tests,
+`scripts\build.ps1`, which builds and checks both versions, and the release
+steps. GitHub Actions builds the C++ version on every push
 (`.github/workflows/build.yml`).
+
+### The Rust version
+
+`rust\` holds the same program in Rust. It needs Rust 1.91 or newer for the
+GNU target, plus the MinGW `bin` above on the PATH for the icon. This installs
+Rust in `%LOCALAPPDATA%\Programs\rust`, again without admin rights. In
+PowerShell:
+
+```powershell
+$R = "$env:LOCALAPPDATA\Programs\rust"; New-Item -ItemType Directory -Force $R
+Invoke-WebRequest https://static.rust-lang.org/rustup/dist/x86_64-pc-windows-gnu/rustup-init.exe -OutFile $R\rustup-init.exe
+$env:RUSTUP_HOME = "$R\rustup"; $env:CARGO_HOME = "$R\cargo"
+& $R\rustup-init.exe -y --no-modify-path --profile minimal -c clippy --default-host x86_64-pc-windows-gnu --default-toolchain stable
+```
+
+Then put `%LOCALAPPDATA%\Programs\rust\cargo\bin` on the PATH too, and run
+`cargo build --release` in `rust\`. The result is
+`rust\target\release\qoqdir.exe`. `docs/BUILDING.md` section 1 has a
+three-line script that sets Rust's PATH in each new terminal.
 
 ## Source
 

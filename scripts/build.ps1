@@ -1,6 +1,6 @@
 # Builds both versions of Qoqdir; with -Test it then runs every check, as is due before calling a change done
-# (docs\BUILDING.md). The tools come from the PATH, or else from where the guide puts them: MinGW in
-# %LOCALAPPDATA%\Programs\mingw64 (no admin rights needed) or C:\mingw64, Rust in C:\rust.
+# (docs\BUILDING.md). The tools come from the PATH, or else from where the guide puts them (no admin rights
+# needed): MinGW in %LOCALAPPDATA%\Programs\mingw64 or C:\mingw64, Rust in %LOCALAPPDATA%\Programs\rust or C:\rust.
 #   powershell -File scripts\build.ps1          C++: build\qoqdir.exe, build\qoqdir-test.exe; Rust: rust\target\
 #   powershell -File scripts\build.ps1 -Test    then the unit tests, clippy, the command-line checks and both self-tests
 param([switch]$Test)
@@ -12,9 +12,14 @@ if (-not (Get-Command g++ -ErrorAction SilentlyContinue)) {
     $env:PATH = "$mingw;" + $env:PATH
 }
 if (-not (Get-Command cargo -ErrorAction SilentlyContinue)) {
-    if (-not (Test-Path C:\rust\rust-env.ps1)) { throw 'Rust not found: see docs\BUILDING.md, section 1' }
-    . C:\rust\rust-env.ps1
+    $rustEnv = @("$env:LOCALAPPDATA\Programs\rust\rust-env.ps1", 'C:\rust\rust-env.ps1') | Where-Object { Test-Path $_ } | Select-Object -First 1
+    if (-not $rustEnv) { throw 'Rust not found: see docs\BUILDING.md, section 1' }
+    . $rustEnv
 }
+# The panic messages of the crates used carry their source paths, which lie under CARGO_HOME: under C:\Users on a
+# per-user install. Name that folder "cargo" in the exe instead, as CMake does for the compiler's folder.
+$cargoHome = if ($env:CARGO_HOME) { $env:CARGO_HOME } else { "$env:USERPROFILE\.cargo" }
+if (-not $env:RUSTFLAGS) { $env:RUSTFLAGS = "--remap-path-prefix=$cargoHome=cargo" }
 function Step([string]$name, [scriptblock]$run) {
     "== $name"
     & $run
