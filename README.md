@@ -201,7 +201,8 @@ script that sets Rust's PATH in each new terminal.
 
 - `src/` the program, `res/` its manifest and icon
 - `rust/` the same program in Rust
-- `tests/` the unit tests and the two check scripts
+- `tests/` the unit tests and the three check scripts (the exe, the command
+  line, the self-test with its popup watch)
 - `scripts/` `build.ps1` builds and checks both versions, `release.ps1` makes a
   release, `make-icon.ps1` draws the icon
 - `docs/` `BUILDING.md` (tools, building, testing, releases), `DEVELOPING.md`
