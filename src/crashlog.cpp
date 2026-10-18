@@ -97,22 +97,29 @@ void onTerminate() {
 HWND g_watched = nullptr;
 DWORD g_windowThread = 0;
 
-// One frame as "exe+0x1234" or "name.dll+0x1234" (the bare address when it is in no module). The module comes from
-// the memory manager, not the loader: GetModuleHandleEx takes the loader lock, which the hung thread may hold (a
-// shell extension stuck in a DLL load), and then no line would ever be written.
-const char* frameText(DWORD64 pc, char* out, size_t size) {
+// The image (the exe or a DLL) an address lies in: its base, or null outside any. From the memory manager, since
+// the loader's lock may be held by the very thread that is stopped (a shell extension stuck in a DLL load).
+char* imageBase(DWORD64 pc) {
     MEMORY_BASIC_INFORMATION mbi{};
-    if (!VirtualQuery(reinterpret_cast<void*>(pc), &mbi, sizeof mbi) || mbi.Type != MEM_IMAGE) {
+    if (!VirtualQuery(reinterpret_cast<void*>(pc), &mbi, sizeof mbi) || mbi.Type != MEM_IMAGE) return nullptr;
+    return static_cast<char*>(mbi.AllocationBase);
+}
+
+// One frame as "exe+0x1234" or "name.dll+0x1234" (the bare address when it is in no module). GetModuleHandleEx
+// would name the module but takes the loader lock, and then no line would ever be written.
+const char* frameText(DWORD64 pc, char* out, size_t size) {
+    char* base = imageBase(pc);
+    if (!base) {
         snprintf(out, size, "0x%llx", static_cast<unsigned long long>(pc));
         return out;
     }
-    auto offset = static_cast<unsigned long long>(pc - reinterpret_cast<DWORD64>(mbi.AllocationBase));
-    if (static_cast<const char*>(mbi.AllocationBase) == exeBase) {
+    auto offset = static_cast<unsigned long long>(pc - reinterpret_cast<DWORD64>(base));
+    if (base == exeBase) {
         snprintf(out, size, "exe+0x%llx", offset);
         return out;
     }
     wchar_t path[MAX_PATH] = {};   // "\Device\HarddiskVolume2\Windows\System32\shell32.dll"
-    K32GetMappedFileNameW(GetCurrentProcess(), mbi.AllocationBase, path, MAX_PATH);
+    K32GetMappedFileNameW(GetCurrentProcess(), base, path, MAX_PATH);
     const wchar_t* name = wcsrchr(path, L'\\');
     snprintf(out, size, "%ls+0x%llx", name ? name + 1 : path, offset);
     return out;
@@ -121,9 +128,8 @@ const char* frameText(DWORD64 pc, char* out, size_t size) {
 // The unwind entry for pc, from its module's own exception table. RtlLookupFunctionEntry would do this, but it takes
 // the loader's table lock: a thread stopped while the loader holds it (a DLL being mapped) would never be resumed.
 RUNTIME_FUNCTION* functionEntry(DWORD64 pc, DWORD64* base) {
-    MEMORY_BASIC_INFORMATION mbi{};
-    if (!VirtualQuery(reinterpret_cast<void*>(pc), &mbi, sizeof mbi) || mbi.Type != MEM_IMAGE) return nullptr;
-    auto image = static_cast<char*>(mbi.AllocationBase);
+    char* image = imageBase(pc);
+    if (!image) return nullptr;
     auto nt = reinterpret_cast<const IMAGE_NT_HEADERS*>(image + reinterpret_cast<const IMAGE_DOS_HEADER*>(image)->e_lfanew);
     const IMAGE_DATA_DIRECTORY& dir = nt->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_EXCEPTION];
     auto table = reinterpret_cast<RUNTIME_FUNCTION*>(image + dir.VirtualAddress);
@@ -163,42 +169,34 @@ DWORD WINAPI hangWatch(void*) {
         if (t && SuspendThread(t) != DWORD(-1)) {
             CONTEXT c{};
             c.ContextFlags = CONTEXT_CONTROL | CONTEXT_INTEGER;
+            // The one rule that keeps the walk safe: every pointer it reads through lies in the committed stack
+            // around Rsp, which is readable in this process. One outside it means a wrong unwind entry (an address
+            // that landed in a stranger's code). The other two stops only spare the log a tail of noise.
             MEMORY_BASIC_INFORMATION stack{};
-            DWORD64 lo = 0, hi = 0;   // the committed stack around Rsp
+            DWORD64 lo = 0, hi = 0;
             if (GetThreadContext(t, &c) && VirtualQuery(reinterpret_cast<void*>(c.Rsp), &stack, sizeof stack) &&
                 stack.State == MEM_COMMIT && !(stack.Protect & (PAGE_GUARD | PAGE_NOACCESS))) {
                 lo = reinterpret_cast<DWORD64>(stack.BaseAddress);
                 hi = lo + stack.RegionSize;
             }
-            for (; count < 24 && c.Rip && c.Rsp >= lo && c.Rsp + 8 <= hi; ++count) {
-                frames[count] = c.Rip;
+            auto onStack = [&](DWORD64 p) { return p >= lo && p + 8 <= hi; };
+            while (count < 24 && c.Rip && onStack(c.Rsp)) {
+                frames[count++] = c.Rip;
                 DWORD64 base = 0, rsp = c.Rsp;
                 RUNTIME_FUNCTION* fn = functionEntry(c.Rip, &base);
                 if (!fn) {
-                    if (count > 0) {   // only the innermost frame can be a leaf
-                        ++count;
-                        break;
-                    }
+                    if (count > 1) break;   // only the innermost frame can be a leaf: the walk is lost
                     c.Rip = *reinterpret_cast<DWORD64*>(c.Rsp);
                     c.Rsp += 8;
                     continue;
                 }
-                // UNWIND_INFO's 4th byte: the frame register (0: none) and its offset. A frame register outside the
-                // stack means a wrong entry (an address that landed in a stranger's code): the unwinder would read
-                // through it.
+                // UNWIND_INFO's 4th byte: the frame register (0: none) and its offset; the unwinder reads through it.
                 int frameReg = reinterpret_cast<const BYTE*>(base + fn->UnwindData)[3] & 0xF;
-                DWORD64 frame = frameReg ? (&c.Rax)[frameReg] : c.Rsp;   // Rax, Rcx, Rdx, Rbx, Rsp, Rbp, ... in order
-                if (frame < lo || frame >= hi) {
-                    ++count;
-                    break;
-                }
+                if (frameReg && !onStack((&c.Rax)[frameReg])) break;   // Rax, Rcx, Rdx, Rbx, Rsp, Rbp, ... in order
                 void* handler = nullptr;
                 DWORD64 frameBase = 0;
                 RtlVirtualUnwind(UNW_FLAG_NHANDLER, base, c.Rip, fn, &c, &handler, &frameBase, nullptr);
-                if (c.Rsp <= rsp) {
-                    ++count;
-                    break;
-                }
+                if (c.Rsp <= rsp) break;   // not moving up: lost too
             }
             ResumeThread(t);
         }
@@ -226,9 +224,8 @@ void watchForHangs(HWND window) {
 }
 
 void installCrashLog() {
-    static wchar_t temp[32768] = {};
-    GetTempPathW(DWORD(std::size(temp)), temp);
-    lstrcpynW(logPath, joinPath(temp, toLower(kAppName) + L"-crash.log").c_str(), int(std::size(logPath)));
+    GetTempPathW(DWORD(std::size(logPath)), logPath);   // the folder first, then the file in it
+    crashLogIn(logPath);
     exeBase = reinterpret_cast<const char*>(GetModuleHandleW(nullptr));
     auto dos = reinterpret_cast<const IMAGE_DOS_HEADER*>(exeBase);
     exeSize = reinterpret_cast<const IMAGE_NT_HEADERS*>(exeBase + dos->e_lfanew)->OptionalHeader.SizeOfImage;

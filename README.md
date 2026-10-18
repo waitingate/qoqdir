@@ -194,8 +194,8 @@ $env:RUSTUP_HOME = "$R\rustup"; $env:CARGO_HOME = "$R\cargo"
 
 Then put `%LOCALAPPDATA%\Programs\rust\cargo\bin` on the PATH too, and run
 `cargo build --release` in `rust\`. The result is
-`rust\target\release\qoqdir.exe`. `docs/BUILDING.md` section 1 has a
-three-line script that sets Rust's PATH in each new terminal.
+`rust\target\release\qoqdir.exe`. `docs/BUILDING.md` section 1 has a short
+script that sets Rust's PATH in each new terminal.
 
 ## Source
 

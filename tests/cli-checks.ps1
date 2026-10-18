@@ -23,16 +23,13 @@ public class QoqdirHelp {
   [DllImport("kernel32.dll", CharSet=CharSet.Unicode)] static extern bool CreateProcess(string app, StringBuilder cmd, IntPtr pa, IntPtr ta, bool inherit, uint flags, IntPtr env, string dir, ref STARTUPINFO si, out PROCESS_INFORMATION pi);
   [DllImport("kernel32.dll")] static extern bool CloseHandle(IntPtr h);
   [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
-  // Runs a command line with no console (DETACHED_PROCESS): what it starts has no terminal in reach, as from a shortcut.
-  public static void StartDetached(string cmd) {
+  // Runs a command line. flags 8 (DETACHED_PROCESS): no console, so what starts has no terminal in reach, as from a
+  // shortcut. show 4 (SW_SHOWNOACTIVATE): a window that takes no focus, so the checks never pull the keyboard away
+  // from whoever is typing (7.2). Returns the process id, 0 when it didn't start.
+  public static int Start(string cmd, uint flags, short show) {
     var si = new STARTUPINFO(); si.cb = Marshal.SizeOf(si); PROCESS_INFORMATION pi;
-    if (CreateProcess(null, new StringBuilder(cmd), IntPtr.Zero, IntPtr.Zero, false, 8, IntPtr.Zero, null, ref si, out pi)) { CloseHandle(pi.hThread); CloseHandle(pi.hProcess); }
-  }
-  // Runs a command line asking for a window that takes no focus (STARTF_USESHOWWINDOW with SW_SHOWNOACTIVATE), so the
-  // checks never pull the keyboard away from whoever is typing (7.2). Returns the process id, 0 when it didn't start.
-  public static int StartNoActivate(string cmd) {
-    var si = new STARTUPINFO(); si.cb = Marshal.SizeOf(si); si.dwFlags = 1; si.wShowWindow = 4; PROCESS_INFORMATION pi;
-    if (!CreateProcess(null, new StringBuilder(cmd), IntPtr.Zero, IntPtr.Zero, false, 0, IntPtr.Zero, null, ref si, out pi)) return 0;
+    if (show != 0) { si.dwFlags = 1; si.wShowWindow = show; }   // STARTF_USESHOWWINDOW
+    if (!CreateProcess(null, new StringBuilder(cmd), IntPtr.Zero, IntPtr.Zero, false, flags, IntPtr.Zero, null, ref si, out pi)) return 0;
     CloseHandle(pi.hThread); CloseHandle(pi.hProcess); return pi.dwProcessId;
   }
   // A message box's text (its static control, id 0xFFFF), and its title.
@@ -62,20 +59,19 @@ function Check([bool]$ok, [string]$what) {
   if ($ok) { "ok    $what" } else { "FAIL  $what"; $script:failures++ }
 }
 function StartQuiet([string]$exe, [string[]]$argList) {   # starts an exe with a window that takes no focus
-  $id = [QoqdirHelp]::StartNoActivate("`"$exe`" $($argList -join ' ')")
+  $id = [QoqdirHelp]::Start("`"$exe`" $($argList -join ' ')", 0, 4)
   $p = if ($id) { Get-Process -Id $id -ErrorAction SilentlyContinue }
   if ($p) { [void]$p.Handle }   # opened while it runs, so that its exit code can be read after it ends
   $p
 }
-$tookFocus = $null   # whether the first window started became the foreground window
-function TitleAfterStart([string[]]$argList) {   # starts the copy, reads its window title, closes it
+function TitleAfterStart([string[]]$argList) {   # starts the copy, reads its window title and whether it took the focus, closes it
   $p = StartQuiet $copy $argList
   Start-Sleep -Milliseconds 2000
-  if (-not $p -or $p.HasExited) { return '' }   # it stopped by itself (the crash log says why)
-  $p.Refresh(); $title = $p.MainWindowTitle
-  if ($null -eq $script:tookFocus) { $script:tookFocus = [QoqdirHelp]::GetForegroundWindow() -eq $p.MainWindowHandle }
+  if (-not $p -or $p.HasExited) { return @{ Title = ''; Focused = $false } }   # it stopped by itself (the crash log says why)
+  $p.Refresh()
+  $r = @{ Title = $p.MainWindowTitle; Focused = [QoqdirHelp]::GetForegroundWindow() -eq $p.MainWindowHandle }
   [void]$p.CloseMainWindow(); [void]$p.WaitForExit(5000)
-  $title
+  $r
 }
 function HelpOutput([string]$arg) {   # runs the copy with its output going to a pipe, as in "qoqdir -h | more"
   $si = New-Object Diagnostics.ProcessStartInfo $copy, $arg
@@ -85,7 +81,7 @@ function HelpOutput([string]$arg) {   # runs the copy with its output going to a
   @{ Text = $text; Code = $p.ExitCode }
 }
 function HelpBox([string]$arg) {   # starts the copy as a shortcut would, with no terminal to print in; closes its box
-  [QoqdirHelp]::StartDetached("cmd.exe /c start `"`" `"$copy`" $arg")   # a cmd with no console starts it
+  [void][QoqdirHelp]::Start("cmd.exe /c start `"`" `"$copy`" $arg", 8, 0)   # a cmd with no console starts it
   Start-Sleep -Milliseconds 1500
   $p = Get-Process | Where-Object { $_.Path -eq $copy } | Select-Object -First 1
   if (-not $p) { return @{ Shown = $false; Code = 'none: it did not run' } }
@@ -98,15 +94,15 @@ function HelpBox([string]$arg) {   # starts the copy as a shortcut would, with n
   @{ Shown = $box -ne [IntPtr]::Zero; Code = $p.ExitCode; Text = $text; Title = $title }
 }
 
-$title = TitleAfterStart @('--tab=C:\Users\Public', '-t="c:\users\public"')
-Check ($title -eq 'Public') "the same folder given twice (--tab=, then -t= with quotes) opens one tab: '$title'"
-Check ($tookFocus -eq $false) 'started by a script that asks for no focus (SW_SHOWNOACTIVATE), the window takes none'
+$r = TitleAfterStart @('--tab=C:\Users\Public', '-t="c:\users\public"')
+Check ($r.Title -eq 'Public') "the same folder given twice (--tab=, then -t= with quotes) opens one tab: '$($r.Title)'"
+Check (-not $r.Focused) 'started by a script that asks for no focus (SW_SHOWNOACTIVATE), the window takes none'
 $ini = Join-Path $dir 'qoqdir.ini'
 Check (-not ((Test-Path $ini) -and (Select-String -Path $ini -Pattern ':\\' -Quiet))) 'qoqdir.ini holds no paths (saved tabs are shortcuts in Bookmarks)'
 Check (Test-Path (Join-Path $dir 'Bookmarks') -PathType Container) 'a Bookmarks folder is created next to the exe'
 $homeName = Split-Path ([Environment]::GetFolderPath('UserProfile')) -Leaf
-$title = TitleAfterStart @()
-Check ($title -eq $homeName) "no folders opens the home folder$(if ($title -ne $homeName) { ": '$title'" })"   # the name stays out of a log that passes
+$r = TitleAfterStart @()
+Check ($r.Title -eq $homeName) "no folders opens the home folder$(if ($r.Title -ne $homeName) { ": '$($r.Title)'" })"   # the name stays out of a log that passes
 $r = HelpOutput '--help'   # the switch F1's help names (-h and -? are the same: unit tests)
 Check ($r.Code -eq 0 -and $r.Text -match '^Qoqdir \d' -and $r.Text -match 'Usage: qoqdir \[options\]' -and $r.Text -match '--tab="folder path"') `
   "--help writes the command-line help where its output goes (a pipe here) and exits with 0 (exit code $($r.Code))"
@@ -131,8 +127,8 @@ Check ($r.Shown -and $r.Code -eq 1 -and $r.Text.StartsWith('Unknown option: -x')
   "with no terminal (as from a shortcut), -x shows the error and help in a box and exits with 1 (shown: $($r.Shown), exit code $($r.Code))"
 # A damaged qoqdir.ini: a number far off any screen gives the default (x + width must not overflow and stop it).
 Set-Content -Path $ini -Value "[Window]`r`nX=2147483000`r`nWidth=1000`r`nHeight=600"
-$title = TitleAfterStart @('--tab=C:\Users\Public')
-Check ($title -eq 'Public') "a damaged qoqdir.ini (X=2147483000) falls back to the defaults: '$title'"
+$r = TitleAfterStart @('--tab=C:\Users\Public')
+Check ($r.Title -eq 'Public') "a damaged qoqdir.ini (X=2147483000) falls back to the defaults: '$($r.Title)'"
 
 # A folder it can't write to, as Program Files is for most users: only adding files and folders is denied
 # (to you, by your SID), so it can still start.

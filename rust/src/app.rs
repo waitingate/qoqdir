@@ -228,7 +228,6 @@ pub struct App {
     pub loads_done: Cell<u32>,   // folder reads that reported back (self-test)
     pub loads_wasted: Cell<u32>, // ...of which a newer load had replaced, yet they read the whole folder (self-test)
     use_settings: bool,
-    start_quiet: Cell<bool>, // started with a request for no focus (STARTF_USESHOWWINDOW, 5.10): none is taken
     ini: Vec<u16>, // settings file
     pub st: RefCell<State>,
     pub quiet: Cell<bool>, // no beeps (set by the self-test, which triggers errors on purpose)
@@ -516,7 +515,6 @@ impl App {
                 loads_done: Cell::new(0),
                 loads_wasted: Cell::new(0),
                 use_settings,
-                start_quiet: Cell::new(false),
                 ini,
                 st: RefCell::new(State {
                     tabs: Vec::new(),
@@ -584,7 +582,7 @@ impl App {
             app.show_tabs();
             let (location, view) = app.with_tab(|t| (t.location.clone(), t.view.clone()));
             app.open(location, Nav::Switch, view);
-            if !app.start_quiet.get() {
+            if !Self::started_quiet() {
                 app.focus_list(); // giving a control the focus activates the window, which a quiet start may not
             }
             crate::crashlog::watch_for_hangs(wnd);
@@ -609,6 +607,15 @@ impl App {
 
     pub(crate) fn location(&self) -> Location {
         self.with_tab(|t| t.location.clone())
+    }
+
+    /// Whether the program was started with a request for no focus: a script's STARTF_USESHOWWINDOW with
+    /// SW_SHOWNOACTIVATE, as the command-line checks use (5.10). The window then opens behind whatever has the focus.
+    fn started_quiet() -> bool {
+        let mut si = STARTUPINFOW { cb: size_of::<STARTUPINFOW>() as u32, ..Default::default() };
+        unsafe { GetStartupInfoW(&mut si) };
+        let asked = SHOW_WINDOW_CMD(si.wShowWindow as i32);
+        si.dwFlags.contains(STARTF_USESHOWWINDOW) && [SW_SHOWNOACTIVATE, SW_SHOWMINNOACTIVE, SW_SHOWNA].contains(&asked)
     }
 
     pub fn is_loading(&self) -> bool {
@@ -2289,14 +2296,7 @@ impl App {
             st.active = 0;
         }
 
-        // A self-test never steals the focus, nor does a start that asked for none (a script's STARTF_USESHOWWINDOW
-        // with SW_SHOWNOACTIVATE, as the command-line checks use): the window opens behind whatever has the focus.
-        let mut si = STARTUPINFOW { cb: size_of::<STARTUPINFOW>() as u32, ..Default::default() };
-        unsafe { GetStartupInfoW(&mut si) };
-        let asked = SHOW_WINDOW_CMD(si.wShowWindow as i32);
-        self.start_quiet
-            .set(si.dwFlags.contains(STARTF_USESHOWWINDOW) && [SW_SHOWNOACTIVATE, SW_SHOWMINNOACTIVE, SW_SHOWNA].contains(&asked));
-        let quiet = !self.use_settings || self.start_quiet.get();
+        let quiet = !self.use_settings || Self::started_quiet(); // a self-test never steals the focus either
         let (w, h) = (self.number("Width", 0), self.number("Height", 0));
         unsafe {
             if w > 0 && h > 0 {

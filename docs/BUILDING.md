@@ -69,12 +69,15 @@ admin rights, and nothing else on the system changes.
    & $R\rustup-init.exe -y --no-modify-path --profile minimal -c clippy --default-host x86_64-pc-windows-gnu --default-toolchain stable
    ```
 
-2. Save these three lines as `rust-env.ps1` in that folder:
+2. Save these four lines as `rust-env.ps1` in that folder. The last one keeps
+   the folder's path out of the exe (section 2), and the same flag for every
+   build, so that nothing is built twice:
 
    ```powershell
    $env:RUSTUP_HOME = Join-Path $PSScriptRoot 'rustup'
    $env:CARGO_HOME  = Join-Path $PSScriptRoot 'cargo'
    $env:PATH = (Join-Path $PSScriptRoot 'cargo\bin') + ';' + $env:PATH
+   $env:RUSTFLAGS = "--remap-path-prefix=$env:CARGO_HOME=cargo"
    ```
 
 3. In each new terminal: `. $env:LOCALAPPDATA\Programs\rust\rust-env.ps1`.
@@ -154,13 +157,12 @@ cargo build --release --features selftest --target-dir target\selftest   # the s
 
 The self-test build gets its own folder, so it never replaces your exe.
 
-A build by hand puts the Rust folder's path into the exe: the crates' panic
-messages name their source files, which live under `cargo\registry` there. On
-a per-user install that path holds your user name. `scripts\build.ps1` avoids
-this by building with
-`$env:RUSTFLAGS = "--remap-path-prefix=<the Rust folder>\cargo=cargo"`, which
-leaves only `cargo\...` in the exe. Set the same before building an exe by
-hand that leaves the PC.
+The crates' panic messages name their source files, which live under the
+Rust folder's `cargo\registry`: on a per-user install that path holds your
+user name. The `RUSTFLAGS` line in `rust-env.ps1` (section 1) maps that folder
+to `cargo`, so the exe holds only `cargo\...`; `scripts\build.ps1` sets the
+same flag when it isn't set. Cargo rebuilds every crate when the flags change,
+so keep it set for builds by hand too.
 
 ## 3. Test
 
@@ -195,6 +197,9 @@ What each one is:
   doesn't stop the run: the log (`%TEMP%\qoqdir-selftest.log`, for Rust
   `%TEMP%\qoqdir-rs-selftest.log`) gets an `ok` or `FAIL` line as each step ends.
   There is no way to run one step alone.
+- `tests\exe-checks.ps1` checks the exe that ships: one file under 1 MB that
+  imports only DLLs Windows protects (spec 3). It needs MinGW's `objdump` on
+  the PATH.
 - `tests\cli-checks.ps1` starts a copy of an exe in a temp folder (so your
   settings stay untouched) with several command lines, a damaged `qoqdir.ini` and
   a folder it can't write to.
@@ -205,6 +210,7 @@ The same checks by hand, from the repository folder:
 
 ```powershell
 build\unit_tests.exe
+powershell -File tests\exe-checks.ps1 -Exe build\qoqdir.exe
 powershell -File tests\cli-checks.ps1 -Exe build\qoqdir.exe
 powershell -File tests\watch-windows.ps1 -Exe build\qoqdir-test.exe
 cd rust

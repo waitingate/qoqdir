@@ -162,7 +162,6 @@ fn text_of(h: HWND) -> String {
     window_text(h).to_string_lossy().into_owned()
 }
 
-/// How long the current step has waited since its act.
 /// The windows on the screen (any program's), to see that an action opened none.
 fn visible_windows() -> Vec<isize> {
     unsafe extern "system" fn each(h: HWND, p: windows::Win32::Foundation::LPARAM) -> windows::core::BOOL {
@@ -176,6 +175,7 @@ fn visible_windows() -> Vec<isize> {
     list
 }
 
+/// How long the current step has waited since its act.
 fn step_ms() -> u128 {
     RUN.with_borrow(|run| run.as_ref().and_then(|t| t.started).map_or(0, |s| s.elapsed().as_millis()))
 }

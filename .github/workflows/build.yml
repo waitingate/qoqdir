@@ -36,18 +36,11 @@ jobs:
           cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_FLAGS=-Werror
           cmake --build build
 
-      # One exe, statically linked, well under 1 MB: no MinGW DLLs may be imported.
+      # One exe, statically linked, under 1 MB, importing only DLLs Windows protects: the rule is in the script,
+      # shared with scripts\build.ps1 -Test and scripts\release.ps1. Run from the msys2 shell for its objdump.
       - name: Check the exe is portable
         shell: msys2 {0}
-        run: |
-          objdump -p build/qoqdir.exe | grep 'DLL Name'
-          # Only DLLs Windows protects (its KnownDLLs, comctl32 through the manifest, the CRT's API sets): any other
-          # import, Windows would look for next to the exe first (docs/DEVELOPING.md).
-          if objdump -p build/qoqdir.exe | grep 'DLL Name' | grep -ivE 'DLL Name: (KERNEL32|USER32|GDI32|ole32|OLEAUT32|SHELL32|SHLWAPI|COMCTL32|api-ms-win-crt-[a-z0-9-]+)\.dll$'; then
-            echo '::error::qoqdir.exe imports a DLL Windows does not protect'; exit 1
-          fi
-          size=$(stat -c %s build/qoqdir.exe); echo "qoqdir.exe: $size bytes"
-          test "$size" -lt 1048576 || { echo '::error::qoqdir.exe is 1 MB or more'; exit 1; }
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File tests/exe-checks.ps1 -Exe build/qoqdir.exe
 
       - name: Unit tests
         shell: msys2 {0}

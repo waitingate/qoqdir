@@ -87,24 +87,28 @@ unsafe extern "system" fn on_crash(e: *const EXCEPTION_POINTERS) -> i32 {
 
 // ---------------------------------------------------------------- hangs
 
-/// One frame as "exe+0x1234" or "name.dll+0x1234" (the bare address when it is in no module). The module comes from
-/// the memory manager, not the loader: GetModuleHandleEx takes the loader lock, which the hung thread may hold (a
-/// shell extension stuck in a DLL load), and then no line would ever be written.
-fn frame_text(pc: u64) -> String {
+/// The image (the exe or a DLL) an address lies in: its base, or None outside any. From the memory manager, since
+/// the loader's lock may be held by the very thread that is stopped (a shell extension stuck in a DLL load).
+fn image_base(pc: u64) -> Option<usize> {
     let mut mbi = MEMORY_BASIC_INFORMATION::default();
     let known = unsafe { VirtualQuery(Some(pc as usize as *const _), &mut mbi, size_of::<MEMORY_BASIC_INFORMATION>()) } != 0;
-    if !known || mbi.Type != MEM_IMAGE {
+    (known && mbi.Type == MEM_IMAGE).then_some(mbi.AllocationBase as usize)
+}
+
+/// One frame as "exe+0x1234" or "name.dll+0x1234" (the bare address when it is in no module). GetModuleHandleEx
+/// would name the module but takes the loader lock, and then no line would ever be written.
+fn frame_text(pc: u64) -> String {
+    let Some(base) = image_base(pc) else {
         return format!("0x{pc:x}");
-    }
-    let base = mbi.AllocationBase as usize as u64;
-    if EXE.get().is_some_and(|&(exe, _)| exe as u64 == base) {
-        return format!("exe+0x{:x}", pc - base);
+    };
+    if EXE.get().is_some_and(|&(exe, _)| exe == base) {
+        return format!("exe+0x{:x}", pc - base as u64);
     }
     let mut buf = [0u16; 260]; // "\Device\HarddiskVolume2\Windows\System32\shell32.dll"
-    let n = unsafe { K32GetMappedFileNameW(GetCurrentProcess(), mbi.AllocationBase, &mut buf) } as usize;
+    let n = unsafe { K32GetMappedFileNameW(GetCurrentProcess(), base as *const _, &mut buf) } as usize;
     let path = from_wide(&buf[..n]);
     let name = Path::new(&path).file_name().map_or(path.clone(), |n| n.to_os_string());
-    format!("{}+0x{:x}", name.to_string_lossy(), pc - base)
+    format!("{}+0x{:x}", name.to_string_lossy(), pc - base as u64)
 }
 
 #[repr(C, align(16))]
@@ -114,12 +118,7 @@ struct Aligned(CONTEXT); // GetThreadContext wants a 16-byte aligned record
 /// would do this, but it takes the loader's table lock: a thread stopped while the loader holds it (a DLL being
 /// mapped) would never be resumed.
 fn function_entry(pc: u64) -> Option<(u64, *const IMAGE_RUNTIME_FUNCTION_ENTRY)> {
-    let mut mbi = MEMORY_BASIC_INFORMATION::default();
-    let known = unsafe { VirtualQuery(Some(pc as usize as *const _), &mut mbi, size_of::<MEMORY_BASIC_INFORMATION>()) } != 0;
-    if !known || mbi.Type != MEM_IMAGE {
-        return None;
-    }
-    let image = mbi.AllocationBase as usize;
+    let image = image_base(pc)?;
     let entries = unsafe {
         let dos = &*(image as *const IMAGE_DOS_HEADER);
         let nt = &*((image + dos.e_lfanew as usize) as *const IMAGE_NT_HEADERS64);
@@ -170,7 +169,11 @@ pub fn watch_for_hangs(window: HWND) {
                     if SuspendThread(t) != u32::MAX {
                         let flags = CONTEXT_CONTROL_AMD64 | CONTEXT_INTEGER_AMD64;
                         let mut c = Aligned(CONTEXT { ContextFlags: flags, ..Default::default() });
-                        let (mut lo, mut hi) = (0u64, 0u64); // the committed stack around Rsp
+                        // The one rule that keeps the walk safe: every pointer it reads through lies in the committed
+                        // stack around Rsp, which is readable in this process. One outside it means a wrong unwind
+                        // entry (an address that landed in a stranger's code). The other two stops only spare the log
+                        // a tail of noise.
+                        let (mut lo, mut hi) = (0u64, 0u64);
                         if GetThreadContext(t, &mut c.0).is_ok() {
                             let mut stack = MEMORY_BASIC_INFORMATION::default();
                             let known = VirtualQuery(Some(c.0.Rsp as usize as *const _), &mut stack, size_of::<MEMORY_BASIC_INFORMATION>()) != 0;
@@ -179,31 +182,32 @@ pub fn watch_for_hangs(window: HWND) {
                                 hi = lo + stack.RegionSize as u64;
                             }
                         }
-                        while count < frames.len() && c.0.Rip != 0 && c.0.Rsp >= lo && c.0.Rsp + 8 <= hi {
+                        let on_stack = |p: u64| p >= lo && p + 8 <= hi;
+                        while count < frames.len() && c.0.Rip != 0 && on_stack(c.0.Rsp) {
                             frames[count] = c.0.Rip;
                             count += 1;
                             let rsp = c.0.Rsp;
                             let Some((base, f)) = function_entry(c.0.Rip) else {
                                 if count > 1 {
-                                    break; // only the innermost frame can be a leaf
+                                    break; // only the innermost frame can be a leaf: the walk is lost
                                 }
                                 c.0.Rip = *(c.0.Rsp as *const u64);
                                 c.0.Rsp += 8;
                                 continue;
                             };
-                            // UNWIND_INFO's 4th byte: the frame register (0: none) and its offset. A frame register
-                            // outside the stack means a wrong entry (an address that landed in a stranger's code): the
-                            // unwinder would read through it.
+                            // UNWIND_INFO's 4th byte: the frame register (0: none) and its offset; the unwinder reads
+                            // through it. Rax, Rcx, Rdx, Rbx, Rsp, Rbp, Rsi, Rdi, R8 to R15, in that order.
                             let frame_reg = (*((base + (*f).Anonymous.UnwindData as u64) as *const u8).add(3) & 0xF) as usize;
-                            let registers = [c.0.Rax, c.0.Rcx, c.0.Rdx, c.0.Rbx, c.0.Rsp, c.0.Rbp, c.0.Rsi, c.0.Rdi, c.0.R8, c.0.R9, c.0.R10, c.0.R11, c.0.R12, c.0.R13, c.0.R14, c.0.R15];
-                            let frame = if frame_reg == 0 { c.0.Rsp } else { registers[frame_reg] };
-                            if frame < lo || frame >= hi {
-                                break;
+                            if frame_reg != 0 {
+                                let registers = [c.0.Rax, c.0.Rcx, c.0.Rdx, c.0.Rbx, c.0.Rsp, c.0.Rbp, c.0.Rsi, c.0.Rdi, c.0.R8, c.0.R9, c.0.R10, c.0.R11, c.0.R12, c.0.R13, c.0.R14, c.0.R15];
+                                if !on_stack(registers[frame_reg]) {
+                                    break;
+                                }
                             }
                             let (mut handler, mut frame_base) = (std::ptr::null_mut(), 0u64);
                             let _ = RtlVirtualUnwind(UNW_FLAG_NHANDLER, base, c.0.Rip, f, &mut c.0, &mut handler, &mut frame_base, None);
                             if c.0.Rsp <= rsp {
-                                break;
+                                break; // not moving up: lost too
                             }
                         }
                         ResumeThread(t);

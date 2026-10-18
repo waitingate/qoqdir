@@ -117,6 +117,16 @@ LRESULT CALLBACK middleClickProc(HWND h, UINT msg, WPARAM wp, LPARAM lp, UINT_PT
 
 // ---------------------------------------------------------------- setup
 
+// Whether the program was started with a request for no focus: a script's STARTF_USESHOWWINDOW with
+// SW_SHOWNOACTIVATE, as the command-line checks use (5.10). The window then opens behind whatever has the focus.
+static bool startedQuiet() {
+    STARTUPINFOW si{};
+    si.cb = sizeof si;
+    GetStartupInfoW(&si);
+    return (si.dwFlags & STARTF_USESHOWWINDOW) &&
+           (si.wShowWindow == SW_SHOWNOACTIVATE || si.wShowWindow == SW_SHOWMINNOACTIVE || si.wShowWindow == SW_SHOWNA);
+}
+
 bool App::create(HINSTANCE instance, const CommandLine& cmd, bool useSettings) {
     useSettings_ = useSettings;
     WNDCLASSEXW wc{};
@@ -211,7 +221,7 @@ bool App::create(HINSTANCE instance, const CommandLine& cmd, bool useSettings) {
     layout();
     showTabs();
     open(tab().path, Nav::Switch, tab().view);
-    if (!startQuiet_) focusList();   // giving a control the focus activates the window, which a quiet start may not
+    if (!startedQuiet()) focusList();   // giving a control the focus activates the window, which a quiet start may not
     watchForHangs(wnd_);
     return true;
 }
@@ -1378,14 +1388,7 @@ void App::loadSettings(const CommandLine& cmd) {
     if (tabs_.empty()) tabs_.push_back(makeTab(knownFolder(FOLDERID_Profile)));
     active_ = 0;
 
-    // A self-test never steals the focus, nor does a start that asked for none (a script's STARTF_USESHOWWINDOW
-    // with SW_SHOWNOACTIVATE, as the command-line checks use): the window opens behind whatever has the focus.
-    STARTUPINFOW si{};
-    si.cb = sizeof si;
-    GetStartupInfoW(&si);
-    startQuiet_ = (si.dwFlags & STARTF_USESHOWWINDOW) && (si.wShowWindow == SW_SHOWNOACTIVATE ||
-                                                          si.wShowWindow == SW_SHOWMINNOACTIVE || si.wShowWindow == SW_SHOWNA);
-    bool quiet = !useSettings_ || startQuiet_;
+    bool quiet = !useSettings_ || startedQuiet();   // a self-test never steals the focus either
     int w = number(L"Width", 0), h = number(L"Height", 0);
     if (w > 0 && h > 0) {
         WINDOWPLACEMENT wp{};

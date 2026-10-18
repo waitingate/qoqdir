@@ -146,7 +146,6 @@ private:
     static constexpr UINT_PTR kRefreshTimer = 1, kStatusTimer = 2, kLoadingTimer = 3, kSelfTestTimer = 50;
     int exitCode_ = 1;   // a run that never finishes (closed by hand, no window) has not passed
     bool useSettings_ = true;
-    bool startQuiet_ = false;   // started with a request for no focus (STARTF_USESHOWWINDOW, 5.10): none is taken
 
     HWND wnd_ = nullptr, back_ = nullptr, forward_ = nullptr, up_ = nullptr, refresh_ = nullptr, address_ = nullptr,
          filter_ = nullptr, tabBar_ = nullptr, plus_ = nullptr, status_ = nullptr, tips_ = nullptr, lastFocus_ = nullptr;

@@ -190,6 +190,17 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
         SetFocus(address_);
         selfTestKey(VK_RETURN);
     };
+    auto lastRoot = [this] {   // This PC, the tree's last root
+        HTREEITEM last = TreeView_GetRoot(tree_.hwnd());
+        for (HTREEITEM n = last; n; n = TreeView_GetNextSibling(tree_.hwnd(), n)) last = n;
+        return last;
+    };
+    auto volumeChange = [this](WPARAM event) {   // a drive came (DBT_DEVICEARRIVAL) or went, as Windows tells it
+        DEV_BROADCAST_VOLUME vol{};
+        vol.dbcv_size = sizeof vol;
+        vol.dbcv_devicetype = DBT_DEVTYP_VOLUME;
+        SendMessageW(wnd_, WM_DEVICECHANGE, event, reinterpret_cast<LPARAM>(&vol));
+    };
     auto add = [&t](std::wstring name, std::function<void()> act, std::function<bool()> done, ULONGLONG timeout = 5000,
                     bool whileLoading = false) -> SelfTest::Step& {
         t.steps.push_back({std::move(name), std::move(act), std::move(done), timeout, whileLoading});
@@ -1012,10 +1023,7 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
             // Two levels down only WM_DEVICECHANGE tells: drop the watch, remove the folder, send it.
             watch_ = {};
             RemoveDirectoryW(path(L"sub\\deep").c_str());
-            DEV_BROADCAST_VOLUME vol{};
-            vol.dbcv_size = sizeof vol;
-            vol.dbcv_devicetype = DBT_DEVTYP_VOLUME;
-            SendMessageW(wnd_, WM_DEVICECHANGE, DBT_DEVICEREMOVECOMPLETE, reinterpret_cast<LPARAM>(&vol));
+            volumeChange(DBT_DEVICEREMOVECOMPLETE);
         },
         [=, this] {
             return at(path(L"sub\\deep")) && list_.count() == 0 &&
@@ -1133,11 +1141,8 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
             return tabs_.size() == 2 && samePath(tabs_[size_t(active_) + 1].path, knownFolder(FOLDERID_Desktop)) && at(dir);
         });
     add(L"(close that tab too)", [=, this] { closeTab(active_ + 1); }, [=, this] { return idle() && tabs_.size() == 1; });
-    add(L"the tree lists the drives under This PC", nullptr, [=, this] {
-        HTREEITEM node = TreeView_GetRoot(tree_.hwnd()), last = nullptr;
-        for (; node; node = TreeView_GetNextSibling(tree_.hwnd(), node)) last = node;
-        return last && TreeView_GetChild(tree_.hwnd(), last) != nullptr;
-    });
+    add(L"the tree lists the drives under This PC", nullptr,
+        [=, this] { return lastRoot() && TreeView_GetChild(tree_.hwnd(), lastRoot()) != nullptr; });
     add(L"root tree nodes have an expand arrow", nullptr, [=, this] {
         // The arrow sits in the indent left of the icon; TVS_HASBUTTONS gives roots one only with TVS_LINESATROOT.
         RECT r{};
@@ -1197,16 +1202,11 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
     add(L"a drive change during the first read of the drives still lists them under This PC",
         [=, this] {
             tree_.fill();   // This PC's read starts
-            DEV_BROADCAST_VOLUME vol{};
-            vol.dbcv_size = sizeof vol;
-            vol.dbcv_devicetype = DBT_DEVTYP_VOLUME;
-            SendMessageW(wnd_, WM_DEVICECHANGE, DBT_DEVICEARRIVAL, reinterpret_cast<LPARAM>(&vol));   // before it lands
+            volumeChange(DBT_DEVICEARRIVAL);   // before it lands
         },
         [=, this] {
             HWND tv = tree_.hwnd();
-            HTREEITEM last = TreeView_GetRoot(tv);
-            for (HTREEITEM n = last; n; n = TreeView_GetNextSibling(tv, n)) last = n;   // This PC
-            return TreeView_GetChild(tv, last) && (TreeView_GetItemState(tv, last, TVIS_EXPANDED) & TVIS_EXPANDED);
+            return TreeView_GetChild(tv, lastRoot()) && (TreeView_GetItemState(tv, lastRoot(), TVIS_EXPANDED) & TVIS_EXPANDED);
         });
     auto arrow = std::make_shared<bool>(false);
     add(L"an empty Bookmarks node keeps its arrow, and F5 lists a bookmark added later",
@@ -1287,49 +1287,36 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
             HWND tv = tree_.hwnd();
             return TreeView_GetChild(tv, TreeView_GetChild(tv, TreeView_GetRoot(tv))) != nullptr;   // "deep" is shown
         });
+    auto one = [this] { return TreeView_GetChild(tree_.hwnd(), TreeView_GetRoot(tree_.hwnd())); };   // the first bookmark
     add(L"collapsing a folder while F5 reads it again leaves it collapsed, with its arrow (4.5)",
         [=, this] {
-            HWND tv = tree_.hwnd();
-            TreeView_SelectItem(tv, TreeView_GetChild(tv, TreeView_GetRoot(tv)));   // "one", open
-            selfTestKey(VK_F5);                           // reads every open node again, "one" among them
-            SendMessageW(tv, WM_KEYDOWN, VK_LEFT, 0);    // collapsed before that read lands
+            TreeView_SelectItem(tree_.hwnd(), one());   // open, with "deep"
+            selfTestKey(VK_F5);                                        // reads every open node again, "one" among them
+            SendMessageW(tree_.hwnd(), WM_KEYDOWN, VK_LEFT, 0);       // collapsed before that read lands
         },
         [=, this] {
             HWND tv = tree_.hwnd();
-            HTREEITEM one = TreeView_GetChild(tv, TreeView_GetRoot(tv));
-            if (GetTickCount64() - selfTest_->startTick < 400 || !at(dir) || !one) return false;
+            if (GetTickCount64() - selfTest_->startTick < 400 || !at(dir) || !one()) return false;
             TVITEMW item{};
             item.mask = TVIF_CHILDREN;
-            item.hItem = one;
+            item.hItem = one();
             TreeView_GetItem(tv, &item);
-            return !(TreeView_GetItemState(tv, one, TVIS_EXPANDED) & TVIS_EXPANDED) && !TreeView_GetChild(tv, one) &&
+            return !(TreeView_GetItemState(tv, one(), TVIS_EXPANDED) & TVIS_EXPANDED) && !TreeView_GetChild(tv, one()) &&
                    item.cChildren == 1 && bookmarkNodes() == L"one,two,sub";
         });
     add(L"(expand it again)",
-        [=, this] {
-            HWND tv = tree_.hwnd();   // as the user would: TVM_EXPAND tells nothing about a node expanded before
-            TreeView_SelectItem(tv, TreeView_GetChild(tv, TreeView_GetRoot(tv)));
-            SendMessageW(tv, WM_KEYDOWN, VK_RIGHT, 0);
+        [=, this] {   // as the user would: TVM_EXPAND tells nothing about a node expanded before
+            TreeView_SelectItem(tree_.hwnd(), one());
+            SendMessageW(tree_.hwnd(), WM_KEYDOWN, VK_RIGHT, 0);
         },
-        [=, this] {
-            HWND tv = tree_.hwnd();
-            return TreeView_GetChild(tv, TreeView_GetChild(tv, TreeView_GetRoot(tv))) != nullptr;
-        });
+        [=, this] { return TreeView_GetChild(tree_.hwnd(), one()) != nullptr; });
     add(L"a drive coming or going re-reads This PC and leaves the rest of the tree as it was (4.5)",
-        [=, this] {
-            DEV_BROADCAST_VOLUME vol{};
-            vol.dbcv_size = sizeof vol;
-            vol.dbcv_devicetype = DBT_DEVTYP_VOLUME;
-            SendMessageW(wnd_, WM_DEVICECHANGE, DBT_DEVICEARRIVAL, reinterpret_cast<LPARAM>(&vol));
-        },
+        [=, this] { volumeChange(DBT_DEVICEARRIVAL); },
         [=, this] {
             HWND tv = tree_.hwnd();
-            HTREEITEM one = TreeView_GetChild(tv, TreeView_GetRoot(tv)), last = TreeView_GetRoot(tv);
-            for (HTREEITEM n = last; n; n = TreeView_GetNextSibling(tv, n)) last = n;   // This PC
-            return bookmarkNodes() == L"one,two,sub" && one && TreeView_GetChild(tv, one) &&
-                   (TreeView_GetItemState(tv, one, TVIS_EXPANDED) & TVIS_EXPANDED) && TreeView_GetChild(tv, last);
+            return bookmarkNodes() == L"one,two,sub" && one() && TreeView_GetChild(tv, one()) &&
+                   (TreeView_GetItemState(tv, one(), TVIS_EXPANDED) & TVIS_EXPANDED) && TreeView_GetChild(tv, lastRoot());
         });
-    auto one = [this] { return TreeView_GetChild(tree_.hwnd(), TreeView_GetRoot(tree_.hwnd())); };   // open, with "deep"
     add(L"F5 reads the folders open in the tree again: one that is the same stays as it is (\"one\" stays open), one "
         L"that changed shows its new subfolder (5.5)",
         [=, this] {
@@ -1401,9 +1388,7 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
     auto dragged = std::make_shared<Com<IDataObject>>();
     add(L"This PC in the tree takes no drop",
         [=, this] {
-            HWND tv = tree_.hwnd();
-            HTREEITEM pc = TreeView_GetRoot(tv);
-            for (HTREEITEM n = pc; n; n = TreeView_GetNextSibling(tv, n)) pc = n;   // the last root
+            HTREEITEM pc = lastRoot();
             Com<IDataObject> data = dataObject(wnd_, path(L"file1.txt"));
             dragEffect = DROPEFFECT_COPY;
             treeDrop_->DragEnter(data.get(), MK_LBUTTON, nodePoint(pc), &dragEffect);
