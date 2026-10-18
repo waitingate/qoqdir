@@ -1,12 +1,20 @@
 # Builds both versions of Qoqdir; with -Test it then runs every check, as is due before calling a change done
-# (docs\BUILDING.md). The tools come from the PATH, or else from C:\mingw64 and C:\rust, where the guide puts them.
+# (docs\BUILDING.md). The tools come from the PATH, or else from where the guide puts them: MinGW in
+# %LOCALAPPDATA%\Programs\mingw64 (no admin rights needed) or C:\mingw64, Rust in C:\rust.
 #   powershell -File scripts\build.ps1          C++: build\qoqdir.exe, build\qoqdir-test.exe; Rust: rust\target\
 #   powershell -File scripts\build.ps1 -Test    then the unit tests, clippy, the command-line checks and both self-tests
 param([switch]$Test)
 $ErrorActionPreference = 'Stop'
 Set-Location (Split-Path $PSScriptRoot)   # the repository
-if (-not (Get-Command g++ -ErrorAction SilentlyContinue)) { $env:PATH = 'C:\mingw64\bin;' + $env:PATH }
-if (-not (Get-Command cargo -ErrorAction SilentlyContinue)) { . C:\rust\rust-env.ps1 }
+if (-not (Get-Command g++ -ErrorAction SilentlyContinue)) {
+    $mingw = @("$env:LOCALAPPDATA\Programs\mingw64\bin", 'C:\mingw64\bin') | Where-Object { Test-Path "$_\g++.exe" } | Select-Object -First 1
+    if (-not $mingw) { throw 'MinGW-w64 not found: see docs\BUILDING.md, section 1' }
+    $env:PATH = "$mingw;" + $env:PATH
+}
+if (-not (Get-Command cargo -ErrorAction SilentlyContinue)) {
+    if (-not (Test-Path C:\rust\rust-env.ps1)) { throw 'Rust not found: see docs\BUILDING.md, section 1' }
+    . C:\rust\rust-env.ps1
+}
 function Step([string]$name, [scriptblock]$run) {
     "== $name"
     & $run

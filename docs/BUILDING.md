@@ -28,11 +28,22 @@ Set these up once.
 
 GCC 13 with CMake and Ninja. The winlibs build
 `gcc-13.2.0-mingw-w64ucrt-11.0.1-r8` from winlibs.com (Win64, UCRT runtime, POSIX
-threads) has all three, and the releases are built with it. Unzip it to
-`C:\mingw64`, then in each new terminal:
+threads, without LLVM) has all three, and the releases are built with it. The
+file is `winlibs-x86_64-posix-seh-gcc-13.2.0-mingw-w64ucrt-11.0.1-r8.zip` (216
+MB; the `.7z` is 94 MB), on GitHub at
+https://github.com/brechtsanders/winlibs_mingw/releases/tag/13.2.0posix-18.1.5-11.0.1-ucrt-r8
+with a `.sha256` file beside it. The archive holds one folder, `mingw64`: put it
+in your own programs folder, `%LOCALAPPDATA%\Programs`
+(`C:\Users\<you>\AppData\Local\Programs`), so that
+`%LOCALAPPDATA%\Programs\mingw64\bin\g++.exe` exists; no admin rights are
+needed. `scripts\build.ps1` and `scripts\release.ps1` look there, and then in
+`C:\mingw64`, when the tools aren't on the PATH. Any other folder works as long
+as its path has no spaces (MinGW's tools dislike them; with a space in your
+user name, use `C:\mingw64`, which any user may create) and its `bin` goes on
+the PATH. Then in each new terminal:
 
 ```powershell
-$env:PATH = 'C:\mingw64\bin;' + $env:PATH
+$env:PATH = "$env:LOCALAPPDATA\Programs\mingw64\bin;" + $env:PATH
 g++ --version
 ```
 
@@ -82,8 +93,9 @@ Or start each one with `powershell -ExecutionPolicy Bypass -File ...` instead.
 powershell -File scripts\build.ps1
 ```
 
-It takes the tools from the PATH, or else from `C:\mingw64` and `C:\rust`, and
-builds the C++ version (a compiler warning stops it) and both Rust builds.
+It takes the tools from the PATH, or else from `%LOCALAPPDATA%\Programs\mingw64`
+or `C:\mingw64`, and `C:\rust`, and builds the C++ version (a compiler warning
+stops it) and both Rust builds.
 
 ### The C++ version by hand
 
@@ -103,8 +115,8 @@ winlibs) goes in a folder of its own:
 
 On a PC with just the compiler, no CMake or Ninja: `windres` and `g++` come with
 any MinGW-w64 GCC. It needs only the files in `src\` (not `selftest.cpp`, which
-goes into the test version only) and `res\`. In `src\`, with `C:\mingw64\bin` on
-the PATH:
+goes into the test version only) and `res\`. In `src\`, with the compiler's
+`bin` on the PATH (section 1):
 
 ```powershell
 windres ..\res\qoqdir.rc -O coff -o app_res.o
@@ -112,13 +124,17 @@ g++ -std=c++20 -O2 -DNDEBUG -DUNICODE -D_UNICODE -DNOMINMAX -D_WIN32_WINNT=0x0A0
 ```
 
 That makes the same `qoqdir.exe` as the CMake build, in about two minutes. The
-flags are the ones in `CMakeLists.txt`: keep the two in step. PowerShell needs
+flags are the ones in `CMakeLists.txt`: keep the two in step. CMake adds one
+more, `-ffile-prefix-map=<your mingw64 folder>=mingw64` with the folder's full
+path in forward slashes, so that the runtime checks' messages in the exe name no
+local folder (and no user name, when the compiler is under `C:\Users`); add it
+to publish an exe built this way. PowerShell needs
 the quotes around `-Wl,--gc-sections`, as it reads a comma as a list; cmd.exe
 doesn't.
 
 ### The Rust version by hand
 
-From `rust\`, with `C:\mingw64\bin` on the PATH for the icon:
+From `rust\`, with the compiler's `bin` on the PATH for the icon (section 1):
 
 ```powershell
 cargo build --release                                                    # target\release\qoqdir.exe
@@ -257,14 +273,15 @@ the run. The Rust version isn't built there.
 
 - "running scripts is disabled on this system": see PowerShell scripts in
   section 1.
-- Cargo says `windres not found: the exe gets no icon`: `C:\mingw64\bin` is not
-  on the PATH (`scripts\build.ps1` adds it).
+- Cargo says `windres not found: the exe gets no icon`: the compiler's `bin` is
+  not on the PATH (`scripts\build.ps1` adds it, section 1).
 - The Rust build fails in `dlltool` (it did on the first build machine): point
-  cargo at MinGW's in `C:\rust\cargo\config.toml`:
+  cargo at MinGW's, with the full path of `dlltool.exe` in your `mingw64\bin`,
+  in `C:\rust\cargo\config.toml`:
 
   ```toml
   [target.x86_64-pc-windows-gnu]
-  rustflags = ["-C", "dlltool=C:\\mingw64\\bin\\dlltool.exe"]
+  rustflags = ["-C", "dlltool=C:\\Users\\<you>\\AppData\\Local\\Programs\\mingw64\\bin\\dlltool.exe"]
   ```
 
 - Explorer still shows an exe's old icon: Windows keeps icons in a cache, which

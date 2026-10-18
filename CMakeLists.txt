@@ -19,6 +19,11 @@ add_compile_definitions(_GLIBCXX_ASSERTIONS)
 # A signed integer overflow stops it too, instead of giving a wrong number (as in the Rust
 # version). The crash log then shows exception 0xC000001D (an illegal instruction).
 add_compile_options(-fsanitize=signed-integer-overflow -fsanitize-undefined-trap-on-error)
+# The runtime checks put the path of the failing header into the exe. Call the compiler's folder "mingw64" there,
+# wherever it really is: the exe then holds no user name (it may live under C:\Users\<name>) and is the same from any PC.
+get_filename_component(MINGW_ROOT "${CMAKE_CXX_COMPILER}" DIRECTORY)   # .../mingw64/bin
+get_filename_component(MINGW_ROOT "${MINGW_ROOT}" DIRECTORY)            # .../mingw64
+add_compile_options("-ffile-prefix-map=${MINGW_ROOT}=mingw64")
 # One self-contained exe: no MinGW DLLs to ship alongside it. The linker drops the code and data
 # nothing uses (most of Windows' GUID table, for one).
 add_compile_options(-ffunction-sections -fdata-sections)
