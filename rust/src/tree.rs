@@ -202,17 +202,22 @@ impl FolderTree {
     }
 
     /// Drives came or went: re-read This PC only, so expanded folders stay open (4.5); its read in flight is dropped.
+    /// This PC, the last root (0 before the tree is filled).
+    pub fn last_root(&self) -> isize {
+        let mut last = self.root();
+        while last != 0 {
+            match send(self.hwnd, TVM_GETNEXTITEM, TVGN_NEXT as usize, last) {
+                0 => break,
+                next => last = next,
+            }
+        }
+        last
+    }
+
     pub fn refresh_drives(&self) {
-        let mut pc = self.root();
+        let pc = self.last_root();
         if pc == 0 {
             return;
-        }
-        loop {
-            let next = send(self.hwnd, TVM_GETNEXTITEM, TVGN_NEXT as usize, pc);
-            if next == 0 {
-                break; // This PC is the last root
-            }
-            pc = next;
         }
         if send(self.hwnd, TVM_GETNEXTITEM, TVGN_CHILD as usize, pc) == 0 {
             // No drives shown yet: their first read is still in flight (read again, so the drive that came or went is

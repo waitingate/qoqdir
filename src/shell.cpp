@@ -147,7 +147,7 @@ Com<IContextMenu3> g_menu3;
 // ---------------------------------------------------------------- icons and types
 
 HIMAGELIST systemImageList() {
-    SHFILEINFOW sfi{};
+    SHFILEINFOW sfi{};   // the list is the call's return value, not a field: the one use that fileInfo doesn't cover
     return reinterpret_cast<HIMAGELIST>(SHGetFileInfoW(L"x", FILE_ATTRIBUTE_NORMAL, &sfi, sizeof sfi,
         SHGFI_USEFILEATTRIBUTES | SHGFI_SYSICONINDEX | SHGFI_SMALLICON));
 }
@@ -171,10 +171,10 @@ std::wstring typeKey(const Item& it) { return it.isDir() ? L"\\" : extensionOf(i
 
 // Icon and type name depend only on the extension: one shell call, with no disk access (but the type's icon handler).
 TypeInfo askType(const Item& it) {
-    SHFILEINFOW sfi{};
     std::wstring probe = it.isDir() ? L"folder" : L"file" + typeKey(it);
-    SHGetFileInfoW(probe.c_str(), it.isDir() ? FILE_ATTRIBUTE_DIRECTORY : FILE_ATTRIBUTE_NORMAL, &sfi, sizeof sfi,
-                   SHGFI_USEFILEATTRIBUTES | SHGFI_SYSICONINDEX | SHGFI_SMALLICON | SHGFI_TYPENAME);
+    SHFILEINFOW sfi = fileInfo(probe, it.isDir() ? FILE_ATTRIBUTE_DIRECTORY : FILE_ATTRIBUTE_NORMAL,
+                               SHGFI_USEFILEATTRIBUTES | SHGFI_SYSICONINDEX | SHGFI_SMALLICON | SHGFI_TYPENAME)
+                         .value_or(SHFILEINFOW{});
     return {sfi.iIcon, sfi.szTypeName};
 }
 
@@ -200,9 +200,8 @@ bool hasOwnIcon(const Item& it) {
 IconBatch readOwnIcons(const std::wstring& dir, const std::vector<std::wstring>& names) {
     IconBatch batch{dir, {}};
     for (const auto& name : names) {
-        SHFILEINFOW sfi{};
-        if (SHGetFileInfoW(joinPath(dir, name).c_str(), 0, &sfi, sizeof sfi, SHGFI_SYSICONINDEX | SHGFI_SMALLICON))
-            batch.icons.emplace_back(name, sfi.iIcon);
+        if (auto sfi = fileInfo(joinPath(dir, name), 0, SHGFI_SYSICONINDEX | SHGFI_SMALLICON))
+            batch.icons.emplace_back(name, sfi->iIcon);
     }
     return batch;
 }
@@ -399,9 +398,7 @@ namespace {
 // `text` as a part of a URL: UTF-8, everything but letters, digits and -_.~ as %XX, the way search-ms: links are
 // written ("C%3A%5CUsers").
 std::wstring urlPart(const std::wstring& text) {
-    int n = WideCharToMultiByte(CP_UTF8, 0, text.c_str(), int(text.size()), nullptr, 0, nullptr, nullptr);
-    std::string utf8(size_t(std::max(n, 0)), '\0');
-    WideCharToMultiByte(CP_UTF8, 0, text.c_str(), int(text.size()), utf8.data(), n, nullptr, nullptr);
+    std::string utf8 = toUtf8(text);
     std::wstring out;
     for (unsigned char c : utf8) {
         if (isalnum(c) || c == '-' || c == '_' || c == '.' || c == '~') out += wchar_t(c);

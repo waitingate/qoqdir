@@ -141,7 +141,7 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
         f != INVALID_HANDLE_VALUE)
         CloseHandle(f);   // the log starts empty; every step then appends its line (selfTestLog)
     auto path = [dir](const std::wstring& name) { return joinPath(dir, name); };
-    auto idle = [this] { return pending_.generation == 0; };
+    auto idle = [this] { return !loading(); };
     auto at = [this, idle](const std::wstring& p) { return idle() && samePath(tab().path, p); };
     auto statusMessage = [this] {
         std::wstring s(size_t(LOWORD(SendMessageW(status_, SB_GETTEXTLENGTHW, 1, 0))) + 1, L'\0');
@@ -155,9 +155,7 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
     };
     auto editText = [this] {
         HWND edit = ListView_GetEditControl(list_.hwnd());
-        wchar_t buf[MAX_PATH] = {};
-        if (edit) GetWindowTextW(edit, buf, MAX_PATH);
-        return std::wstring(buf);
+        return edit ? windowText(edit) : std::wstring();
     };
     auto tabPoint = [this](int index) {   // the middle of a tab, in screen coordinates, where a drag is aimed
         RECT r{};
@@ -190,16 +188,31 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
         SetFocus(address_);
         selfTestKey(VK_RETURN);
     };
-    auto lastRoot = [this] {   // This PC, the tree's last root
-        HTREEITEM last = TreeView_GetRoot(tree_.hwnd());
-        for (HTREEITEM n = last; n; n = TreeView_GetNextSibling(tree_.hwnd(), n)) last = n;
-        return last;
-    };
     auto volumeChange = [this](WPARAM event) {   // a drive came (DBT_DEVICEARRIVAL) or went, as Windows tells it
         DEV_BROADCAST_VOLUME vol{};
         vol.dbcv_size = sizeof vol;
         vol.dbcv_devicetype = DBT_DEVTYP_VOLUME;
         SendMessageW(wnd_, WM_DEVICECHANGE, event, reinterpret_cast<LPARAM>(&vol));
+    };
+    auto treeItem = [this](HTREEITEM node, UINT mask) {   // a node's own fields (not its text: that needs a buffer)
+        TVITEMW item{};
+        item.mask = mask;
+        item.hItem = node;
+        TreeView_GetItem(tree_.hwnd(), &item);
+        return item;
+    };
+    auto expanded = [this](HTREEITEM node) {
+        return (TreeView_GetItemState(tree_.hwnd(), node, TVIS_EXPANDED) & TVIS_EXPANDED) != 0;
+    };
+    auto reopenHome = [=, this] { tab().path = dir; open(dir, Nav::Refresh); };   // after a tab was made unavailable
+    // A done check that presses Enter on the list once the refresh has selected what `ready` looks for.
+    auto enterWhen = [=, this](std::function<bool()> ready) {
+        return [=, this] {
+            if (!idle() || !ready()) return false;
+            SetFocus(list_.hwnd());
+            selfTestKey(VK_RETURN);
+            return true;
+        };
     };
     auto add = [&t](std::wstring name, std::function<void()> act, std::function<bool()> done, ULONGLONG timeout = 5000,
                     bool whileLoading = false) -> SelfTest::Step& {
@@ -637,9 +650,7 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
             SetFocus(list_.hwnd());
             switchTab(active_ + 1);
             // Before "sub" can have loaded: the address bar names it, and Ctrl+Shift+N must not hit the old tab.
-            wchar_t address[MAX_PATH] = {};
-            GetWindowTextW(address_, address, MAX_PATH);
-            selfTest_->note = samePath(address, path(L"sub")) ? L"address bar switched" : L"old tab still shown";
+            selfTest_->note = samePath(windowText(address_), path(L"sub")) ? L"address bar switched" : L"old tab still shown";
             selfTestKey('N', true, true);
         },
         [=, this] {
@@ -829,11 +840,8 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
     add(L"a refresh queued just before a tab became not available waits for F5 (4.3)",
         [=, this] {
             queueRefresh();   // a change in the folder, just before
-            Pending p;
-            p.nav = Nav::Refresh;
-            p.tabId = tab().id;
-            onLoadFailed(Listing{dir, {}, ERROR_BAD_NETPATH, false}, p);   // then it became unreachable
-            SendMessageW(wnd_, WM_TIMER, kRefreshTimer, 0);                 // and the queued refresh fires
+            showUnavailable(dir, ERROR_BAD_NETPATH, Nav::Refresh);   // then it became unreachable
+            SendMessageW(wnd_, WM_TIMER, kRefreshTimer, 0);          // and the queued refresh fires
         },
         [=, this] {
             return idle() && tab().unavailable && statusMessage().find(L"not available") != std::wstring::npos;
@@ -853,12 +861,7 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
             makeShortcut(path(L"sub-link.lnk"), path(L"sub"));
             refresh(ViewState::selecting(L"sub-link.lnk"));
         },
-        [=, this] {
-            if (!idle() || list_.focusedName() != L"sub-link.lnk") return false;
-            SetFocus(list_.hwnd());
-            selfTestKey(VK_RETURN);
-            return true;
-        });
+        enterWhen([=, this] { return list_.focusedName() == L"sub-link.lnk"; }));
     add(L"(the shortcut's folder is shown)", nullptr, [=, this] { return at(path(L"sub")); });
     backHome(L"(back up to the test folder)");
     add(L"a shortcut whose target ends with a backslash opens the folder with a clean path",
@@ -881,12 +884,7 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
             makeShortcut(path(L"slash2.lnk"), path(L"sub") + L"\\");
             refresh(ViewState{{L"sub-link.lnk", L"slash2.lnk"}, L"sub-link.lnk"});
         },
-        [=, this] {
-            if (!idle() || list_.selection().size() != 2) return false;
-            SetFocus(list_.hwnd());
-            selfTestKey(VK_RETURN);
-            return true;
-        });
+        enterWhen([=, this] { return list_.selection().size() == 2; }));
     add(L"(both are in tabs behind the test folder, with clean paths, so with captions)", nullptr, [=, this] {
         if (tabs_.size() != 3 || !at(dir)) return false;
         selfTest_->note = L"tab paths: " + tabs_[1].path + L" | " + tabs_[2].path;
@@ -898,10 +896,7 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
         [=, this] {
             // As if this tab's folder had just failed to load (a real failure can take minutes to arrive).
             tab().path = L"\\\\192.0.2.1\\share";
-            Pending p;
-            p.nav = Nav::Refresh;
-            p.tabId = tab().id;
-            onLoadFailed(Listing{tab().path, {}, ERROR_BAD_NETPATH, false}, p);
+            showUnavailable(tab().path, ERROR_BAD_NETPATH, Nav::Refresh);
             POINTL cursor = tabPoint(active_);
             Com<IDataObject> data = dataObject(wnd_, path(L"file1.txt"));
             DWORD effect = DROPEFFECT_COPY;
@@ -937,18 +932,13 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
             std::set<HWND> now = visibleWindows();
             return std::includes(windowsBefore->begin(), windowsBefore->end(), now.begin(), now.end());
         });
-    add(L"(back to the test folder)", [=, this] { tab().path = dir; open(dir, Nav::Refresh); }, [=, this] { return at(dir); });
+    add(L"(back to the test folder)", reopenHome, [=, this] { return at(dir); });
     add(L"a shortcut to a folder that is gone says so here (no Windows dialog)",
         [=, this] {
             makeShortcut(path(L"gone.lnk"), path(L"no-such-folder"));
             refresh(ViewState::selecting(L"gone.lnk"));
         },
-        [=, this] {
-            if (!idle() || list_.focusedName() != L"gone.lnk") return false;
-            SetFocus(list_.hwnd());
-            selfTestKey(VK_RETURN);
-            return true;
-        });
+        enterWhen([=, this] { return list_.focusedName() == L"gone.lnk"; }));
     add(L"(the status bar names the missing folder, and the tab stays put)", nullptr,
         [=, this] { return at(dir) && statusMessage().find(L"no-such-folder") != std::wstring::npos; });
     add(L"a bookmark whose drive letter is gone (a flash drive that came back under another letter) opens its folder "
@@ -982,12 +972,7 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
             makeShortcut(path(L"pc.lnk"), L"");
             refresh(ViewState::selecting(L"pc.lnk"));
         },
-        [=, this] {
-            if (!idle() || list_.focusedName() != L"pc.lnk") return false;
-            SetFocus(list_.hwnd());
-            selfTestKey(VK_RETURN);
-            return true;
-        });
+        enterWhen([=, this] { return list_.focusedName() == L"pc.lnk"; }));
     add(L"(This PC is shown, with its drives)", nullptr, [=, this] { return at(L"") && list_.count() > 0; });
     backHome(L"(back to the test folder)");
 
@@ -1029,7 +1014,7 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
             return at(path(L"sub\\deep")) && list_.count() == 0 &&
                    statusMessage().find(L"not available") != std::wstring::npos;
         });
-    add(L"(back to the test folder)", [=, this] { tab().path = dir; open(dir, Nav::Refresh); }, [=, this] { return at(dir); });
+    add(L"(back to the test folder)", reopenHome, [=, this] { return at(dir); });
 
     // Slow lookups happen on worker threads (so network drives cannot freeze the window).
     add(L"a program's own icon arrives from the background",
@@ -1040,8 +1025,7 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
             refresh();
         },
         [=, this] {
-            SHFILEINFOW sfi{};
-            SHGetFileInfoW(path(L"tool.exe").c_str(), 0, &sfi, sizeof sfi, SHGFI_SYSICONINDEX | SHGFI_SMALLICON);
+            SHFILEINFOW sfi = fileInfo(path(L"tool.exe"), 0, SHGFI_SYSICONINDEX | SHGFI_SMALLICON).value_or(SHFILEINFOW{});
             for (int row = 0; row < list_.count(); ++row) {
                 if (list_.at(row).name != L"tool.exe") continue;
                 LVITEMW item{};
@@ -1142,7 +1126,7 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
         });
     add(L"(close that tab too)", [=, this] { closeTab(active_ + 1); }, [=, this] { return idle() && tabs_.size() == 1; });
     add(L"the tree lists the drives under This PC", nullptr,
-        [=, this] { return lastRoot() && TreeView_GetChild(tree_.hwnd(), lastRoot()) != nullptr; });
+        [=, this] { return tree_.lastRoot() && TreeView_GetChild(tree_.hwnd(), tree_.lastRoot()) != nullptr; });
     add(L"root tree nodes have an expand arrow", nullptr, [=, this] {
         // The arrow sits in the indent left of the icon; TVS_HASBUTTONS gives roots one only with TVS_LINESATROOT.
         RECT r{};
@@ -1160,12 +1144,8 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
             HTREEITEM root = TreeView_GetNextSibling(tree_.hwnd(), TreeView_GetRoot(tree_.hwnd()));   // Desktop
             int shown = 0;
             for (HTREEITEM c = TreeView_GetChild(tree_.hwnd(), root); c; c = TreeView_GetNextSibling(tree_.hwnd(), c)) ++shown;
-            TVITEMW item{};
-            item.mask = TVIF_CHILDREN;
-            item.hItem = root;
-            TreeView_GetItem(tree_.hwnd(), &item);
             // Done when the subfolders are shown, or the node knows it has none.
-            return expected > 0 ? shown == expected : item.cChildren == 0;
+            return expected > 0 ? shown == expected : treeItem(root, TVIF_CHILDREN).cChildren == 0;
         });
     auto nodeTexts = [this](HTREEITEM first) {   // the texts of a node and its next siblings, comma-separated
         std::wstring texts;
@@ -1193,8 +1173,7 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
             *twoRoots = rootTexts() == L"Bookmarks,This PC";
         },
         [=, this] {
-            SHFILEINFOW sfi{};
-            SHGetFileInfoW(knownFolder(FOLDERID_Desktop).c_str(), 0, &sfi, sizeof sfi, SHGFI_DISPLAYNAME);
+            SHFILEINFOW sfi = fileInfo(knownFolder(FOLDERID_Desktop), 0, SHGFI_DISPLAYNAME).value_or(SHFILEINFOW{});
             std::wstring roots = rootTexts();
             return *twoRoots && roots.starts_with(L"Bookmarks," + std::wstring(sfi.szDisplayName) + L",") &&
                    roots.ends_with(L",This PC");
@@ -1206,16 +1185,12 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
         },
         [=, this] {
             HWND tv = tree_.hwnd();
-            return TreeView_GetChild(tv, lastRoot()) && (TreeView_GetItemState(tv, lastRoot(), TVIS_EXPANDED) & TVIS_EXPANDED);
+            return TreeView_GetChild(tv, tree_.lastRoot()) && expanded(tree_.lastRoot());
         });
     auto arrow = std::make_shared<bool>(false);
     add(L"an empty Bookmarks node keeps its arrow, and F5 lists a bookmark added later",
         [=, this] {
-            TVITEMW item{};
-            item.mask = TVIF_CHILDREN;
-            item.hItem = TreeView_GetRoot(tree_.hwnd());
-            TreeView_GetItem(tree_.hwnd(), &item);
-            *arrow = item.cChildren == 1;   // the startup read found Bookmarks empty
+            *arrow = treeItem(TreeView_GetRoot(tree_.hwnd()), TVIF_CHILDREN).cChildren == 1;   // the startup read found Bookmarks empty
             CreateDirectoryW(path(L"Bookmarks\\one").c_str(), nullptr);
             selfTestKey(VK_F5);
         },
@@ -1228,15 +1203,11 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
         },
         [=, this] {
             if (bookmarkNodes() != L"one,sub") return false;
-            SHFILEINFOW own{};   // the shortcut's own icon arrives after its node (it may wait on the target)
-            SHGetFileInfoW(path(L"Bookmarks\\sub.lnk").c_str(), 0, &own, sizeof own,
-                           SHGFI_SYSICONINDEX | SHGFI_SMALLICON);
+            // The shortcut's own icon arrives after its node (it may wait on the target).
+            SHFILEINFOW own = fileInfo(path(L"Bookmarks\\sub.lnk"), 0, SHGFI_SYSICONINDEX | SHGFI_SMALLICON).value_or(SHFILEINFOW{});
             HWND tv = tree_.hwnd();
-            TVITEMW item{};
-            item.mask = TVIF_IMAGE;
-            item.hItem = TreeView_GetNextSibling(tv, TreeView_GetChild(tv, TreeView_GetRoot(tv)));   // "sub"
-            TreeView_GetItem(tv, &item);
-            return item.iImage == own.iIcon;
+            HTREEITEM sub = TreeView_GetNextSibling(tv, TreeView_GetChild(tv, TreeView_GetRoot(tv)));
+            return treeItem(sub, TVIF_IMAGE).iImage == own.iIcon;
         });
     add(L"choosing a bookmark shortcut in the tree opens its folder",
         [=, this] {
@@ -1297,12 +1268,8 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
         [=, this] {
             HWND tv = tree_.hwnd();
             if (GetTickCount64() - selfTest_->startTick < 400 || !at(dir) || !one()) return false;
-            TVITEMW item{};
-            item.mask = TVIF_CHILDREN;
-            item.hItem = one();
-            TreeView_GetItem(tv, &item);
-            return !(TreeView_GetItemState(tv, one(), TVIS_EXPANDED) & TVIS_EXPANDED) && !TreeView_GetChild(tv, one()) &&
-                   item.cChildren == 1 && bookmarkNodes() == L"one,two,sub";
+            return !expanded(one()) && !TreeView_GetChild(tv, one()) && treeItem(one(), TVIF_CHILDREN).cChildren == 1 &&
+                   bookmarkNodes() == L"one,two,sub";
         });
     add(L"(expand it again)",
         [=, this] {   // as the user would: TVM_EXPAND tells nothing about a node expanded before
@@ -1315,7 +1282,7 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
         [=, this] {
             HWND tv = tree_.hwnd();
             return bookmarkNodes() == L"one,two,sub" && one() && TreeView_GetChild(tv, one()) &&
-                   (TreeView_GetItemState(tv, one(), TVIS_EXPANDED) & TVIS_EXPANDED) && TreeView_GetChild(tv, lastRoot());
+                   expanded(one()) && TreeView_GetChild(tv, tree_.lastRoot());
         });
     add(L"F5 reads the folders open in the tree again: one that is the same stays as it is (\"one\" stays open), one "
         L"that changed shows its new subfolder (5.5)",
@@ -1325,19 +1292,13 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
         },
         [=, this] {
             return bookmarkNodes() == L"one,two,sub" && nodeTexts(TreeView_GetChild(tree_.hwnd(), one())) == L"deep,new" &&
-                   (TreeView_GetItemState(tree_.hwnd(), one(), TVIS_EXPANDED) & TVIS_EXPANDED);
+                   expanded(one());
         });
     add(L"(the status bar says Refreshed)", nullptr, [=, this] { return statusMessage() == L"Refreshed"; });
     auto newNode = [=, this] { return TreeView_GetNextSibling(tree_.hwnd(), TreeView_GetChild(tree_.hwnd(), one())); };
     add(L"(open the folder new in the tree: it has no subfolders, so its arrow goes)",
         [=, this] { TreeView_Expand(tree_.hwnd(), newNode(), TVE_EXPAND); },
-        [=, this] {
-            TVITEMW item{};
-            item.mask = TVIF_CHILDREN;
-            item.hItem = newNode();
-            TreeView_GetItem(tree_.hwnd(), &item);
-            return item.cChildren == 0;
-        });
+        [=, this] { return treeItem(newNode(), TVIF_CHILDREN).cChildren == 0; });
     add(L"the Refresh button does the same, and reads again a folder known to have no subfolders: it shows the one "
         L"made since",
         [=, this] {
@@ -1355,15 +1316,10 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
         [=, this] { makeShortcut(path(L"Bookmarks\\one\\sub.lnk"), path(L"sub")); },
         [=, this] {
             if (nodeTexts(TreeView_GetChild(tree_.hwnd(), one())) != L"deep,later,new,sub") return false;
-            SHFILEINFOW own{};
-            SHGetFileInfoW(path(L"Bookmarks\\one\\sub.lnk").c_str(), 0, &own, sizeof own,
-                           SHGFI_SYSICONINDEX | SHGFI_SMALLICON);
+            SHFILEINFOW own = fileInfo(path(L"Bookmarks\\one\\sub.lnk"), 0, SHGFI_SYSICONINDEX | SHGFI_SMALLICON).value_or(SHFILEINFOW{});
             HTREEITEM sub = TreeView_GetChild(tree_.hwnd(), one());   // the last child
             while (HTREEITEM after = TreeView_GetNextSibling(tree_.hwnd(), sub)) sub = after;
-            TVITEMW item{};
-            item.mask = TVIF_IMAGE | TVIF_CHILDREN;
-            item.hItem = sub;
-            TreeView_GetItem(tree_.hwnd(), &item);
+            TVITEMW item = treeItem(sub, TVIF_IMAGE | TVIF_CHILDREN);
             return item.iImage == own.iIcon && !item.cChildren;
         });
     backHome(L"(back to the test folder)");
@@ -1388,7 +1344,7 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
     auto dragged = std::make_shared<Com<IDataObject>>();
     add(L"This PC in the tree takes no drop",
         [=, this] {
-            HTREEITEM pc = lastRoot();
+            HTREEITEM pc = tree_.lastRoot();
             Com<IDataObject> data = dataObject(wnd_, path(L"file1.txt"));
             dragEffect = DROPEFFECT_COPY;
             treeDrop_->DragEnter(data.get(), MK_LBUTTON, nodePoint(pc), &dragEffect);
@@ -1669,7 +1625,7 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
             open(path(L"big"), Nav::New);   // 10,000 files: read on a worker thread
             Sleep(100);                     // the read is past the start, where this name sorts
             writeFile(path(L"big\\aaa late.dat"));   // too late for the read, too early for the folder watch
-            Sleep(1500);                    // this thread waits: the read ends, and Windows reports the file to no one
+            Sleep(600);                     // this thread waits: the read ends, and Windows reports the file to no one
         },
         [=, this] { return at(path(L"big")) && listed(L"aaa late.dat"); });
     add(L"(remove that file too)", [=, this] { DeleteFileW(path(L"big\\aaa late.dat").c_str()); refresh(); },
@@ -1684,7 +1640,7 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
         [=, this] {
             if (!unwatched->second) unwatched->second = GetTickCount64();
             selfTest_->note = std::to_wstring(loadsDone_ - unwatched->first) + L" reload(s)";
-            return GetTickCount64() - unwatched->second >= 1500 && loadsDone_ == unwatched->first;   // 1.5 s of nothing
+            return GetTickCount64() - unwatched->second >= 800 && loadsDone_ == unwatched->first;   // 0.8 s of nothing (the watch's refresh comes at 400 ms)
         });
     add(L"(remove that file and close the tab)",
         [=, this] { DeleteFileW(path(L"big\\zz unwatched.dat").c_str()); closeTab(1); },
@@ -1777,9 +1733,7 @@ void App::selfTestLog(const std::wstring& line) {
     HANDLE f = CreateFileW(selfTest_->logPath.c_str(), FILE_APPEND_DATA, FILE_SHARE_READ, nullptr, OPEN_ALWAYS,
                            FILE_ATTRIBUTE_NORMAL, nullptr);
     if (f == INVALID_HANDLE_VALUE) return;
-    int n = WideCharToMultiByte(CP_UTF8, 0, line.c_str(), int(line.size()), nullptr, 0, nullptr, nullptr);
-    std::string utf8(size_t(n), '\0');
-    WideCharToMultiByte(CP_UTF8, 0, line.c_str(), int(line.size()), utf8.data(), n, nullptr, nullptr);
+    std::string utf8 = toUtf8(line);
     DWORD written = 0;
     WriteFile(f, utf8.data(), DWORD(utf8.size()), &written, nullptr);
     CloseHandle(f);
@@ -1791,15 +1745,15 @@ void App::selfTestTick() {
     if (t.index < t.steps.size()) {
         SelfTest::Step& s = t.steps[t.index];
         if (!t.started) {
-            if (pending_.generation && !s.whileLoading) return;   // let the previous load finish first
+            if (loading() && !s.whileLoading) return;   // let the previous load finish first
             t.started = true;
             t.note.clear();
             t.busy = true;
             if (s.act) s.act();
             t.busy = false;
             t.startTick = GetTickCount64();   // after the act: its own setup (10,000 files) is not part of the wait
-            return;
         }
+        // Checked at once, not on the next tick: a step that is done right away costs no wait.
         bool ok = !s.done || s.done();
         ULONGLONG elapsed = GetTickCount64() - t.startTick;
         if (!ok && elapsed < s.timeoutMs) {

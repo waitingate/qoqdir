@@ -134,14 +134,69 @@ fn function_entry(pc: u64) -> Option<(u64, *const IMAGE_RUNTIME_FUNCTION_ENTRY)>
     Some((image as u64, f))
 }
 
+/// The return addresses on a thread's stack, innermost first, while it is stopped: its registers are read and the
+/// frames walked from the modules' own unwind tables (nothing that takes a lock or allocates runs meanwhile). The one
+/// rule that keeps the walk safe: every pointer it reads through lies in the committed stack around Rsp, which is
+/// readable in this process. One outside it means a wrong unwind entry (an address that landed in a stranger's code),
+/// and a fault here would end a program whose window was merely slow (4.10). The other two stops only spare the log a
+/// tail of noise.
+fn walk_stack(thread: u32) -> ([u64; 24], usize) {
+    let mut frames = [0u64; 24];
+    let mut count = 0;
+    unsafe {
+        let Ok(t) = OpenThread(THREAD_GET_CONTEXT | THREAD_SUSPEND_RESUME, false, thread) else {
+            return (frames, 0);
+        };
+        if SuspendThread(t) != u32::MAX {
+            let flags = CONTEXT_CONTROL_AMD64 | CONTEXT_INTEGER_AMD64;
+            let mut c = Aligned(CONTEXT { ContextFlags: flags, ..Default::default() });
+            let (mut lo, mut hi) = (0u64, 0u64);
+            if GetThreadContext(t, &mut c.0).is_ok() {
+                let mut stack = MEMORY_BASIC_INFORMATION::default();
+                let known = VirtualQuery(Some(c.0.Rsp as usize as *const _), &mut stack, size_of::<MEMORY_BASIC_INFORMATION>()) != 0;
+                if known && stack.State == MEM_COMMIT && !stack.Protect.contains(PAGE_GUARD) && !stack.Protect.contains(PAGE_NOACCESS) {
+                    lo = stack.BaseAddress as usize as u64;
+                    hi = lo + stack.RegionSize as u64;
+                }
+            }
+            let on_stack = |p: u64| p >= lo && p + 8 <= hi;
+            while count < frames.len() && c.0.Rip != 0 && on_stack(c.0.Rsp) {
+                frames[count] = c.0.Rip;
+                count += 1;
+                let rsp = c.0.Rsp;
+                let Some((base, f)) = function_entry(c.0.Rip) else {
+                    if count > 1 {
+                        break; // only the innermost frame can be a leaf: the walk is lost
+                    }
+                    c.0.Rip = *(c.0.Rsp as *const u64);
+                    c.0.Rsp += 8;
+                    continue;
+                };
+                // UNWIND_INFO's 4th byte: the frame register (0: none) and its offset; the unwinder reads through it.
+                // Rax, Rcx, Rdx, Rbx, Rsp, Rbp, Rsi, Rdi, R8 to R15, in that order.
+                let frame_reg = (*((base + (*f).Anonymous.UnwindData as u64) as *const u8).add(3) & 0xF) as usize;
+                if frame_reg != 0 {
+                    let registers = [c.0.Rax, c.0.Rcx, c.0.Rdx, c.0.Rbx, c.0.Rsp, c.0.Rbp, c.0.Rsi, c.0.Rdi, c.0.R8, c.0.R9, c.0.R10, c.0.R11, c.0.R12, c.0.R13, c.0.R14, c.0.R15];
+                    if !on_stack(registers[frame_reg]) {
+                        break;
+                    }
+                }
+                let (mut handler, mut frame_base) = (std::ptr::null_mut(), 0u64);
+                let _ = RtlVirtualUnwind(UNW_FLAG_NHANDLER, base, c.0.Rip, f, &mut c.0, &mut handler, &mut frame_base, None);
+                if c.0.Rsp <= rsp {
+                    break; // not moving up: lost too
+                }
+            }
+            ResumeThread(t);
+        }
+        let _ = CloseHandle(t);
+    }
+    (frames, count)
+}
+
 /// Once Windows calls the window not responding (5 s without a message read), logs where its thread is: each frame of
 /// its stack as an exe offset or a DLL name, so a hung shell extension names itself. Call from the window's thread.
-/// Every second, once per hang. While the thread is stopped nothing that takes a lock runs: its registers are read and
-/// the frames walked from the modules' own unwind tables, into an array on the stack. Every read stays inside the
-/// committed part of the thread's stack, which is readable in this process; a frame whose stack pointer or frame
-/// pointer lies outside it, or does not move up, is a lost walk and ends it (a function without unwind data can only
-/// be the innermost one, a leaf: any other such frame means the walk went wrong, and a fault here would end a program
-/// whose window was merely slow, 4.10). The frames are named afterwards, which allocates.
+/// Every second, once per hang. The frames are named after the thread runs again, which allocates.
 pub fn watch_for_hangs(window: HWND) {
     let (wnd, thread) = (window.0 as isize, unsafe { GetCurrentThreadId() });
     std::thread::spawn(move || {
@@ -162,59 +217,7 @@ pub fn watch_for_hangs(window: HWND) {
                 continue;
             }
             said = true;
-            let mut frames = [0u64; 24];
-            let mut count = 0;
-            unsafe {
-                if let Ok(t) = OpenThread(THREAD_GET_CONTEXT | THREAD_SUSPEND_RESUME, false, thread) {
-                    if SuspendThread(t) != u32::MAX {
-                        let flags = CONTEXT_CONTROL_AMD64 | CONTEXT_INTEGER_AMD64;
-                        let mut c = Aligned(CONTEXT { ContextFlags: flags, ..Default::default() });
-                        // The one rule that keeps the walk safe: every pointer it reads through lies in the committed
-                        // stack around Rsp, which is readable in this process. One outside it means a wrong unwind
-                        // entry (an address that landed in a stranger's code). The other two stops only spare the log
-                        // a tail of noise.
-                        let (mut lo, mut hi) = (0u64, 0u64);
-                        if GetThreadContext(t, &mut c.0).is_ok() {
-                            let mut stack = MEMORY_BASIC_INFORMATION::default();
-                            let known = VirtualQuery(Some(c.0.Rsp as usize as *const _), &mut stack, size_of::<MEMORY_BASIC_INFORMATION>()) != 0;
-                            if known && stack.State == MEM_COMMIT && !stack.Protect.contains(PAGE_GUARD) && !stack.Protect.contains(PAGE_NOACCESS) {
-                                lo = stack.BaseAddress as usize as u64;
-                                hi = lo + stack.RegionSize as u64;
-                            }
-                        }
-                        let on_stack = |p: u64| p >= lo && p + 8 <= hi;
-                        while count < frames.len() && c.0.Rip != 0 && on_stack(c.0.Rsp) {
-                            frames[count] = c.0.Rip;
-                            count += 1;
-                            let rsp = c.0.Rsp;
-                            let Some((base, f)) = function_entry(c.0.Rip) else {
-                                if count > 1 {
-                                    break; // only the innermost frame can be a leaf: the walk is lost
-                                }
-                                c.0.Rip = *(c.0.Rsp as *const u64);
-                                c.0.Rsp += 8;
-                                continue;
-                            };
-                            // UNWIND_INFO's 4th byte: the frame register (0: none) and its offset; the unwinder reads
-                            // through it. Rax, Rcx, Rdx, Rbx, Rsp, Rbp, Rsi, Rdi, R8 to R15, in that order.
-                            let frame_reg = (*((base + (*f).Anonymous.UnwindData as u64) as *const u8).add(3) & 0xF) as usize;
-                            if frame_reg != 0 {
-                                let registers = [c.0.Rax, c.0.Rcx, c.0.Rdx, c.0.Rbx, c.0.Rsp, c.0.Rbp, c.0.Rsi, c.0.Rdi, c.0.R8, c.0.R9, c.0.R10, c.0.R11, c.0.R12, c.0.R13, c.0.R14, c.0.R15];
-                                if !on_stack(registers[frame_reg]) {
-                                    break;
-                                }
-                            }
-                            let (mut handler, mut frame_base) = (std::ptr::null_mut(), 0u64);
-                            let _ = RtlVirtualUnwind(UNW_FLAG_NHANDLER, base, c.0.Rip, f, &mut c.0, &mut handler, &mut frame_base, None);
-                            if c.0.Rsp <= rsp {
-                                break; // not moving up: lost too
-                            }
-                        }
-                        ResumeThread(t);
-                    }
-                    let _ = CloseHandle(t);
-                }
-            }
+            let (frames, count) = walk_stack(thread);
             let mut line = String::from("Not responding for 5 s; the window thread is at");
             for (i, &pc) in frames[..count].iter().enumerate() {
                 if line.len() > 1000 {

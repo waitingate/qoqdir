@@ -12,7 +12,8 @@ endif()
 set(CMAKE_CXX_FLAGS_RELEASE "-O2 -DNDEBUG")
 
 add_compile_definitions(UNICODE _UNICODE NOMINMAX _WIN32_WINNT=0x0A00 WINVER=0x0A00)
-add_compile_options(-Wall -Wextra -Wshadow -Wconversion -Wduplicated-cond -Wduplicated-branches -Wlogical-op)
+# Any warning fails the build, here and in the build on GitHub alike.
+add_compile_options(-Wall -Wextra -Wshadow -Wconversion -Wduplicated-cond -Wduplicated-branches -Wlogical-op -Werror)
 # A bad index (or other misuse of the standard library) stops the program with a message
 # instead of quietly reading the wrong memory.
 add_compile_definitions(_GLIBCXX_ASSERTIONS)

@@ -28,13 +28,9 @@ function Step([string]$name, [scriptblock]$run) {
 $rust = '--manifest-path', 'rust\Cargo.toml'
 $selftest = '--features', 'selftest', '--target-dir', 'rust\target\selftest'   # its own folder: never replaces your exe
 
-Step 'C++ build' {
+Step 'C++ build' {   # any warning fails it (-Werror in CMakeLists.txt)
     cmake -S . -B build -G Ninja > $null
-    if (-not $LASTEXITCODE) {
-        $out = cmake --build build
-        $out
-        if ($out -match 'warning:') { throw 'The C++ build has warnings.' }
-    }
+    if (-not $LASTEXITCODE) { cmake --build build }
 }
 Step 'Rust build' { cargo build --release @rust }
 Step 'Rust build with the self-test' { cargo build --release @rust @selftest }

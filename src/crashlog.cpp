@@ -147,12 +147,52 @@ RUNTIME_FUNCTION* functionEntry(DWORD64 pc, DWORD64* base) {
     return nullptr;
 }
 
-// Every second: once the window is hung, its thread's stack, once per hang. While the thread is stopped nothing that
-// takes a lock runs: its registers are read and the frames walked from the modules' own unwind tables, into an array
-// on the stack. Every read stays inside the committed part of the thread's stack, which is readable in this process;
-// a frame whose stack pointer or frame pointer lies outside it, or does not move up, is a lost walk and ends it (a
-// function without unwind data can only be the innermost one, a leaf: any other such frame means the walk went wrong,
-// and a fault here would end a program whose window was merely slow, 4.10). The frames are named afterwards.
+// The return addresses on a thread's stack, innermost first, while it is stopped: its registers are read and the
+// frames walked from the modules' own unwind tables (nothing that takes a lock runs meanwhile). The one rule that
+// keeps the walk safe: every pointer it reads through lies in the committed stack around Rsp, which is readable in
+// this process. One outside it means a wrong unwind entry (an address that landed in a stranger's code), and a fault
+// here would end a program whose window was merely slow (4.10). The other two stops only spare the log a tail of noise.
+int walkStack(DWORD thread, DWORD64 (&frames)[24]) {
+    int count = 0;
+    HANDLE t = OpenThread(THREAD_GET_CONTEXT | THREAD_SUSPEND_RESUME, FALSE, thread);
+    if (!t) return 0;
+    if (SuspendThread(t) != DWORD(-1)) {
+        CONTEXT c{};
+        c.ContextFlags = CONTEXT_CONTROL | CONTEXT_INTEGER;
+        MEMORY_BASIC_INFORMATION stack{};
+        DWORD64 lo = 0, hi = 0;
+        if (GetThreadContext(t, &c) && VirtualQuery(reinterpret_cast<void*>(c.Rsp), &stack, sizeof stack) &&
+            stack.State == MEM_COMMIT && !(stack.Protect & (PAGE_GUARD | PAGE_NOACCESS))) {
+            lo = reinterpret_cast<DWORD64>(stack.BaseAddress);
+            hi = lo + stack.RegionSize;
+        }
+        auto onStack = [&](DWORD64 p) { return p >= lo && p + 8 <= hi; };
+        while (count < 24 && c.Rip && onStack(c.Rsp)) {
+            frames[count++] = c.Rip;
+            DWORD64 base = 0, rsp = c.Rsp;
+            RUNTIME_FUNCTION* fn = functionEntry(c.Rip, &base);
+            if (!fn) {
+                if (count > 1) break;   // only the innermost frame can be a leaf: the walk is lost
+                c.Rip = *reinterpret_cast<DWORD64*>(c.Rsp);
+                c.Rsp += 8;
+                continue;
+            }
+            // UNWIND_INFO's 4th byte: the frame register (0: none) and its offset; the unwinder reads through it.
+            int frameReg = reinterpret_cast<const BYTE*>(base + fn->UnwindData)[3] & 0xF;
+            if (frameReg && !onStack((&c.Rax)[frameReg])) break;   // Rax, Rcx, Rdx, Rbx, Rsp, Rbp, ... in order
+            void* handler = nullptr;
+            DWORD64 frameBase = 0;
+            RtlVirtualUnwind(UNW_FLAG_NHANDLER, base, c.Rip, fn, &c, &handler, &frameBase, nullptr);
+            if (c.Rsp <= rsp) break;   // not moving up: lost too
+        }
+        ResumeThread(t);
+    }
+    CloseHandle(t);
+    return count;
+}
+
+// Every second: once the window is hung, where its thread is, once per hang. The frames are named after the thread
+// runs again.
 DWORD WINAPI hangWatch(void*) {
     bool said = false;
     for (;; Sleep(1000)) {
@@ -164,43 +204,7 @@ DWORD WINAPI hangWatch(void*) {
         if (said) continue;
         said = true;
         DWORD64 frames[24];
-        int count = 0;
-        HANDLE t = OpenThread(THREAD_GET_CONTEXT | THREAD_SUSPEND_RESUME, FALSE, g_windowThread);
-        if (t && SuspendThread(t) != DWORD(-1)) {
-            CONTEXT c{};
-            c.ContextFlags = CONTEXT_CONTROL | CONTEXT_INTEGER;
-            // The one rule that keeps the walk safe: every pointer it reads through lies in the committed stack
-            // around Rsp, which is readable in this process. One outside it means a wrong unwind entry (an address
-            // that landed in a stranger's code). The other two stops only spare the log a tail of noise.
-            MEMORY_BASIC_INFORMATION stack{};
-            DWORD64 lo = 0, hi = 0;
-            if (GetThreadContext(t, &c) && VirtualQuery(reinterpret_cast<void*>(c.Rsp), &stack, sizeof stack) &&
-                stack.State == MEM_COMMIT && !(stack.Protect & (PAGE_GUARD | PAGE_NOACCESS))) {
-                lo = reinterpret_cast<DWORD64>(stack.BaseAddress);
-                hi = lo + stack.RegionSize;
-            }
-            auto onStack = [&](DWORD64 p) { return p >= lo && p + 8 <= hi; };
-            while (count < 24 && c.Rip && onStack(c.Rsp)) {
-                frames[count++] = c.Rip;
-                DWORD64 base = 0, rsp = c.Rsp;
-                RUNTIME_FUNCTION* fn = functionEntry(c.Rip, &base);
-                if (!fn) {
-                    if (count > 1) break;   // only the innermost frame can be a leaf: the walk is lost
-                    c.Rip = *reinterpret_cast<DWORD64*>(c.Rsp);
-                    c.Rsp += 8;
-                    continue;
-                }
-                // UNWIND_INFO's 4th byte: the frame register (0: none) and its offset; the unwinder reads through it.
-                int frameReg = reinterpret_cast<const BYTE*>(base + fn->UnwindData)[3] & 0xF;
-                if (frameReg && !onStack((&c.Rax)[frameReg])) break;   // Rax, Rcx, Rdx, Rbx, Rsp, Rbp, ... in order
-                void* handler = nullptr;
-                DWORD64 frameBase = 0;
-                RtlVirtualUnwind(UNW_FLAG_NHANDLER, base, c.Rip, fn, &c, &handler, &frameBase, nullptr);
-                if (c.Rsp <= rsp) break;   // not moving up: lost too
-            }
-            ResumeThread(t);
-        }
-        if (t) CloseHandle(t);
+        int count = walkStack(g_windowThread, frames);
         char line[1200];
         int n = snprintf(line, sizeof line, "Not responding for 5 s; the window thread is at");
         for (int i = 0; i < count && n < int(sizeof line) - 100; ++i) {

@@ -26,6 +26,7 @@ public:
     void create(HWND parent, int id, UINT batchMsg, UINT iconMsg, const std::wstring& bookmarks);
     HWND hwnd() const { return tv_; }
     const std::wstring& bookmarks() const { return bookmarks_; }
+    HTREEITEM lastRoot() const;   // This PC, the last root
     void fill();   // rebuilds the roots (user folders and This PC)
     void refreshDrives();   // reads This PC's drives again; the rest of the tree stays as it is
     void refresh();         // F5: reads again the folders whose subfolders are shown or known to be none (5.5)

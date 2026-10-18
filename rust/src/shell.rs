@@ -176,7 +176,8 @@ fn file_operation(owner: HWND, flags: u32, add: impl FnOnce(&IFileOperation) -> 
 
 // ---------------------------------------------------------------- icons and types
 
-fn file_info(path: &[u16], attrs: FILE_FLAGS_AND_ATTRIBUTES, flags: windows::Win32::UI::Shell::SHGFI_FLAGS) -> Option<SHFILEINFOW> {
+/// What the shell says about a path (or an extension probe with SHGFI_USEFILEATTRIBUTES): None when it fails.
+pub(crate) fn file_info(path: &[u16], attrs: FILE_FLAGS_AND_ATTRIBUTES, flags: windows::Win32::UI::Shell::SHGFI_FLAGS) -> Option<SHFILEINFOW> {
     let mut sfi = SHFILEINFOW::default();
     let ok = unsafe { SHGetFileInfoW(pcwstr(path), attrs, Some(&mut sfi), size_of::<SHFILEINFOW>() as u32, flags) };
     (ok != 0).then_some(sfi)
@@ -209,7 +210,7 @@ pub fn set_theme(control: HWND, name: &str) {
     }
 }
 
-/// Icon and type name depend only on the extension: one cached shell call each, with no disk access.
+/// The cache key of an item's type: "\" for a folder, else its extension.
 fn type_key(it: &Item) -> String {
     if it.is_dir() { "\\".to_string() } else { extension_of(&it.name) }
 }
@@ -367,8 +368,6 @@ pub fn background_menu(owner: HWND, dir: &Location) -> Option<IContextMenu> {
     }
 }
 
-/// `intercept` sees the chosen verb first and returns true if it handled it.
-/// With `paste`, Paste and Paste shortcut come first (a folder's own menu has neither).
 /// An item of the app's own at the top of a shell menu (Paste on a folder's menu, for one).
 pub struct OwnItem<'a> {
     pub text: &'static str,

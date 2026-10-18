@@ -8,6 +8,8 @@ use std::io::Write;
 use std::os::windows::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
+
+use crate::shell::file_info;
 use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
@@ -42,8 +44,8 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
 use windows::Win32::System::Variant::VARIANT;
 use windows::Win32::UI::Accessibility::{AccessibleObjectFromWindow, IAccessible};
 use windows::Win32::UI::Shell::{
-    DROPFILES, FOLDERID_ComputerFolder, FOLDERID_Desktop, SHFILEINFOW, SHGFI_DISPLAYNAME, SHGFI_SMALLICON,
-    SHGFI_SYSICONINDEX, SHGetFileInfoW, SHGetKnownFolderIDList, StrCmpLogicalW,
+    DROPFILES, FOLDERID_ComputerFolder, FOLDERID_Desktop, SHGFI_DISPLAYNAME, SHGFI_SMALLICON,
+    SHGFI_SYSICONINDEX, SHGetKnownFolderIDList, StrCmpLogicalW,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     BM_CLICK, CHILDID_SELF, EnumWindows, FindWindowExW, HTCLIENT, OBJID_CLIENT, GCLP_HBRBACKGROUND, GWLP_USERDATA, GetClassLongPtrW, GetClientRect, GetWindowLongPtrW, GetWindowRect, GetWindowTextLengthW, IsWindowVisible,
@@ -411,21 +413,8 @@ impl App {
         !self.is_loading()
     }
 
-    fn tab_location(&self) -> Location {
-        let st = self.st.borrow();
-        st.tabs[st.active].location.clone()
-    }
-
     fn tab_path(&self, index: usize) -> Location {
         self.st.borrow().tabs.get(index).map_or(Location::ThisPc, |t| t.location.clone())
-    }
-
-    fn tabs(&self) -> usize {
-        self.st.borrow().tabs.len()
-    }
-
-    fn active(&self) -> usize {
-        self.st.borrow().active
     }
 
     fn unavailable(&self) -> bool {
@@ -434,11 +423,11 @@ impl App {
     }
 
     fn at(&self, dir: &Path) -> bool {
-        self.idle() && self.tab_location().same(&Location::dir(dir))
+        self.idle() && self.location().same(&Location::dir(dir))
     }
 
     fn at_pc(&self) -> bool {
-        self.idle() && matches!(self.tab_location(), Location::ThisPc)
+        self.idle() && matches!(self.location(), Location::ThisPc)
     }
 
     fn status_message(&self) -> String {
@@ -497,14 +486,6 @@ impl App {
 
     fn tree_next(&self, node: isize) -> isize {
         send(self.tree.hwnd(), TVM_GETNEXTITEM, TVGN_NEXT as usize, node)
-    }
-
-    fn tree_last_root(&self) -> isize {
-        let mut last = self.tree_root();
-        while self.tree_next(last) != 0 {
-            last = self.tree_next(last);
-        }
-        last
     }
 
     /// Bookmarks' folder "two".
@@ -1259,7 +1240,7 @@ impl App {
                 a.open(Location::dir(p(&name)), Nav::New, ViewState::default());
             },
             |a| {
-                if !a.idle() || a.tab_location().display_name().encode_wide().count() != 80 {
+                if !a.idle() || a.location().display_name().encode_wide().count() != 80 {
                     return false;
                 }
                 let caption = caption(a, a.active());
@@ -1287,7 +1268,7 @@ impl App {
             "typing a subfolder's name in a folder named %TEMP% opens it (the folder's own path is not expanded)",
             |a| a.go_to("sub"),
             |a| {
-                note(format!("tab at {}, status: {}", a.tab_location().text().to_string_lossy(), a.status_message()));
+                note(format!("tab at {}, status: {}", a.location().text().to_string_lossy(), a.status_message()));
                 a.at(&p("%TEMP%\\sub"))
             },
         );
@@ -1305,7 +1286,7 @@ impl App {
                 a.press(VK_RETURN, 0);
             },
             |a| {
-                note(format!("tab at {}, {} tab(s)", a.tab_location().text().to_string_lossy(), a.tabs()));
+                note(format!("tab at {}, {} tab(s)", a.location().text().to_string_lossy(), a.tabs()));
                 a.at(&p("%TEMP%\\sub")) && a.tabs() == 1
             },
         );
@@ -1445,7 +1426,7 @@ impl App {
                 make_shortcut(&p("slash.lnk"), with_slash(p("sub")));
                 a.open_shortcut(p("slash.lnk"), false);
             },
-            move |a| a.at(&p("sub")) && clean(a.tab_location()),
+            move |a| a.at(&p("sub")) && clean(a.location()),
         );
         s.home("(back up to the test folder)");
         s.add(
@@ -1661,10 +1642,7 @@ impl App {
                 a.refresh(ViewState::default());
             },
             |a| {
-                let mut sfi = SHFILEINFOW::default();
-                unsafe {
-                    SHGetFileInfoW(pcwstr(&wide(p("tool.exe"))), FILE_FLAGS_AND_ATTRIBUTES(0), Some(&mut sfi), size_of::<SHFILEINFOW>() as u32, SHGFI_SYSICONINDEX | SHGFI_SMALLICON);
-                }
+                let sfi = file_info(&wide(p("tool.exe")), FILE_FLAGS_AND_ATTRIBUTES(0), SHGFI_SYSICONINDEX | SHGFI_SMALLICON).unwrap_or_default();
                 let Some(row) = (0..a.list.count()).find(|&r| a.list.item(r).is_some_and(|i| i.name == "tool.exe")) else {
                     return false;
                 };
@@ -1785,7 +1763,7 @@ impl App {
             },
         );
         s.add("(close that tab too)", |a| a.close_tab(a.active() + 1), |a| a.idle() && a.tabs() == 1);
-        s.check("the tree lists the drives under This PC", |a| a.tree_child(a.tree_last_root()) != 0);
+        s.check("the tree lists the drives under This PC", |a| a.tree_child(a.tree.last_root()) != 0);
         s.check("root tree nodes have an expand arrow", |a| {
             // The arrow sits in the indent left of the icon; TVS_HASBUTTONS gives roots one only with TVS_LINESATROOT.
             let tree = a.tree.hwnd();
@@ -1824,12 +1802,9 @@ impl App {
                 FLAG.set(a.node_texts(a.tree_root()) == "Bookmarks,This PC");
             },
             |a| {
-                let mut sfi = SHFILEINFOW::default();
-                if let Some(desktop) = known_folder(&FOLDERID_Desktop) {
-                    unsafe {
-                        SHGetFileInfoW(pcwstr(&wide(desktop)), FILE_FLAGS_AND_ATTRIBUTES(0), Some(&mut sfi), size_of::<SHFILEINFOW>() as u32, SHGFI_DISPLAYNAME);
-                    }
-                }
+                let sfi = known_folder(&FOLDERID_Desktop)
+                    .and_then(|desktop| file_info(&wide(desktop), FILE_FLAGS_AND_ATTRIBUTES(0), SHGFI_DISPLAYNAME))
+                    .unwrap_or_default();
                 let roots = a.node_texts(a.tree_root());
                 let desktop = from_wide(&sfi.szDisplayName).to_string_lossy().into_owned();
                 FLAG.get() && roots.starts_with(&format!("Bookmarks,{desktop},")) && roots.ends_with(",This PC")
@@ -1842,7 +1817,7 @@ impl App {
                 volume_change(a, DBT_DEVICEARRIVAL); // before it lands
             },
             |a| {
-                let last = a.tree_last_root(); // This PC
+                let last = a.tree.last_root(); // This PC
                 let expanded = send(a.tree.hwnd(), TVM_GETITEMSTATE, last as usize, TVIS_EXPANDED.0 as isize) & TVIS_EXPANDED.0 as isize != 0;
                 a.tree_child(last) != 0 && expanded
             },
@@ -1868,10 +1843,7 @@ impl App {
                     return false;
                 }
                 // The shortcut's own icon arrives after its node (it may wait on the target).
-                let mut own = SHFILEINFOW::default();
-                unsafe {
-                    SHGetFileInfoW(pcwstr(&wide(p("Bookmarks\\sub.lnk"))), FILE_FLAGS_AND_ATTRIBUTES(0), Some(&mut own), size_of::<SHFILEINFOW>() as u32, SHGFI_SYSICONINDEX | SHGFI_SMALLICON);
-                }
+                let own = file_info(&wide(p("Bookmarks\\sub.lnk")), FILE_FLAGS_AND_ATTRIBUTES(0), SHGFI_SYSICONINDEX | SHGFI_SMALLICON).unwrap_or_default();
                 let sub = a.tree_next(a.tree_child(a.tree_root()));
                 a.tree_item(sub, TVIF_IMAGE).iImage == own.iIcon
             },
@@ -1962,7 +1934,7 @@ impl App {
             |a| {
                 let one = a.tree_child(a.tree_root());
                 let expanded = send(a.tree.hwnd(), TVM_GETITEMSTATE, one as usize, TVIS_EXPANDED.0 as isize) & TVIS_EXPANDED.0 as isize != 0;
-                a.bookmark_nodes() == "one,two,sub" && one != 0 && a.tree_child(one) != 0 && expanded && a.tree_child(a.tree_last_root()) != 0
+                a.bookmark_nodes() == "one,two,sub" && one != 0 && a.tree_child(one) != 0 && expanded && a.tree_child(a.tree.last_root()) != 0
             },
         );
         s.add(
@@ -2017,10 +1989,7 @@ impl App {
                 if a.node_texts(a.tree_child(one)) != "deep,later,new,sub" {
                     return false;
                 }
-                let mut own = SHFILEINFOW::default();
-                unsafe {
-                    SHGetFileInfoW(pcwstr(&wide(p("Bookmarks\\one\\sub.lnk"))), FILE_FLAGS_AND_ATTRIBUTES(0), Some(&mut own), size_of::<SHFILEINFOW>() as u32, SHGFI_SYSICONINDEX | SHGFI_SMALLICON);
-                }
+                let own = file_info(&wide(p("Bookmarks\\one\\sub.lnk")), FILE_FLAGS_AND_ATTRIBUTES(0), SHGFI_SYSICONINDEX | SHGFI_SMALLICON).unwrap_or_default();
                 let mut sub = a.tree_child(one); // the last child
                 while a.tree_next(sub) != 0 {
                     sub = a.tree_next(sub);
@@ -2046,7 +2015,7 @@ impl App {
                 let mut effect = DROPEFFECT_COPY;
                 if let (Some(data), Some(target)) = (data, a.tree_drop.borrow().clone()) {
                     unsafe {
-                        let _ = target.DragEnter(&data, MK_LBUTTON, a.node_point(a.tree_last_root()), &mut effect);
+                        let _ = target.DragEnter(&data, MK_LBUTTON, a.node_point(a.tree.last_root()), &mut effect);
                         let _ = target.DragLeave();
                     }
                 }
@@ -2418,7 +2387,7 @@ impl App {
                 a.open(Location::dir(p("big")), Nav::New, ViewState::default()); // 10,000 files: read on a worker thread
                 std::thread::sleep(Duration::from_millis(100)); // the read is past the start, where this name sorts
                 write_file(&p("big\\aaa late.dat")); // too late for the read, too early for the folder watch
-                std::thread::sleep(Duration::from_millis(1500)); // this thread waits: the read ends, and Windows reports the file to no one
+                std::thread::sleep(Duration::from_millis(600)); // this thread waits: the read ends, and Windows reports the file to no one
             },
             |a| a.at(&p("big")) && a.listed("aaa late.dat"),
         );
@@ -2446,7 +2415,7 @@ impl App {
                 let since = since.unwrap_or_else(Instant::now);
                 UNWATCHED.set((loads, Some(since)));
                 note(format!("{} reload(s)", a.loads_done.get() - loads));
-                since.elapsed() >= Duration::from_millis(1500) && a.loads_done.get() == loads // 1.5 s of nothing
+                since.elapsed() >= Duration::from_millis(800) && a.loads_done.get() == loads // 0.8 s of nothing (the watch's refresh comes at 400 ms)
             },
         );
         s.add(
@@ -2573,6 +2542,7 @@ impl App {
                     t.busy = false;
                     t.started = Some(Instant::now());
                 });
+                self.self_test_tick(); // checked at once, not on the next tick: a step done right away costs no wait
             }
             Next::Check(done, timeout, again) => {
                 let ok = done(self);

@@ -220,7 +220,7 @@ bool App::create(HINSTANCE instance, const CommandLine& cmd, bool useSettings) {
     loadSettings(cmd);
     layout();
     showTabs();
-    open(tab().path, Nav::Switch, tab().view);
+    showTab();
     if (!startedQuiet()) focusList();   // giving a control the focus activates the window, which a quiet start may not
     watchForHangs(wnd_);
     return true;
@@ -510,11 +510,7 @@ LRESULT App::onMessage(UINT msg, WPARAM wp, LPARAM lp) {
             int answer = MessageBoxW(wnd_, L"Save these tabs in Bookmarks\\Tabs before closing?", kAppName,
                                      MB_YESNOCANCEL | MB_ICONQUESTION);
             if (answer == IDCANCEL) return 0;
-            if (answer == IDYES) {
-                std::vector<std::wstring> folders;
-                for (const Tab& t : tabs_) folders.push_back(t.path);
-                saveFolderShortcuts(joinPath(tree_.bookmarks(), L"Tabs"), folders);
-            }
+            if (answer == IDYES) saveFolderShortcuts(joinPath(tree_.bookmarks(), L"Tabs"), tabFolders());
         }
         saveSettings();
         DestroyWindow(wnd_);
@@ -542,7 +538,7 @@ void App::queueRefresh() {
 void App::onTimer(UINT_PTR id) {
     if (id == kRefreshTimer) {
         // Try again later: never disturb a rename, and never cancel a folder that is loading.
-        if (list_.renaming() || pending_.generation) return;
+        if (list_.renaming() || loading()) return;
         KillTimer(wnd_, kRefreshTimer);
         refreshQueued_ = false;
         // What a delete, rename or new folder asked to select, if its folder is still shown. Not available: F5 (4.3).
@@ -553,7 +549,7 @@ void App::onTimer(UINT_PTR id) {
         showStatus();
     } else if (id == kLoadingTimer) {
         KillTimer(wnd_, kLoadingTimer);
-        if (pending_.generation) {   // say "Loading..." only if it is slow
+        if (loading()) {   // say "Loading..." only if it is slow
             setMessage(L"Loading…");
             loadMessageShown_ = true;
         }
@@ -988,16 +984,7 @@ void App::onLoadFailed(const Listing& listing, const Pending& p) {
     // Let the user fix what they typed (5.3), unless they moved on: a dead share fails a minute later.
     if (p.origin.typed && GetFocus() == list_.hwnd()) focusEdit(address_);
     if (p.nav == Nav::Refresh || p.nav == Nav::Switch) {
-        // A tab never changes its folder by itself (a drive may come back): show it empty and say why. The
-        // list gets no folder, so nothing asks Windows about it (that can freeze the window for 20-40 s).
-        list_.setListing(Listing{});
-        t.unavailable = true;
-        watch_ = {};
-        showLocation(p.nav);
-        setMessage(L"\"" + locationText(listing.path) + L"\" is not available: " + errorText(listing.error) +
-                   L"   (F5 tries again)");
-        loadMessageShown_ = true;
-        showStatus();
+        showUnavailable(listing.path, listing.error, p.nav);
         return;
     }
     // A history entry whose folder is gone is dropped, so Back/Forward can move past it.
@@ -1009,6 +996,18 @@ void App::onLoadFailed(const Listing& listing, const Pending& p) {
     }
     setMessage(displayName(listing.path) + L": " + errorText(listing.error));
     warn();
+}
+
+// A tab never changes its folder by itself (a drive may come back): show it empty and say why. The list gets
+// no folder, so nothing asks Windows about it (that can freeze the window for 20-40 s).
+void App::showUnavailable(const std::wstring& path, DWORD error, Nav nav) {
+    list_.setListing(Listing{});
+    tab().unavailable = true;
+    watch_ = {};
+    showLocation(nav);
+    setMessage(L"\"" + locationText(path) + L"\" is not available: " + errorText(error) + L"   (F5 tries again)");
+    loadMessageShown_ = true;
+    showStatus();
 }
 
 void App::goBack() {
@@ -1028,7 +1027,7 @@ bool App::goUp() {
 bool App::refresh(ViewState view) {
     // A load is in progress: start nothing (a held F5 would pile up stuck threads on a dead share). That load
     // may predate the caller's change, so keep what it wants selected for a queued refresh.
-    if (pending_.generation) {
+    if (loading()) {
         if (view.asks()) {
             queuedView_ = {list_.dir(), std::move(view)};
             queueRefresh();
@@ -1081,7 +1080,7 @@ void App::activate(bool inNewTab) {
         // A shortcut to a folder counts as that folder, so it opens in a tab (Windows would use Explorer).
         if (!folder && extensionOf(path) == L".lnk") {
             std::optional<std::wstring> target = shortcutTarget(path, &folder);
-            if (folder && opensInTab(target)) path = normalizePath(*target);   // as openShortcut() does (L7)
+            if (folder && opensInTab(target)) path = normalizePath(*target);   // as openShortcut() does
             else folder = false;
         }
         (folder ? dirs : files).push_back(path);
@@ -1139,7 +1138,7 @@ ViewState App::currentView() const {
 
 // Not while the tab's folder is still loading after a switch: that would forget what it showed before.
 void App::rememberView() {
-    if (pending_.generation && pending_.nav == Nav::Switch) return;
+    if (loading() && pending_.nav == Nav::Switch) return;
     SetWindowTextW(filter_, L"");   // the tab comes back unfiltered (5.4): remember the unfiltered rows
     if (samePath(list_.dir(), tab().path)) tab().view = currentView();
 }
@@ -1167,7 +1166,7 @@ void App::closeTab(int index) {
     tabs_.erase(tabs_.begin() + index);
     if (index < active_) --active_;
     active_ = std::min(active_, int(tabs_.size()) - 1);
-    if (wasActive) open(tab().path, Nav::Switch, tab().view);
+    if (wasActive) showTab();
     else showTabs();
 }
 
@@ -1179,7 +1178,7 @@ void App::closeOtherTabs(int index) {
     tabs_.push_back(std::move(keep));
     active_ = 0;
     if (wasActive) showTabs();
-    else open(tab().path, Nav::Switch, tab().view);
+    else showTab();
 }
 
 void App::switchTab(int index) {
@@ -1189,7 +1188,7 @@ void App::switchTab(int index) {
     }
     rememberView();
     active_ = index;
-    open(tab().path, Nav::Switch, tab().view);
+    showTab();
 }
 
 // Moves the current tab to another place, the others closing up. Each tab takes its folder, history and view
@@ -1271,11 +1270,15 @@ void App::bookmarkTab(int index) {
 
 // ---------------------------------------------------------------- saved tabs (Bookmarks\Tabs)
 
-// Both work on a worker thread: a tab's folder may be on a server that is off, and so may Bookmarks.
-void App::saveTabs() {
+std::vector<std::wstring> App::tabFolders() const {
     std::vector<std::wstring> folders;
     for (const Tab& t : tabs_) folders.push_back(t.path);
-    inBackground([wnd = wnd_, dir = joinPath(tree_.bookmarks(), L"Tabs"), folders = std::move(folders)] {
+    return folders;
+}
+
+// Both work on a worker thread: a tab's folder may be on a server that is off, and so may Bookmarks.
+void App::saveTabs() {
+    inBackground([wnd = wnd_, dir = joinPath(tree_.bookmarks(), L"Tabs"), folders = tabFolders()] {
         PostMessageW(wnd, WM_APP_TABS_SAVED, saveFolderShortcuts(dir, folders), 0);
     });
 }

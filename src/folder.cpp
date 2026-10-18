@@ -177,12 +177,10 @@ void listDrives(Listing& r) {
         Item it;
         it.name = std::wstring(1, wchar_t(L'A' + i)) + L":\\";
         it.attrs = FILE_ATTRIBUTE_DIRECTORY;
-        SHFILEINFOW sfi{};
-        if (SHGetFileInfoW(it.name.c_str(), 0, &sfi, sizeof sfi,
-                           SHGFI_DISPLAYNAME | SHGFI_TYPENAME | SHGFI_SYSICONINDEX | SHGFI_SMALLICON)) {
-            it.label = sfi.szDisplayName;
-            it.type = sfi.szTypeName;
-            it.icon = sfi.iIcon;
+        if (auto sfi = fileInfo(it.name, 0, SHGFI_DISPLAYNAME | SHGFI_TYPENAME | SHGFI_SYSICONINDEX | SHGFI_SMALLICON)) {
+            it.label = sfi->szDisplayName;
+            it.type = sfi->szTypeName;
+            it.icon = sfi->iIcon;
         }
         ULARGE_INTEGER freeBytes{}, total{};
         if (GetDiskFreeSpaceExW(it.name.c_str(), nullptr, &total, &freeBytes))
@@ -343,6 +341,19 @@ int rowAfterDeleting(const std::vector<int>& rows, int count) {
 }
 
 // ---------------------------------------------------------------- text
+
+std::optional<SHFILEINFOW> fileInfo(const std::wstring& path, DWORD attrs, UINT flags) {
+    SHFILEINFOW sfi{};
+    if (!SHGetFileInfoW(path.c_str(), attrs, &sfi, sizeof sfi, flags)) return std::nullopt;
+    return sfi;
+}
+
+std::string toUtf8(const std::wstring& text) {
+    int n = WideCharToMultiByte(CP_UTF8, 0, text.c_str(), int(text.size()), nullptr, 0, nullptr, nullptr);
+    std::string utf8(size_t(std::max(n, 0)), '\0');
+    WideCharToMultiByte(CP_UTF8, 0, text.c_str(), int(text.size()), utf8.data(), n, nullptr, nullptr);
+    return utf8;
+}
 
 std::wstring toLower(std::wstring s) {
     if (!s.empty()) CharLowerBuffW(s.data(), DWORD(s.size()));

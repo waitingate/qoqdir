@@ -14,8 +14,7 @@ void readChildren(TreeBatch& batch, const std::wstring& dir, bool shortcuts) {
         for (int i = 0; i < 26; ++i) {
             if (!(mask & (1u << i))) continue;
             std::wstring root = std::wstring(1, wchar_t(L'A' + i)) + L":\\";
-            SHFILEINFOW sfi{};
-            SHGetFileInfoW(root.c_str(), 0, &sfi, sizeof sfi, SHGFI_DISPLAYNAME | SHGFI_SYSICONINDEX | SHGFI_SMALLICON);
+            SHFILEINFOW sfi = fileInfo(root, 0, SHGFI_DISPLAYNAME | SHGFI_SYSICONINDEX | SHGFI_SMALLICON).value_or(SHFILEINFOW{});
             children.push_back({root, sfi.szDisplayName[0] ? sfi.szDisplayName : root.substr(0, 2), sfi.iIcon});
         }
         return;
@@ -32,11 +31,11 @@ void readChildren(TreeBatch& batch, const std::wstring& dir, bool shortcuts) {
             // that is off, so it follows later (startWorker).
             bool folder = false;
             std::optional<std::wstring> target = shortcutTarget(path, &folder);
-            SHFILEINFOW name{}, icon{};
-            SHGetFileInfoW(path.c_str(), 0, &name, sizeof name, SHGFI_DISPLAYNAME);
+            SHFILEINFOW name = fileInfo(path, 0, SHGFI_DISPLAYNAME).value_or(SHFILEINFOW{});
             std::wstring probe = folder ? L"x" : target.value_or(it.name);   // only the extension matters
-            SHGetFileInfoW(probe.c_str(), folder ? FILE_ATTRIBUTE_DIRECTORY : FILE_ATTRIBUTE_NORMAL, &icon, sizeof icon,
-                           SHGFI_USEFILEATTRIBUTES | SHGFI_SYSICONINDEX | SHGFI_SMALLICON);
+            SHFILEINFOW icon = fileInfo(probe, folder ? FILE_ATTRIBUTE_DIRECTORY : FILE_ATTRIBUTE_NORMAL,
+                                        SHGFI_USEFILEATTRIBUTES | SHGFI_SYSICONINDEX | SHGFI_SMALLICON)
+                                   .value_or(SHFILEINFOW{});
             children.push_back({path, name.szDisplayName[0] ? name.szDisplayName : it.name, icon.iIcon, true});
         }
     }
@@ -59,11 +58,9 @@ void readUserFolders(TreeBatch& batch) {
                                       &FOLDERID_Pictures, &FOLDERID_Music,    &FOLDERID_Videos};
     for (const KNOWNFOLDERID* id : folders) {
         std::wstring path = knownFolder(*id);
-        SHFILEINFOW sfi{};
-        if (path.empty() || !SHGetFileInfoW(path.c_str(), 0, &sfi, sizeof sfi,
-                                            SHGFI_DISPLAYNAME | SHGFI_SYSICONINDEX | SHGFI_SMALLICON))
-            continue;
-        batch.children.push_back({path, sfi.szDisplayName, sfi.iIcon});
+        if (path.empty()) continue;
+        if (auto sfi = fileInfo(path, 0, SHGFI_DISPLAYNAME | SHGFI_SYSICONINDEX | SHGFI_SMALLICON))
+            batch.children.push_back({path, sfi->szDisplayName, sfi->iIcon});
     }
 }
 
@@ -103,10 +100,15 @@ void FolderTree::fill() {
     TreeView_Expand(tv_, thisPc, TVE_EXPAND);
 }
 
+HTREEITEM FolderTree::lastRoot() const {
+    HTREEITEM last = TreeView_GetRoot(tv_);
+    for (HTREEITEM n = last; n; n = TreeView_GetNextSibling(tv_, n)) last = n;
+    return last;
+}
+
 // Drives came or went: re-read This PC only, so expanded folders stay open (4.5); its read in flight is dropped.
 void FolderTree::refreshDrives() {
-    HTREEITEM pc = TreeView_GetRoot(tv_);
-    for (HTREEITEM n = pc; n; n = TreeView_GetNextSibling(tv_, n)) pc = n;   // This PC is the last root
+    HTREEITEM pc = lastRoot();
     if (!TreeView_GetChild(tv_, pc)) {
         // No drives shown yet: their first read is still in flight (read again, so the drive that came or went is
         // in the list), or This PC is closed and unread (its next expand reads them).

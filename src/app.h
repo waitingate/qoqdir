@@ -96,6 +96,10 @@ private:
     bool refresh(ViewState view = {});   // false: a load was in progress, so none was started
     // F5 and the Refresh button: the list (unless it is loading already) and the tree (5.5); the status bar says so.
     void refreshAll() { bool list = refresh(); tree_.refresh(); if (list) setMessage(L"Refreshed"); }
+    bool loading() const { return pending_.generation != 0; }   // a folder read is in flight for this window
+    void showTab() { open(tab().path, Nav::Switch, tab().view); }   // the current tab's folder into the list
+    void showUnavailable(const std::wstring& path, DWORD error, Nav nav);   // the tab's folder can't be read (4.3)
+    std::vector<std::wstring> tabFolders() const;
     void goToTyped();
     void activate(bool inNewTab);   // Enter / double-click on the selection
     void openShortcut(const std::wstring& path, bool inNewTab);

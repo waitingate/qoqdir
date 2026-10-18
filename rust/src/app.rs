@@ -580,8 +580,7 @@ impl App {
             app.load_settings(&cmd);
             app.layout();
             app.show_tabs();
-            let (location, view) = app.with_tab(|t| (t.location.clone(), t.view.clone()));
-            app.open(location, Nav::Switch, view);
+            app.show_tab();
             if !Self::started_quiet() {
                 app.focus_list(); // giving a control the focus activates the window, which a quiet start may not
             }
@@ -607,6 +606,24 @@ impl App {
 
     pub(crate) fn location(&self) -> Location {
         self.with_tab(|t| t.location.clone())
+    }
+
+    pub(crate) fn tabs(&self) -> usize {
+        self.st.borrow().tabs.len()
+    }
+
+    pub(crate) fn active(&self) -> usize {
+        self.st.borrow().active
+    }
+
+    fn tab_locations(&self) -> Vec<Location> {
+        self.st.borrow().tabs.iter().map(|t| t.location.clone()).collect()
+    }
+
+    /// The current tab's folder into the list (a tab switch).
+    fn show_tab(&self) {
+        let (location, view) = self.with_tab(|t| (t.location.clone(), t.view.clone()));
+        self.open(location, Nav::Switch, view);
     }
 
     /// Whether the program was started with a request for no focus: a script's STARTF_USESHOWWINDOW with
@@ -875,10 +892,7 @@ impl App {
                         self.wheel.set(wheel % 120);
                         let steps = wheel / 120;
                         if steps != 0 {
-                            let (count, active) = {
-                                let st = self.st.borrow();
-                                (st.tabs.len() as i32, st.active as i32)
-                            };
+                            let (count, active) = (self.tabs() as i32, self.active() as i32);
                             self.switch_tab((active - steps).clamp(0, count - 1) as usize);
                         }
                         return LRESULT(0);
@@ -960,16 +974,14 @@ impl App {
                 WM_CLOSE => {
                     // A window going with many tabs offers to save them, so a set isn't lost by one click (5.7). Saved
                     // here and now: a worker would die with the window. A self-test never asks.
-                    let tabs = self.st.borrow().tabs.len();
-                    if tabs >= 4 && !self.quiet.get() {
+                    if self.tabs() >= 4 && !self.quiet.get() {
                         let text = w!("Save these tabs in Bookmarks\\Tabs before closing?");
                         let answer = MessageBoxW(Some(self.wnd), text, pcwstr(&wide(APP_NAME)), MB_YESNOCANCEL | MB_ICONQUESTION);
                         if answer == IDCANCEL {
                             return LRESULT(0);
                         }
                         if answer == IDYES && let Some(dir) = self.tree.bookmarks().path().map(|p| p.join("Tabs")) {
-                            let folders: Vec<Location> = self.st.borrow().tabs.iter().map(|t| t.location.clone()).collect();
-                            save_folder_shortcuts(&dir, &folders);
+                            save_folder_shortcuts(&dir, &self.tab_locations());
                         }
                     }
                     self.save_settings();
@@ -1226,7 +1238,7 @@ impl App {
             return;
         }
         let index = index as usize;
-        let tab_count = self.st.borrow().tabs.len();
+        let tab_count = self.tabs();
         let cmd = unsafe {
             let Ok(menu) = CreatePopupMenu() else { return };
             let menu = OwnedMenu(menu);
@@ -1305,8 +1317,7 @@ impl App {
         let k = key.code as u16;
         let is = |vk: VIRTUAL_KEY| k == vk.0;
         let letter = |c: u8| k == c as u16;
-        let tab_count = self.st.borrow().tabs.len();
-        let active = self.st.borrow().active;
+        let (tab_count, active) = (self.tabs(), self.active());
 
         // Anywhere in the window.
         if ctrl && letter(b'T') {
@@ -1970,7 +1981,7 @@ impl App {
     }
 
     pub fn close_tab(&self, index: usize) {
-        let reopen = {
+        let was_active = {
             let mut st = self.st.borrow_mut();
             if st.tabs.len() <= 1 || index >= st.tabs.len() {
                 return;
@@ -1981,17 +1992,13 @@ impl App {
                 st.active -= 1;
             }
             st.active = st.active.min(st.tabs.len() - 1);
-            let t = &st.tabs[st.active];
-            was_active.then(|| (t.location.clone(), t.view.clone()))
+            was_active
         };
-        match reopen {
-            Some((location, view)) => self.open(location, Nav::Switch, view),
-            None => self.show_tabs(),
-        }
+        if was_active { self.show_tab() } else { self.show_tabs() }
     }
 
     pub fn close_other_tabs(&self, index: usize) {
-        let reopen = {
+        let was_active = {
             let mut st = self.st.borrow_mut();
             if index >= st.tabs.len() {
                 return;
@@ -2001,30 +2008,19 @@ impl App {
             st.tabs.clear();
             st.tabs.push(keep);
             st.active = 0;
-            (!was_active).then(|| (st.tabs[0].location.clone(), st.tabs[0].view.clone()))
+            was_active
         };
-        match reopen {
-            Some((location, view)) => self.open(location, Nav::Switch, view),
-            None => self.show_tabs(),
-        }
+        if was_active { self.show_tabs() } else { self.show_tab() }
     }
 
     pub fn switch_tab(&self, index: usize) {
-        let (count, active) = {
-            let st = self.st.borrow();
-            (st.tabs.len(), st.active)
-        };
-        if index >= count || index == active {
+        if index >= self.tabs() || index == self.active() {
             self.show_tabs();
             return;
         }
         self.remember_view();
-        let (location, view) = {
-            let mut st = self.st.borrow_mut();
-            st.active = index;
-            (st.tabs[index].location.clone(), st.tabs[index].view.clone())
-        };
-        self.open(location, Nav::Switch, view);
+        self.st.borrow_mut().active = index;
+        self.show_tab();
     }
 
     /// Moves the current tab to another place (Ctrl+Shift+PgUp / PgDn, or a drag), the others closing up. Each tab
@@ -2047,7 +2043,7 @@ impl App {
     /// past that tab's middle, so a slip during a click moves nothing, and once it would land under the cursor: any
     /// sooner, tabs of different widths would swap back and forth.
     fn drag_tab(&self, over: usize, x: i32) {
-        let active = self.st.borrow().active;
+        let active = self.active();
         let rect = |index: usize| {
             let mut r = RECT::default();
             (send(self.tab_bar, TCM_GETITEMRECT, index, &mut r as *mut _ as isize) != 0).then_some(r)
@@ -2071,8 +2067,7 @@ impl App {
             usize::try_from(send(self.tab_bar, TCM_HITTEST, 0, &mut hit as *mut _ as isize)).ok()
         });
         if hover != self.drop_tab.get() {
-            let active = self.st.borrow().active;
-            send(self.tab_bar, TCM_SETCURSEL, hover.unwrap_or(active), 0);
+            send(self.tab_bar, TCM_SETCURSEL, hover.unwrap_or(self.active()), 0);
             self.drop_tab.set(hover);
         }
         let (location, unavailable) = self.st.borrow().tabs.get(hover?).map(|t| (t.location.clone(), t.unavailable))?;
@@ -2134,7 +2129,7 @@ impl App {
     /// Ctrl+S: a shortcut per tab in Bookmarks\Tabs. This and `open_saved_tabs` work on a worker thread: a tab's
     /// folder may be on a server that is off, and so may Bookmarks.
     fn save_tabs(&self) {
-        let folders: Vec<Location> = self.st.borrow().tabs.iter().map(|t| t.location.clone()).collect();
+        let folders = self.tab_locations();
         let Some(dir) = self.tree.bookmarks().path().map(|p| p.join("Tabs")) else { return };
         let wnd = self.wnd.0 as usize;
         in_background(move || {

@@ -6,6 +6,10 @@
 
 #include <cstdint>
 #include <functional>
+#include <optional>
+#include <string>
+
+#include <shellapi.h>
 
 // ---------------------------------------------------------------- paths
 
@@ -79,6 +83,9 @@ int rowAfterDeleting(const std::vector<int>& rows, int count);
 
 // ---------------------------------------------------------------- text
 
+// What the shell says about a path (or an extension probe with SHGFI_USEFILEATTRIBUTES): none when it fails.
+std::optional<SHFILEINFOW> fileInfo(const std::wstring& path, DWORD attrs, UINT flags);
+std::string toUtf8(const std::wstring& text);
 std::wstring toLower(std::wstring s);
 std::wstring extensionOf(const std::wstring& name);  // lower case with the dot, "" if none
 bool isShortcut(const std::wstring& name);           // .lnk or .url

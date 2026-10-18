@@ -97,8 +97,7 @@ bool printHelp(std::wstring text) {
     DWORD n = 0;
     HANDLE out = GetStdHandle(STD_OUTPUT_HANDLE);
     if (out && GetFileType(out) != FILE_TYPE_UNKNOWN) {
-        std::string utf8(size_t(WideCharToMultiByte(CP_UTF8, 0, text.c_str(), int(text.size()), nullptr, 0, nullptr, nullptr)), '\0');
-        WideCharToMultiByte(CP_UTF8, 0, text.c_str(), int(text.size()), utf8.data(), int(utf8.size()), nullptr, nullptr);
+        std::string utf8 = toUtf8(text);
         // PowerShell 7 closes the pipe at once for $h = qoqdir -h: then the terminal.
         if (WriteFile(out, utf8.data(), DWORD(utf8.size()), &n, nullptr)) return true;
     }

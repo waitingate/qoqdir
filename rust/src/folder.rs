@@ -27,7 +27,7 @@ use windows::Win32::System::Environment::ExpandEnvironmentStringsW;
 use windows::Win32::System::Threading::GetCurrentProcessId;
 use windows::Win32::System::Time::{FileTimeToSystemTime, SystemTimeToTzSpecificLocalTime};
 use windows::Win32::UI::Shell::{
-    SHFILEINFOW, SHGFI_DISPLAYNAME, SHGFI_SMALLICON, SHGFI_SYSICONINDEX, SHGFI_TYPENAME, SHGetFileInfoW,
+    SHGFI_DISPLAYNAME, SHGFI_SMALLICON, SHGFI_SYSICONINDEX, SHGFI_TYPENAME,
     StrFormatByteSizeW, StrFormatKBSizeW, StrStrIW,
 };
 use windows::core::PCWSTR;
@@ -428,12 +428,8 @@ fn list_drives(r: &mut Listing) {
             icon: -1,
             ..Default::default()
         };
-        let mut sfi = SHFILEINFOW::default();
         let flags = SHGFI_DISPLAYNAME | SHGFI_TYPENAME | SHGFI_SYSICONINDEX | SHGFI_SMALLICON;
-        if unsafe {
-            SHGetFileInfoW(pcwstr(&root_w), FILE_FLAGS_AND_ATTRIBUTES(0), Some(&mut sfi), size_of::<SHFILEINFOW>() as u32, flags)
-        } != 0
-        {
+        if let Some(sfi) = crate::shell::file_info(&root_w, FILE_FLAGS_AND_ATTRIBUTES(0), flags) {
             it.label = Some(from_wide(&sfi.szDisplayName));
             it.type_text = Some(from_wide(&sfi.szTypeName));
             it.icon = sfi.iIcon;
