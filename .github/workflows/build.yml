@@ -36,10 +36,12 @@ jobs:
           cmake --build build
 
       # One exe, statically linked, under 1 MB, importing only DLLs Windows protects: the rule is in the script,
-      # shared with scripts\build.ps1 -Test and scripts\release.ps1. Run from the msys2 shell for its objdump.
+      # shared with scripts\build.ps1 -Test and scripts\release.ps1. Run from the msys2 shell, so that the script
+      # finds its objdump; Windows' PowerShell is named by its full path, since the shell's PATH may not hold it.
       - name: Check the exe is portable
         shell: msys2 {0}
-        run: powershell -NoProfile -ExecutionPolicy Bypass -File tests/exe-checks.ps1 -Exe build/qoqdir.exe
+        run: |
+          "$(cygpath -u "$WINDIR")/System32/WindowsPowerShell/v1.0/powershell.exe" -NoProfile -ExecutionPolicy Bypass -File tests/exe-checks.ps1 -Exe build/qoqdir.exe
 
       - name: Unit tests
         shell: msys2 {0}
