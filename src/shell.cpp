@@ -9,8 +9,6 @@
 
 // ---------------------------------------------------------------- shell objects
 
-namespace {
-
 Pidl pidlFromPath(const std::wstring& path) {
     PIDLIST_ABSOLUTE p = nullptr;
     if (path.empty())
@@ -19,6 +17,8 @@ Pidl pidlFromPath(const std::wstring& path) {
         SHParseDisplayName(path.c_str(), nullptr, &p, 0, nullptr);
     return Pidl(p);
 }
+
+namespace {
 
 using ChildPidl = std::unique_ptr<std::remove_pointer_t<PITEMID_CHILD>, CoTaskMemDeleter>;
 
@@ -79,19 +79,25 @@ Com<IBindCtx> findDataBind(Com<IFileSystemBindData>& known) {
     return bind;
 }
 
+// A folder as a shell folder, for its items or its background. The desktop itself (an empty pidl) can't be bound:
+// it is the desktop folder.
+Com<IShellFolder> shellFolder(const std::wstring& dir) {
+    Com<IShellFolder> desktop, folder;
+    Pidl pidl = pidlFromPath(dir);
+    if (!pidl || FAILED(SHGetDesktopFolder(desktop.put()))) return folder;
+    if (pidl->mkid.cb == 0) return desktop;
+    desktop->BindToObject(pidl.get(), nullptr, IID_IShellFolder, reinterpret_cast<void**>(folder.put()));
+    return folder;
+}
+
 // The same for listed items of one folder: opened once, each item parsed from its own find data. Full
 // paths took ~9 ms per file (90 s for 10,000), plain names a disk query each (spec 4.7).
 HRESULT uiObject(HWND owner, const std::wstring& dir, const std::vector<Item>& items, REFIID iid, void** out) {
     *out = nullptr;
     if (items.empty()) return E_INVALIDARG;
     if (items.size() == 1) return uiObject(owner, joinPath(dir, items[0].name), iid, out);
-    Pidl dirPidl = pidlFromPath(dir);
-    Com<IShellFolder> desktop, parent;
-    if (!dirPidl || FAILED(SHGetDesktopFolder(desktop.put()))) return E_FAIL;
-    HRESULT hr = dirPidl->mkid.cb == 0   // the folder is the desktop itself
-                     ? desktop->QueryInterface(IID_IShellFolder, reinterpret_cast<void**>(parent.put()))
-                     : desktop->BindToObject(dirPidl.get(), nullptr, IID_IShellFolder, reinterpret_cast<void**>(parent.put()));
-    if (FAILED(hr)) return hr;
+    Com<IShellFolder> parent = shellFolder(dir);
+    if (!parent) return E_FAIL;
     Com<IFileSystemBindData> known;
     Com<IBindCtx> bind = findDataBind(known);
     if (!bind) return E_FAIL;
@@ -106,7 +112,7 @@ HRESULT uiObject(HWND owner, const std::wstring& dir, const std::vector<Item>& i
         it.name.copy(fd.cFileName, MAX_PATH - 1);   // "C:\" for a drive under This PC
         known->SetFindData(&fd);
         PIDLIST_RELATIVE child = nullptr;
-        hr = parent->ParseDisplayName(owner, bind.get(), fd.cFileName, nullptr, &child, nullptr);
+        HRESULT hr = parent->ParseDisplayName(owner, bind.get(), fd.cFileName, nullptr, &child, nullptr);
         if (FAILED(hr)) return hr;
         owned.emplace_back(static_cast<PITEMID_CHILD>(child));
         children.push_back(owned.back().get());
@@ -245,10 +251,9 @@ const std::wstring& typeName(const Item& it) {
 
 std::wstring knownFolder(REFKNOWNFOLDERID id) {
     PWSTR p = nullptr;
-    std::wstring r;
-    if (SUCCEEDED(SHGetKnownFolderPath(id, 0, nullptr, &p))) r = p;
-    CoTaskMemFree(p);
-    return r;
+    HRESULT hr = SHGetKnownFolderPath(id, 0, nullptr, &p);
+    std::unique_ptr<wchar_t, CoTaskMemDeleter> owned(p);   // freed even when the call fails
+    return SUCCEEDED(hr) ? p : L"";
 }
 
 // ---------------------------------------------------------------- menus
@@ -263,12 +268,8 @@ Com<IContextMenu> itemMenu(HWND owner, const std::wstring& path) { return shellO
 
 Com<IContextMenu> backgroundMenu(HWND owner, const std::wstring& dir) {
     Com<IContextMenu> cm;
-    Pidl pidl = pidlFromPath(dir);
-    Com<IShellFolder> desktop, folder;
-    if (!pidl || FAILED(SHGetDesktopFolder(desktop.put()))) return cm;
-    if (FAILED(desktop->BindToObject(pidl.get(), nullptr, IID_IShellFolder, reinterpret_cast<void**>(folder.put()))))
-        return cm;
-    folder->CreateViewObject(owner, IID_IContextMenu, reinterpret_cast<void**>(cm.put()));
+    if (Com<IShellFolder> folder = shellFolder(dir))
+        folder->CreateViewObject(owner, IID_IContextMenu, reinterpret_cast<void**>(cm.put()));
     return cm;
 }
 
@@ -469,6 +470,7 @@ void dragOut(HWND owner, const std::wstring& dir, const std::vector<Item>& items
 
 std::optional<std::wstring> shortcutTarget(const std::wstring& lnkPath, bool* folder) {
     *folder = false;
+    if (extensionOf(lnkPath) != L".lnk") return std::nullopt;
     Com<IShellLinkW> link;
     if (FAILED(CoCreateInstance(CLSID_ShellLink, nullptr, CLSCTX_INPROC_SERVER, IID_IShellLinkW,
                                 reinterpret_cast<void**>(link.put()))))
@@ -490,7 +492,7 @@ std::optional<std::wstring> shortcutTarget(const std::wstring& lnkPath, bool* fo
             std::wstring found(32768, L'\0');
             if (link->GetPath(found.data(), int(found.size()), nullptr, 0) == S_OK) target = found.c_str();
         }
-        return target;
+        return normalizePath(target);
     }
     // No path: This PC is the one such target this app can show itself (as ""); Windows opens the rest.
     PIDLIST_ABSOLUTE p = nullptr;
@@ -512,9 +514,8 @@ bool writeFolderShortcut(const std::wstring& lnk, const std::wstring& folder) {
     leafName(folder).copy(fd.cFileName, MAX_PATH - 1);
     if (bind) known->SetFindData(&fd);
     PIDLIST_ABSOLUTE p = nullptr;
-    if (folder.empty()) SHGetKnownFolderIDList(FOLDERID_ComputerFolder, 0, nullptr, &p);
-    else if (bind) SHParseDisplayName(folder.c_str(), bind.get(), &p, 0, nullptr);
-    Pidl pidl(p);
+    if (!folder.empty() && bind) SHParseDisplayName(folder.c_str(), bind.get(), &p, 0, nullptr);
+    Pidl pidl = folder.empty() ? pidlFromPath(folder) : Pidl(p);
     Com<IShellLinkW> link;
     Com<IPersistFile> file;
     return pidl &&
@@ -553,9 +554,8 @@ std::vector<std::wstring> savedFolders(const std::wstring& dir) {
     std::vector<std::wstring> folders;
     for (const Item& it : listing.items) {
         bool folder = false;
-        std::optional<std::wstring> target =
-            extensionOf(it.name) == L".lnk" ? shortcutTarget(joinPath(dir, it.name), &folder) : std::nullopt;
-        if (target && folder) folders.push_back(normalizePath(*target));
+        std::optional<std::wstring> target = shortcutTarget(joinPath(dir, it.name), &folder);
+        if (target && folder) folders.push_back(*target);
     }
     return folders;
 }

@@ -35,6 +35,9 @@ bool highContrastOn() {
 }
 
 bool is(const std::wstring& verb, const wchar_t* name) { return _wcsicmp(verb.c_str(), name) == 0; }
+// The menu verbs that open an item, here or in a new tab (or window): Qoqdir opens folders itself.
+bool isOpenVerb(const std::wstring& verb) { return is(verb, L"open") || is(verb, L"explore"); }
+bool isNewTabVerb(const std::wstring& verb) { return is(verb, L"opennewtab") || is(verb, L"opennewwindow"); }
 
 // The text cut to fit 'width' pixels on 'dc', ending in "…" if it was longer. Windows counts the two halves of an
 // emoji as one character, so the cut never splits one.
@@ -69,6 +72,13 @@ void deleteWordBefore(HWND edit) {
 // A shortcut's target that opens in a tab: a folder path, or This PC (""). Anything else is for Windows.
 bool opensInTab(const std::optional<std::wstring>& target) {
     return target && (target->empty() || isAbsolutePath(*target));
+}
+
+int tabAt(HWND bar, POINT screenPt) {   // the tab under a point on the screen, or -1
+    TCHITTESTINFO hit{};
+    hit.pt = screenPt;
+    ScreenToClient(bar, &hit.pt);
+    return TabCtrl_HitTest(bar, &hit);
 }
 
 // The tab bar. A press is handled here, not by the control: it makes the tab current at once and starts a drag along
@@ -650,8 +660,7 @@ void App::onContextMenu(HWND from, POINT pt) {
             return list_.at(r).isDir() || isShortcut(list_.at(r).name);
         });
         showMenu(wnd_, itemMenu(wnd_, dir, list_.selectedItems()).get(), pt, [&](const std::wstring& verb) {
-            bool open = is(verb, L"open") || is(verb, L"explore");
-            bool inNewTab = is(verb, L"opennewtab") || is(verb, L"opennewwindow");
+            bool open = isOpenVerb(verb), inNewTab = isNewTabVerb(verb);
             if (!is(verb, L"rename") && !is(verb, L"delete") && !(opensHere && (open || inNewTab))) return false;
             if (!samePath(list_.dir(), dir) || list_.selectedNames() != names) return true;   // changed: do nothing
             if (is(verb, L"rename")) list_.rename(list_.focused() >= 0 ? list_.focused() : rows[0]);
@@ -670,8 +679,8 @@ void App::onContextMenu(HWND from, POINT pt) {
             pt = {r.left + scale(24, dpi_), r.top + scale(24, dpi_)};
         }
         showMenu(wnd_, itemMenu(wnd_, path).get(), pt, [&](const std::wstring& verb) {
-            if (is(verb, L"open") || is(verb, L"explore")) openNode(path, false);
-            else if (is(verb, L"opennewtab") || is(verb, L"opennewwindow")) openNode(path, true);
+            if (isOpenVerb(verb)) openNode(path, false);
+            else if (isNewTabVerb(verb)) openNode(path, true);
             else if (is(verb, L"rename")) renameNode(path);
             else return false;
             return true;
@@ -681,11 +690,9 @@ void App::onContextMenu(HWND from, POINT pt) {
 }
 
 void App::onTabMenu() {
-    TCHITTESTINFO hit{};
-    GetCursorPos(&hit.pt);
-    POINT screen = hit.pt;
-    ScreenToClient(tabBar_, &hit.pt);
-    int index = TabCtrl_HitTest(tabBar_, &hit);
+    POINT screen{};
+    GetCursorPos(&screen);
+    int index = tabAt(tabBar_, screen);
     if (index < 0) return;
     Menu menu(CreatePopupMenu());
     AppendMenuW(menu.get(), MF_STRING, 1, L"Duplicate tab");
@@ -799,9 +806,12 @@ bool App::onKey(const Key& key) {
         }
         return false;
     }
+    if (k == VK_BACK && (focus == list || focus == tree_.hwnd())) {
+        if (goUp()) hint(hintedUp_, L"Up (Alt+Left goes back)", true);
+        return true;
+    }
     if (focus == list) {
         if (k == VK_RETURN) { activate(ctrl); return true; }
-        if (k == VK_BACK) { if (goUp()) hint(hintedUp_, L"Up (Alt+Left goes back)", true); return true; }
         if (k == VK_DELETE) { deleteSelection(shift); return true; }
         if (k == VK_F2) {
             std::vector<int> rows = list_.selection();
@@ -825,7 +835,6 @@ bool App::onKey(const Key& key) {
         if (ctrl && k == 'V') { pasteInto(wnd_, list_.dir()); return true; }
         return false;
     }
-    if (focus == tree_.hwnd() && k == VK_BACK) { if (goUp()) hint(hintedUp_, L"Up (Alt+Left goes back)", true); return true; }
     return false;
 }
 
@@ -867,7 +876,7 @@ void App::open(const std::wstring& path, Nav nav, ViewState view, Origin origin)
 
 void App::onLoaded(Listing&& listing, UINT generation) {
     ++loadsDone_;
-    if (generation != generation_ || generation != pending_.generation) {   // superseded
+    if (generation != pending_.generation) {   // superseded (open() sets both together)
         if (listing.error != ERROR_OPERATION_ABORTED) ++loadsWasted_;
         return;
     }
@@ -930,10 +939,11 @@ void App::onLoaded(Listing&& listing, UINT generation) {
     t.path = listing.path;
     t.unavailable = false;
     FILETIME written = listing.written;
-    std::vector<std::wstring> treeNames = list_.treeNames();
-    list_.setListing(std::move(listing));
     // The tree follows the folder shown: its node is read again when the subfolders or shortcuts changed (5.5).
-    if (p.nav == Nav::Refresh && sameFolder && treeNames != list_.treeNames()) tree_.refreshFolder(t.path);
+    bool reload = p.nav == Nav::Refresh && sameFolder;
+    std::vector<std::wstring> treeNames = reload ? list_.treeNames() : std::vector<std::wstring>{};
+    list_.setListing(std::move(listing));
+    if (reload && treeNames != list_.treeNames()) tree_.refreshFolder(t.path);
     int row = list_.select(view.select, view.focus);
     if (row < 0 && !requested && view.focusRow >= 0 && list_.count() > 0)   // the focused item is gone (4.5):
         row = list_.focusRow(std::min(view.focusRow, list_.count() - 1));   // the item in its place takes the focus
@@ -1079,9 +1089,9 @@ void App::activate(bool inNewTab) {
         std::wstring path = list_.pathAt(row);
         bool folder = list_.at(row).isDir();
         // A shortcut to a folder counts as that folder, so it opens in a tab (Windows would use Explorer).
-        if (!folder && extensionOf(path) == L".lnk") {
+        if (!folder) {
             std::optional<std::wstring> target = shortcutTarget(path, &folder);
-            if (folder && opensInTab(target)) path = normalizePath(*target);   // as openShortcut() does
+            if (folder && opensInTab(target)) path = *target;
             else folder = false;
         }
         (folder ? dirs : files).push_back(path);
@@ -1102,15 +1112,13 @@ void App::activate(bool inNewTab) {
 // Whether the target really is a folder, the loader finds out on its thread (it may be on a network).
 void App::openShortcut(const std::wstring& path, bool inNewTab) {
     bool folder = false;
-    std::optional<std::wstring> target = extensionOf(path) == L".lnk" ? shortcutTarget(path, &folder) : std::nullopt;
+    std::optional<std::wstring> target = shortcutTarget(path, &folder);
     if (!opensInTab(target)) {
         openFile(wnd_, path);   // a web link, a program, a library...
         return;
     }
-    // Normalized like every way into a tab: a stored "D:\photos\" would give a blank caption and a stuck Up.
-    std::wstring dir = normalizePath(*target);
-    if (inNewTab && folder) newTab(dir, false);
-    else open(dir, Nav::New, {}, Origin::fromShortcut(path));
+    if (inNewTab && folder) newTab(*target, false);
+    else open(*target, Nav::New, {}, Origin::fromShortcut(path));
 }
 
 // Rename on a tree node's menu happens in the file list, in the node's parent folder.
@@ -1217,13 +1225,7 @@ void App::dragTab(int over, int x) {
 // The folder of the tab under the cursor, for a drop. That tab shows as the current one while hovered (plain tabs
 // take no highlight); the current tab's name keeps its bullet.
 std::optional<std::wstring> App::tabDropTarget(const POINT* screenPt) {
-    int hover = -1;
-    if (screenPt) {
-        TCHITTESTINFO hit{};
-        hit.pt = *screenPt;
-        ScreenToClient(tabBar_, &hit.pt);
-        hover = TabCtrl_HitTest(tabBar_, &hit);
-    }
+    int hover = screenPt ? tabAt(tabBar_, *screenPt) : -1;
     if (hover != dropTab_) {
         TabCtrl_SetCurSel(tabBar_, hover >= 0 ? hover : active_);
         dropTab_ = hover;

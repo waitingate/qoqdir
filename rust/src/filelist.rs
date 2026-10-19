@@ -127,7 +127,6 @@ impl FileList {
             }
             sort_items(&mut m.items, m.key, m.ascending);
         });
-        self.ensure_visible(Some(0));
     }
 
     pub fn set_filter(&self, filter: &OsStr) {
@@ -136,12 +135,10 @@ impl FileList {
             return;
         }
         self.update(true, |m| m.filter = w);
-        self.ensure_visible(self.focused().or(Some(0))); // the old scroll position may be past the end
     }
 
     pub fn set_show_hidden(&self, show: bool) {
         self.update(true, |m| m.show_hidden = show);
-        self.ensure_visible(self.focused().or(Some(0)));
     }
 
     pub fn show_hidden(&self) -> bool {
@@ -155,7 +152,6 @@ impl FileList {
             sort_items(&mut m.items, key, ascending);
         });
         self.show_sort_arrow();
-        self.ensure_visible(self.focused());
     }
 
     pub fn sort(&self) -> (SortKey, bool) {
@@ -186,9 +182,11 @@ impl FileList {
             let _ = InvalidateRect(Some(self.hwnd), None, false);
         }
         self.select(&names, focus.as_deref());
+        // select() left the focus on a row; the old scroll position may be past the end.
+        self.ensure_visible(self.focused());
     }
 
-    fn set_state(&self, row: Option<usize>, state: LIST_VIEW_ITEM_STATE_FLAGS, mask: LIST_VIEW_ITEM_STATE_FLAGS) {
+    pub fn set_state(&self, row: Option<usize>, state: LIST_VIEW_ITEM_STATE_FLAGS, mask: LIST_VIEW_ITEM_STATE_FLAGS) {
         let item = LVITEMW { state, stateMask: mask, ..Default::default() };
         send(self.hwnd, LVM_SETITEMSTATE, row.unwrap_or(usize::MAX), &item as *const _ as isize);
     }
@@ -221,6 +219,12 @@ impl FileList {
         let mut names: Vec<OsString> = m.items.iter().filter(|it| shown(it)).map(|it| it.name.clone()).collect();
         names.sort();
         names
+    }
+    /// How many of these rows are files (not folders), and their total size: for the status bar.
+    pub fn file_sizes(&self, rows: &[usize]) -> (usize, u64) {
+        let m = self.model.borrow();
+        let files = rows.iter().filter_map(|&r| m.view.get(r).map(|&i| &m.items[i])).filter(|it| !it.is_dir());
+        files.fold((0, 0), |(n, bytes), it| (n + 1, bytes + it.size))
     }
     /// The item at a row, as a location of its own (for shell commands).
     pub fn item_location(&self, row: usize) -> Option<Location> {
@@ -260,7 +264,9 @@ impl FileList {
     }
 
     pub fn focused_name(&self) -> Option<OsString> {
-        self.focused().and_then(|r| self.item(r)).map(|it| it.name)
+        let row = self.focused()?; // asks the control: before the borrow
+        let m = self.model.borrow();
+        m.view.get(row).map(|&i| m.items[i].name.clone())
     }
 
     // ------------------------------------------------------------ selection and scrolling

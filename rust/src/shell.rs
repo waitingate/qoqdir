@@ -56,7 +56,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
 };
 use windows::core::{GUID, HRESULT, IUnknown, Interface, PCSTR, PCWSTR, PSTR, Ref, Result, implement, s, w};
 
-use crate::folder::{Item, Location, SortKey, extension_of, list_folder, normalize, sort_items};
+use crate::folder::{Item, Location, SortKey, exists, extension_of, list_folder, normalize, sort_items};
 use crate::util::{OwnedMenu, Pidl, copy_to, from_wide, key_down, pcwstr, wide};
 
 const CMIC_MASK_UNICODE: u32 = 0x4000; // not in the windows crate
@@ -73,7 +73,8 @@ thread_local! {
 
 // ---------------------------------------------------------------- shell objects
 
-fn pidl_from(location: &Location) -> Option<Pidl> {
+/// The shell's id for a location; None when Windows can't parse it.
+pub fn pidl_from(location: &Location) -> Option<Pidl> {
     unsafe {
         match location {
             Location::ThisPc => SHGetKnownFolderIDList(&FOLDERID_ComputerFolder, 0, None).ok().map(Pidl),
@@ -122,6 +123,16 @@ fn find_data_bind() -> Result<(IFileSystemBindData, IBindCtx)> {
     }
 }
 
+/// A folder as a shell folder, for its items or its background. The desktop itself (an empty pidl) can't be bound:
+/// it is the desktop folder.
+fn shell_folder(dir: &Location) -> Result<IShellFolder> {
+    let pidl = pidl_from(dir).ok_or(E_FAIL)?;
+    unsafe {
+        let desktop = SHGetDesktopFolder()?;
+        if (*pidl.0).mkid.cb == 0 { Ok(desktop) } else { desktop.BindToObject(pidl.0, None::<&IBindCtx>) }
+    }
+}
+
 /// The same for listed items of one folder: opened once, each item parsed from its own find data. Full
 /// paths took ~9 ms per file (90 s for 10,000), plain names a disk query each (spec 4.7).
 fn ui_object_of<T: Interface>(owner: HWND, dir: &Location, items: &[Item]) -> Result<T> {
@@ -131,10 +142,7 @@ fn ui_object_of<T: Interface>(owner: HWND, dir: &Location, items: &[Item]) -> Re
         _ => {}
     }
     unsafe {
-        let dir_pidl = pidl_from(dir).ok_or(E_FAIL)?;
-        let desktop = SHGetDesktopFolder()?;
-        let folder: IShellFolder =
-            if (*dir_pidl.0).mkid.cb == 0 { desktop } else { desktop.BindToObject(dir_pidl.0, None::<&IBindCtx>)? };
+        let folder = shell_folder(dir)?;
         let (known, bind) = find_data_bind()?;
         let mut owned: Vec<Pidl> = Vec::with_capacity(items.len());
         for it in items {
@@ -145,9 +153,7 @@ fn ui_object_of<T: Interface>(owner: HWND, dir: &Location, items: &[Item]) -> Re
                 nFileSizeLow: it.size as u32,
                 ..Default::default()
             };
-            for (to, from) in fd.cFileName.iter_mut().zip(wide(&it.name).into_iter().take(MAX_PATH as usize - 1)) {
-                *to = from; // "C:\" for a drive under This PC
-            }
+            copy_to(fd.cFileName.as_mut_ptr(), MAX_PATH as i32, &it.name); // "C:\" for a drive under This PC
             known.SetFindData(&fd)?;
             let mut child: *mut ITEMIDLIST = std::ptr::null_mut();
             folder.ParseDisplayName(owner, &bind, PCWSTR(fd.cFileName.as_ptr()), None, &mut child, std::ptr::null_mut())?;
@@ -360,12 +366,7 @@ pub fn item_menu_at(owner: HWND, location: &Location) -> Option<IContextMenu> {
 }
 
 pub fn background_menu(owner: HWND, dir: &Location) -> Option<IContextMenu> {
-    let pidl = pidl_from(dir)?;
-    unsafe {
-        let desktop = SHGetDesktopFolder().ok()?;
-        let folder: IShellFolder = desktop.BindToObject(pidl.0, None::<&IBindCtx>).ok()?;
-        folder.CreateViewObject(owner).ok()
-    }
+    unsafe { shell_folder(dir).ok()?.CreateViewObject(owner).ok() }
 }
 
 /// An item of the app's own at the top of a shell menu (Paste on a folder's menu, for one).
@@ -632,11 +633,14 @@ pub fn drag_out(owner: HWND, dir: &Location, items: &[Item]) {
 
 // ---------------------------------------------------------------- shortcuts
 
-/// A shortcut's stored target (normalize it before use): a path, This PC, or nothing (a web link, a library),
-/// and whether it was a folder. Reads the .lnk file; a target on a drive letter that is gone is looked for where the
-/// shortcut says it is relative to itself (a flash drive on another letter). No disk is asked: a server that is off
-/// costs nothing.
+/// A .lnk file's target, normalized like every way into a tab (a stored "D:\photos\" would give a blank caption and a
+/// stuck Up): a path, This PC, or nothing (another file, a web link, a library), and whether it was a folder. A target
+/// on a drive letter that is gone is looked for where the shortcut says it is relative to itself (a flash drive on
+/// another letter). No disk is asked: a server that is off costs nothing.
 pub fn shortcut_target(lnk: &Path) -> Option<(Location, bool)> {
+    if extension_of(lnk.as_os_str()) != ".lnk" {
+        return None;
+    }
     unsafe {
         let link: IShellLinkW = CoCreateInstance(&ShellLink, None, CLSCTX_INPROC_SERVER).ok()?;
         let file: IPersistFile = link.cast().ok()?;
@@ -656,7 +660,7 @@ pub fn shortcut_target(lnk: &Path) -> Option<(Location, bool)> {
             {
                 let _ = link.GetPath(&mut target, std::ptr::null_mut(), 0); // the target where it is now
             }
-            return Some((Location::Dir(PathBuf::from(from_wide(&target))), folder));
+            return Some((normalize(&from_wide(&target)), folder));
         }
         // No path: This PC is the one such target this app can show itself; Windows opens the rest.
         let pidl = Pidl(link.GetIDList().ok().filter(|p| !p.is_null())?);
@@ -687,7 +691,7 @@ pub fn save_folder_shortcuts(dir: &Path, folders: &[Location]) -> bool {
 /// A bookmark: a shortcut to `folder` in `dir` (Bookmarks), named after the folder; one that is there already stays.
 pub fn bookmark_folder(dir: &Path, folder: &Location) -> bool {
     let lnk = dir.join(shortcut_name(folder));
-    lnk.exists() || write_folder_shortcut(&lnk, folder).is_ok()
+    exists(&lnk) || write_folder_shortcut(&lnk, folder).is_ok()
 }
 
 /// A shortcut to `folder` at `lnk`, made from the path and find data that say "folder": the shortcut then says so
@@ -728,13 +732,8 @@ pub fn saved_folders(dir: &Path) -> Vec<Location> {
     listing
         .items
         .iter()
-        .filter(|it| extension_of(&it.name) == ".lnk")
         .filter_map(|it| shortcut_target(&dir.join(&it.name)))
-        .filter(|(_, folder)| *folder)
-        .map(|(target, _)| match target {
-            Location::Dir(path) => normalize(path.as_os_str()),
-            this_pc => this_pc,
-        })
+        .filter_map(|(target, folder)| folder.then_some(target))
         .collect()
 }
 

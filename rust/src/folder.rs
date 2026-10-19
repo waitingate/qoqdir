@@ -199,9 +199,7 @@ pub fn normalize(text: &OsStr) -> Location {
     if w.len() == 2 && w[1] == b':' as u16 {
         w.push(b'\\' as u16);
     }
-    let is_unc = w.len() > 2 && w[0] == b'\\' as u16 && w[1] == b'\\' as u16;
-    let is_drive = w.len() >= 3 && w[1] == b':' as u16 && w[2] == b'\\' as u16;
-    if is_unc || is_drive {
+    if is_absolute_path(&OsString::from_wide(&w)) {
         let src: Vec<u16> = w.iter().copied().chain(Some(0)).collect();
         let mut buf = vec![0u16; 32768];
         let n = unsafe { windows::Win32::Storage::FileSystem::GetFullPathNameW(pcwstr(&src), Some(&mut buf), None) }
@@ -252,8 +250,7 @@ pub fn parent_process_name() -> Option<OsString> {
         let mut e = PROCESSENTRY32W { dwSize: size_of::<PROCESSENTRY32W>() as u32, ..Default::default() };
         let mut more = Process32FirstW(snap, &mut e).is_ok();
         while more {
-            let end = e.szExeFile.iter().position(|&c| c == 0).unwrap_or(e.szExeFile.len());
-            processes.push((e.th32ProcessID, e.th32ParentProcessID, from_wide(&e.szExeFile[..end])));
+            processes.push((e.th32ProcessID, e.th32ParentProcessID, from_wide(&e.szExeFile)));
             more = Process32NextW(snap, &mut e).is_ok();
         }
         let _ = CloseHandle(snap);
@@ -414,13 +411,14 @@ pub fn folder_written(path: &Path) -> u64 {
     (u64::from(data.ftLastWriteTime.dwHighDateTime) << 32) | u64::from(data.ftLastWriteTime.dwLowDateTime)
 }
 
-fn list_drives(r: &mut Listing) {
+/// "C:\" and so on, for the drive letters in use.
+pub fn drive_roots() -> Vec<String> {
     let mask = unsafe { GetLogicalDrives() };
-    for i in 0..26u8 {
-        if mask & (1 << i) == 0 {
-            continue;
-        }
-        let root = format!("{}:\\", (b'A' + i) as char);
+    (0..26u8).filter(|i| mask & (1 << i) != 0).map(|i| format!("{}:\\", (b'A' + i) as char)).collect()
+}
+
+fn list_drives(r: &mut Listing) {
+    for root in drive_roots() {
         let root_w = wide(&root);
         let mut it = Item {
             name: root.into(),

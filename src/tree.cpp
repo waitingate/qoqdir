@@ -3,6 +3,8 @@
 
 #include "shell.h"
 
+#include <unordered_map>
+
 // ---------------------------------------------------------------- reading, on a worker thread
 
 namespace {
@@ -11,10 +13,7 @@ namespace {
 void readChildren(TreeBatch& batch, const std::wstring& dir, bool shortcuts) {
     std::vector<TreeBatch::Child>& children = batch.children;
     if (dir.empty()) {   // the drives (not via listFolder: its free-space check can wait on a network drive)
-        DWORD mask = GetLogicalDrives();
-        for (int i = 0; i < 26; ++i) {
-            if (!(mask & (1u << i))) continue;
-            std::wstring root = std::wstring(1, wchar_t(L'A' + i)) + L":\\";
+        for (const std::wstring& root : driveRoots()) {
             SHFILEINFOW sfi = fileInfo(root, 0, SHGFI_DISPLAYNAME | SHGFI_SYSICONINDEX | SHGFI_SMALLICON).value_or(SHFILEINFOW{});
             children.push_back({root, sfi.szDisplayName[0] ? sfi.szDisplayName : root.substr(0, 2), sfi.iIcon});
         }
@@ -22,12 +21,13 @@ void readChildren(TreeBatch& batch, const std::wstring& dir, bool shortcuts) {
     }
     Listing listing = listFolder(dir, false);
     batch.failed = listing.error != 0;
+    std::erase_if(listing.items, [&](const Item& it) { return !it.isDir() && !(shortcuts && isShortcut(it.name)); });
     sortItems(listing.items, SortKey::Name, true);   // folders first, in natural order
     for (const Item& it : listing.items) {
         std::wstring path = joinPath(dir, it.name);
         if (it.isDir()) {
             children.push_back({path, it.name, -1});
-        } else if (shortcuts && isShortcut(it.name)) {
+        } else {
             // From the .lnk alone: its name and a folder or file-type icon. Its own icon can wait on a server
             // that is off, so it follows later (startWorker).
             bool folder = false;
@@ -47,7 +47,7 @@ void readChildren(TreeBatch& batch, const std::wstring& dir, bool shortcuts) {
 // would freeze the drag.
 std::optional<std::wstring> localFolder(std::wstring path) {
     bool folder = true;
-    if (isShortcut(path)) path = normalizePath(shortcutTarget(path, &folder).value_or(L""));
+    if (isShortcut(path)) path = shortcutTarget(path, &folder).value_or(L"");
     bool local = folder && path.size() >= 3 && path[1] == L':' &&
                  GetDriveTypeW(path.substr(0, 3).c_str()) != DRIVE_REMOTE;
     return local ? std::optional(path) : std::nullopt;
@@ -91,11 +91,9 @@ void FolderTree::fill() {
     HTREEITEM bookmarksNode = add(TVI_ROOT, bookmarks_, L"Bookmarks", folderIcon());
     startWorker(nullptr, readUserFolders);   // the user folders arrive later, like the drives
     SHFILEINFOW pc{};
-    PIDLIST_ABSOLUTE pidl = nullptr;
-    if (SUCCEEDED(SHGetKnownFolderIDList(FOLDERID_ComputerFolder, 0, nullptr, &pidl))) {
-        SHGetFileInfoW(reinterpret_cast<LPCWSTR>(pidl), 0, &pc, sizeof pc, SHGFI_PIDL | SHGFI_SYSICONINDEX | SHGFI_SMALLICON);
-        CoTaskMemFree(pidl);
-    }
+    if (Pidl pidl = pidlFromPath(L""))
+        SHGetFileInfoW(reinterpret_cast<LPCWSTR>(pidl.get()), 0, &pc, sizeof pc,
+                       SHGFI_PIDL | SHGFI_SYSICONINDEX | SHGFI_SMALLICON);
     HTREEITEM thisPc = add(TVI_ROOT, L"", L"This PC", pc.iIcon);
     TreeView_Expand(tv_, bookmarksNode, TVE_EXPAND);
     TreeView_Expand(tv_, thisPc, TVE_EXPAND);
@@ -232,30 +230,32 @@ void FolderTree::addChildren(const TreeBatch& batch) {
 // The shortcuts' own icons, read after their node was shown (startWorker). The node may be gone by now.
 void FolderTree::setIcons(HTREEITEM node, const IconBatch& batch) {
     if (!paths_.count(node)) return;
+    std::unordered_map<std::wstring, int> icons;   // by lowercase path: one look-up per node, not one per pair
+    for (const auto& [name, icon] : batch.icons) icons[toLower(joinPath(batch.dir, name))] = icon;
     for (HTREEITEM c = TreeView_GetChild(tv_, node); c; c = TreeView_GetNextSibling(tv_, c)) {
-        for (const auto& [name, icon] : batch.icons) {
-            if (!samePath(pathOf(c), joinPath(batch.dir, name))) continue;
-            TVITEMW item{};
-            item.mask = TVIF_IMAGE | TVIF_SELECTEDIMAGE;
-            item.hItem = c;
-            item.iImage = item.iSelectedImage = icon;
-            TreeView_SetItem(tv_, &item);
-        }
+        auto found = icons.find(toLower(pathOf(c)));
+        if (found == icons.end()) continue;
+        TVITEMW item{};
+        item.mask = TVIF_IMAGE | TVIF_SELECTEDIMAGE;
+        item.hItem = c;
+        item.iImage = item.iSelectedImage = found->second;
+        TreeView_SetItem(tv_, &item);
     }
 }
 
 // ---------------------------------------------------------------- the mouse: paths and drops
 
+HTREEITEM FolderTree::nodeAt(POINT screenPt, UINT* where) const {
+    TVHITTESTINFO hit{};
+    hit.pt = screenPt;
+    ScreenToClient(tv_, &hit.pt);
+    HTREEITEM node = TreeView_HitTest(tv_, &hit);
+    if (where) *where = hit.flags;
+    return node;
+}
+
 bool FolderTree::pathAt(POINT pt, std::wstring* path) const {
-    HTREEITEM node = nullptr;
-    if (pt.x == -1 && pt.y == -1) {
-        node = TreeView_GetSelection(tv_);
-    } else {
-        TVHITTESTINFO hit{};
-        hit.pt = pt;
-        ScreenToClient(tv_, &hit.pt);
-        node = TreeView_HitTest(tv_, &hit);
-    }
+    HTREEITEM node = pt.x == -1 && pt.y == -1 ? TreeView_GetSelection(tv_) : nodeAt(pt);
     if (!node) return false;
     *path = pathOf(node);
     return true;
@@ -264,13 +264,7 @@ bool FolderTree::pathAt(POINT pt, std::wstring* path) const {
 // The node under the cursor lights up, and a closed one opens after 0.7 s (Windows asks again many times a second
 // during a drag), so the folders inside it can be reached. Where a drop there goes is worked out once, as it lights up.
 std::optional<std::wstring> FolderTree::dropTarget(const POINT* screenPt) {
-    HTREEITEM node = nullptr;
-    if (screenPt) {
-        TVHITTESTINFO hit{};
-        hit.pt = *screenPt;
-        ScreenToClient(tv_, &hit.pt);
-        node = TreeView_HitTest(tv_, &hit);
-    }
+    HTREEITEM node = screenPt ? nodeAt(*screenPt) : nullptr;
     if (node != TreeView_GetDropHilight(tv_)) {
         TreeView_SelectDropTarget(tv_, node);
         openAt_ = GetTickCount64() + 700;
@@ -316,11 +310,11 @@ bool FolderTree::onNotify(NMHDR* nm, std::wstring* open) {
     }
     case NM_CLICK: {
         // Clicking the node that is already selected sends no change, so open it here.
-        TVHITTESTINFO hit{};
-        GetCursorPos(&hit.pt);
-        ScreenToClient(tv_, &hit.pt);
-        HTREEITEM node = TreeView_HitTest(tv_, &hit);
-        if (node && node == TreeView_GetSelection(tv_) && (hit.flags & (TVHT_ONITEM | TVHT_ONITEMRIGHT))) {
+        POINT pt{};
+        GetCursorPos(&pt);
+        UINT where = 0;
+        HTREEITEM node = nodeAt(pt, &where);
+        if (node && node == TreeView_GetSelection(tv_) && (where & (TVHT_ONITEM | TVHT_ONITEMRIGHT))) {
             *open = pathOf(node);
             return true;
         }

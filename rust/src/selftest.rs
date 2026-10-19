@@ -44,8 +44,7 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
 use windows::Win32::System::Variant::VARIANT;
 use windows::Win32::UI::Accessibility::{AccessibleObjectFromWindow, IAccessible};
 use windows::Win32::UI::Shell::{
-    DROPFILES, FOLDERID_ComputerFolder, FOLDERID_Desktop, SHGFI_DISPLAYNAME, SHGFI_SMALLICON,
-    SHGFI_SYSICONINDEX, SHGetKnownFolderIDList, StrCmpLogicalW,
+    DROPFILES, FOLDERID_Desktop, SHGFI_DISPLAYNAME, SHGFI_SMALLICON, SHGFI_SYSICONINDEX, StrCmpLogicalW,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     BM_CLICK, CHILDID_SELF, EnumWindows, FindWindowExW, HTCLIENT, OBJID_CLIENT, GCLP_HBRBACKGROUND, GWLP_USERDATA, GetClassLongPtrW, GetClientRect, GetWindowLongPtrW, GetWindowRect, GetWindowTextLengthW, IsWindowVisible,
@@ -55,13 +54,13 @@ use windows::Win32::UI::WindowsAndMessaging::{
 };
 
 use crate::app::{App, Key, Nav, TIMER_LOADING, TIMER_REFRESH, ViewState};
-use crate::folder::{Item, Listing, Location, SortKey, exists, is_directory, is_shortcut, list_folder, normalize, sort_items};
+use crate::folder::{Item, Listing, Location, SortKey, exists, is_directory, is_shortcut, list_folder, sort_items};
 use crate::shell::{
-    copy_to_clipboard, data_object_at, item_menu_at, known_folder, paste_into, shortcut_target, type_name,
+    copy_to_clipboard, data_object_at, item_menu_at, known_folder, paste_into, pidl_from, shortcut_target, type_name,
 };
 use windows::core::Interface;
 
-use crate::util::{Pidl, focus, from_wide, pcwstr, scale, send, set_text, wide, window_text};
+use crate::util::{focus, from_wide, pcwstr, scale, send, set_text, wide, window_text};
 
 type Act = Rc<dyn Fn(&App)>;
 type Check = Rc<dyn Fn(&App) -> bool>;
@@ -279,8 +278,7 @@ fn make_shortcut(lnk: &Path, target: impl AsRef<OsStr>) {
         let Ok(link) = CoCreateInstance::<_, IShellLinkW>(&ShellLink, None, CLSCTX_INPROC_SERVER) else { return };
         if !target.as_ref().is_empty() {
             let _ = link.SetPath(pcwstr(&wide(target)));
-        } else if let Ok(pc) = SHGetKnownFolderIDList(&FOLDERID_ComputerFolder, 0, None) {
-            let pc = Pidl(pc);
+        } else if let Some(pc) = pidl_from(&Location::ThisPc) {
             let _ = link.SetIDList(pc.0);
         }
         if let Ok(file) = link.cast::<IPersistFile>() {
@@ -2123,15 +2121,11 @@ impl App {
             |a| {
                 let mut saved = list_folder(&Location::dir(p("Bookmarks\\Tabs")), true, None);
                 sort_items(&mut saved.items, SortKey::Name, true);
-                let clean = |l: Location| match l {
-                    Location::Dir(d) => normalize(d.as_os_str()),
-                    this_pc => this_pc,
-                };
                 saved.items.len() == a.tabs() + 1
                     && saved.items.last().is_some_and(|it| it.name == "keep.txt")
                     && (0..a.tabs()).all(|i| {
                         shortcut_target(&p("Bookmarks\\Tabs").join(&saved.items[i].name))
-                            .is_some_and(|(target, folder)| folder && clean(target).same(&a.tab_path(i)))
+                            .is_some_and(|(target, folder)| folder && target.same(&a.tab_path(i)))
                     })
             },
         );

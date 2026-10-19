@@ -67,6 +67,7 @@ struct Listing {
 
 // Reads a folder; blocking, so off the UI thread. Once `stop` says true it ends with ERROR_OPERATION_ABORTED.
 Listing listFolder(const std::wstring& path, bool showHidden, const std::function<bool()>& stop = nullptr);
+std::vector<std::wstring> driveRoots();   // "C:\" and so on, for the drive letters in use
 FILETIME folderWritten(const std::wstring& path);   // the folder's own last-write time (zero if unknown): it changes with its contents
 
 // ---------------------------------------------------------------- sorting and filtering

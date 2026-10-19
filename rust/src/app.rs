@@ -27,8 +27,8 @@ use windows::Win32::System::Threading::{GetStartupInfoW, STARTF_USESHOWWINDOW, S
 use windows::Win32::System::WindowsProgramming::{GetPrivateProfileStringW, WritePrivateProfileStringW};
 use windows::Win32::UI::Accessibility::{CLSID_AccPropServices, IAccPropServices, PROPID_ACC_NAME};
 use windows::Win32::UI::Controls::{
-    EM_GETSEL, EM_REPLACESEL, EM_SETCUEBANNER, EM_SETSEL, LVIR_LABEL, LVIS_SELECTED, LVITEMW, LVM_CANCELEDITLABEL,
-    LVHITTESTINFO, LVM_GETITEMRECT, LVM_HITTEST, LVM_SETITEMSTATE, LVN_BEGINDRAG, LVN_BEGINRDRAG, LVN_ENDLABELEDITW, LVN_ITEMACTIVATE,
+    EM_GETSEL, EM_REPLACESEL, EM_SETCUEBANNER, EM_SETSEL, LVIR_LABEL, LVIS_SELECTED, LVM_CANCELEDITLABEL,
+    LVHITTESTINFO, LVM_GETITEMRECT, LVM_HITTEST, LVN_BEGINDRAG, LVN_BEGINRDRAG, LVN_ENDLABELEDITW, LVN_ITEMACTIVATE,
     LVM_SETBKCOLOR, LVM_SETTEXTBKCOLOR, TVM_SETBKCOLOR, LVN_ITEMCHANGED, LVN_ODSTATECHANGED, NM_RCLICK, NMHDR, NMLVDISPINFOW, SB_SETPARTS, SB_SETTEXTW,
     TCHITTESTINFO, TCIF_TEXT, TCITEMW, TCM_DELETEALLITEMS, TCM_GETCURSEL, TCM_GETITEMRECT, TCM_HITTEST, TCM_INSERTITEMW,
     TCM_SETCURSEL, TCM_SETMINTABWIDTH, TCN_SELCHANGE, TOOLTIPS_CLASSW, TTF_IDISHWND, TTF_SUBCLASS, TTM_ADDTOOLW,
@@ -63,7 +63,7 @@ use windows::core::{PCWSTR, PWSTR, w};
 use crate::filelist::FileList;
 use crate::APP_NAME;
 use crate::folder::{
-    CommandLine, Listing, Location, SortKey, byte_size, expand_vars, extension_of, folder_written, is_absolute_path,
+    CommandLine, Listing, Location, SortKey, byte_size, expand_vars, folder_written, is_absolute_path,
     is_relative_path, is_shortcut, list_folder, normalize, row_after_deleting,
 };
 use crate::shell::{
@@ -299,9 +299,26 @@ fn delete_word_before(edit: HWND) {
     send(edit, EM_REPLACESEL, 1, wide("").as_ptr() as isize);
 }
 
+/// The menu verbs that open an item, here or in a new tab (or window): Qoqdir opens folders itself.
+fn is_open_verb(verb: &str) -> bool {
+    ["open", "explore"].iter().any(|v| verb.eq_ignore_ascii_case(v))
+}
+fn is_new_tab_verb(verb: &str) -> bool {
+    ["opennewtab", "opennewwindow"].iter().any(|v| verb.eq_ignore_ascii_case(v))
+}
+
 /// A shortcut's target that opens in a tab: a folder path, or This PC. Anything else is for Windows.
 fn opens_in_tab(target: &Location) -> bool {
     target.path().is_none_or(|p| is_absolute_path(p.as_os_str()))
+}
+
+/// The tab under a point on the screen.
+fn tab_at(bar: HWND, screen_pt: POINT) -> Option<usize> {
+    let mut hit = TCHITTESTINFO { pt: screen_pt, ..Default::default() };
+    unsafe {
+        let _ = ScreenToClient(bar, &mut hit.pt);
+    }
+    usize::try_from(send(bar, TCM_HITTEST, 0, &mut hit as *mut _ as isize)).ok()
 }
 
 /// The tab bar. A press is handled here, not by the control: it makes the tab current at once and starts a drag along
@@ -1178,8 +1195,7 @@ impl App {
             let Some(cm) = item_menu(self.wnd, &dir, &self.list.selected_items()) else { return };
             show_menu(self.wnd, &cm, pt, &mut |verb| {
                 let is = |name: &str| verb.eq_ignore_ascii_case(name);
-                let open = is("open") || is("explore");
-                let in_new_tab = is("opennewtab") || is("opennewwindow");
+                let (open, in_new_tab) = (is_open_verb(verb), is_new_tab_verb(verb));
                 if !is("rename") && !is("delete") && !(opens_here && (open || in_new_tab)) {
                     return false;
                 }
@@ -1208,12 +1224,11 @@ impl App {
             }
             let Some(cm) = item_menu_at(self.wnd, &location) else { return };
             show_menu(self.wnd, &cm, pt, &mut |verb| {
-                let is = |name: &str| verb.eq_ignore_ascii_case(name);
-                if is("open") || is("explore") {
+                if is_open_verb(verb) {
                     self.open_node(location.clone(), false);
-                } else if is("opennewtab") || is("opennewwindow") {
+                } else if is_new_tab_verb(verb) {
                     self.open_node(location.clone(), true);
-                } else if is("rename") {
+                } else if verb.eq_ignore_ascii_case("rename") {
                     self.rename_node(location.clone());
                 } else {
                     return false;
@@ -1225,19 +1240,11 @@ impl App {
     }
 
     fn on_tab_menu(&self) {
-        let mut hit = TCHITTESTINFO::default();
+        let mut screen = POINT::default();
         unsafe {
-            let _ = GetCursorPos(&mut hit.pt);
+            let _ = GetCursorPos(&mut screen);
         }
-        let screen = hit.pt;
-        unsafe {
-            let _ = ScreenToClient(self.tab_bar, &mut hit.pt);
-        }
-        let index = send(self.tab_bar, TCM_HITTEST, 0, &mut hit as *mut _ as isize);
-        if index < 0 {
-            return;
-        }
-        let index = index as usize;
+        let Some(index) = tab_at(self.tab_bar, screen) else { return };
         let tab_count = self.tabs();
         let cmd = unsafe {
             let Ok(menu) = CreatePopupMenu() else { return };
@@ -1450,15 +1457,15 @@ impl App {
             }
             return false;
         }
+        if is(VK_BACK) && (focused == list || focused == self.tree.hwnd()) {
+            if self.go_up() {
+                self.hint(&self.hinted_up, "Up (Alt+Left goes back)", true);
+            }
+            return true;
+        }
         if focused == list {
             if is(VK_RETURN) {
                 self.activate(ctrl);
-                return true;
-            }
-            if is(VK_BACK) {
-                if self.go_up() {
-                    self.hint(&self.hinted_up, "Up (Alt+Left goes back)", true);
-                }
                 return true;
             }
             if is(VK_DELETE) {
@@ -1504,20 +1511,13 @@ impl App {
             }
             return false;
         }
-        if focused == self.tree.hwnd() && is(VK_BACK) {
-            if self.go_up() {
-                self.hint(&self.hinted_up, "Up (Alt+Left goes back)", true);
-            }
-            return true;
-        }
         false
     }
 
     pub fn focus_list(&self) {
         focus(self.list.hwnd());
         if self.list.selection().is_empty() && let Some(row) = self.list.focused() {
-            let item = LVITEMW { state: LVIS_SELECTED, stateMask: LVIS_SELECTED, ..Default::default() };
-            send(self.list.hwnd(), LVM_SETITEMSTATE, row, &item as *const _ as isize);
+            self.list.set_state(Some(row), LVIS_SELECTED, LVIS_SELECTED);
         }
     }
 
@@ -1656,10 +1656,11 @@ impl App {
 
         let location = listing.location.clone();
         let written = listing.written;
-        let tree_names = self.list.tree_names();
-        self.list.set_listing(listing);
         // The tree follows the folder shown: its node is read again when the subfolders or shortcuts changed (5.5).
-        if pending.nav == Nav::Refresh && same_folder && tree_names != self.list.tree_names() {
+        let reload = pending.nav == Nav::Refresh && same_folder;
+        let tree_names = if reload { self.list.tree_names() } else { Vec::new() };
+        self.list.set_listing(listing);
+        if reload && tree_names != self.list.tree_names() {
             self.tree.refresh_folder(&location);
         }
         let mut row = self.list.select(&view.select, view.focus.as_deref());
@@ -1875,9 +1876,8 @@ impl App {
                 continue;
             }
             // A shortcut to a folder counts as that folder, so it opens in a tab (Windows would use Explorer).
-            let target = if extension_of(path.as_os_str()) == ".lnk" { shortcut_target(&path) } else { None };
-            match target {
-                Some((target, true)) if opens_in_tab(&target) => dirs.push(normalize(&target.text())), // as open_shortcut does
+            match shortcut_target(&path) {
+                Some((target, true)) if opens_in_tab(&target) => dirs.push(target),
                 _ => files.push(path),
             }
         }
@@ -1903,14 +1903,10 @@ impl App {
     /// A shortcut to a folder or This PC opens here, or in a background tab; Windows opens anything else.
     /// Whether the target really is a folder, the loader finds out on its thread (it may be on a network).
     pub fn open_shortcut(&self, path: PathBuf, in_new_tab: bool) {
-        let lnk = extension_of(path.as_os_str()) == ".lnk";
-        let target = if lnk { shortcut_target(&path).filter(|(t, _)| opens_in_tab(t)) } else { None };
-        let Some((target, folder)) = target else {
+        let Some((dir, folder)) = shortcut_target(&path).filter(|(t, _)| opens_in_tab(t)) else {
             open_file(self.wnd, &path); // a web link, a program, a library...
             return;
         };
-        // Normalized like every way into a tab: a stored "D:\photos\" would give a blank caption and a stuck Up.
-        let dir = normalize(&target.text());
         if in_new_tab && folder {
             self.new_tab(dir, false);
         } else {
@@ -2059,13 +2055,7 @@ impl App {
     /// The folder of the tab under the cursor, for a drop. That tab shows as the current one while hovered (plain tabs
     /// take no highlight); the current tab's name keeps its bullet.
     fn tab_drop_target(&self, pt: Option<POINT>) -> Option<Location> {
-        let hover = pt.and_then(|pt| {
-            let mut hit = TCHITTESTINFO { pt, ..Default::default() };
-            unsafe {
-                let _ = ScreenToClient(self.tab_bar, &mut hit.pt);
-            }
-            usize::try_from(send(self.tab_bar, TCM_HITTEST, 0, &mut hit as *mut _ as isize)).ok()
-        });
+        let hover = pt.and_then(|pt| tab_at(self.tab_bar, pt));
         if hover != self.drop_tab.get() {
             send(self.tab_bar, TCM_SETCURSEL, hover.unwrap_or(self.active()), 0);
             self.drop_tab.set(hover);
@@ -2214,13 +2204,7 @@ impl App {
 
     fn show_status(&self) {
         let rows = self.list.selection();
-        let (mut bytes, mut files) = (0u64, 0usize);
-        for it in rows.iter().filter_map(|&r| self.list.item(r)) {
-            if !it.is_dir() {
-                bytes += it.size;
-                files += 1;
-            }
-        }
+        let (files, bytes) = self.list.file_sizes(&rows);
         let (count, total) = (self.list.count(), self.list.total());
         let mut s = format!("{} {}", count, if count == 1 { "item" } else { "items" });
         if count != total {

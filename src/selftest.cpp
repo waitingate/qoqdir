@@ -91,10 +91,8 @@ void makeShortcut(const std::wstring& lnk, const std::wstring& target) {   // ta
     if (FAILED(CoCreateInstance(CLSID_ShellLink, nullptr, CLSCTX_INPROC_SERVER, IID_IShellLinkW,
                                 reinterpret_cast<void**>(link.put()))))
         return;
-    PIDLIST_ABSOLUTE pc = nullptr;
     if (!target.empty()) link->SetPath(target.c_str());
-    else if (SUCCEEDED(SHGetKnownFolderIDList(FOLDERID_ComputerFolder, 0, nullptr, &pc))) link->SetIDList(pc);
-    CoTaskMemFree(pc);
+    else if (Pidl pc = pidlFromPath(target)) link->SetIDList(pc.get());
     if (Com<IPersistFile> file = link.as<IPersistFile>()) file->Save(lnk.c_str(), TRUE);
 }
 
@@ -1425,7 +1423,7 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
             for (size_t i = 0; i < tabs_.size(); ++i) {
                 bool folder = false;
                 auto target = shortcutTarget(path(L"Bookmarks\\Tabs\\" + saved.items[i].name), &folder);
-                if (!target || !folder || !samePath(normalizePath(*target), tabs_[i].path)) return false;
+                if (!target || !folder || !samePath(*target, tabs_[i].path)) return false;
             }
             return true;
         });

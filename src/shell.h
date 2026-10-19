@@ -7,6 +7,10 @@
 #include <functional>
 #include <optional>
 
+// ---------------------------------------------------------------- shell objects
+
+Pidl pidlFromPath(const std::wstring& path);   // "" is This PC; empty when Windows can't parse it
+
 // ---------------------------------------------------------------- icons and types
 
 HIMAGELIST systemImageList();                          // small icons, shared by the whole process
@@ -68,10 +72,10 @@ void dragOut(HWND owner, const std::wstring& dir, const std::vector<Item>& items
 
 // ---------------------------------------------------------------- shortcuts
 
-// A shortcut's stored target: a path, "" for This PC, or nothing (a web link, a library); 'folder' if it
-// was one. Reads the .lnk file; a target on a drive letter that is gone is looked for where the shortcut says
-// it is relative to itself (a flash drive on another letter). No disk is asked: a server that is off costs
-// nothing.
+// A .lnk file's target, normalized like every way into a tab (a stored "D:\photos\" would give a blank caption and a
+// stuck Up): a path, "" for This PC, or nothing (another file, a web link, a library); 'folder' if it was one. A
+// target on a drive letter that is gone is looked for where the shortcut says it is relative to itself (a flash
+// drive on another letter). No disk is asked: a server that is off costs nothing.
 std::optional<std::wstring> shortcutTarget(const std::wstring& lnkPath, bool* folder);
 // Saved tabs: shortcuts in 'dir' (Bookmarks\Tabs), numbered in tab order ("1 logs.lnk"); "" is This PC.
 // Saving replaces the shortcuts there and leaves anything else. Worker thread: a folder may be on a server

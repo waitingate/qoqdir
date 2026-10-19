@@ -40,7 +40,7 @@ static EXE: OnceLock<(usize, usize)> = OnceLock::new(); // where the exe is load
 
 /// Call once, first thing in main.
 pub fn install() {
-    let _ = LOG_PATH.set(wide(std::env::temp_dir().join(format!("{}-crash.log", APP_NAME.to_lowercase()))));
+    let _ = LOG_PATH.set(log_file(&std::env::temp_dir()));
     unsafe {
         let base = GetModuleHandleW(None).map_or(0, |h| h.0 as usize);
         if base != 0 {
@@ -64,7 +64,11 @@ pub fn install() {
 /// The log goes into this folder from now on (a self-test keeps its own).
 #[cfg_attr(not(feature = "selftest"), allow(dead_code))]
 pub fn log_in(dir: &Path) {
-    let _ = LOG_DIR.set(wide(dir.join(format!("{}-crash.log", APP_NAME.to_lowercase()))));
+    let _ = LOG_DIR.set(log_file(dir));
+}
+
+fn log_file(dir: &Path) -> Vec<u16> {
+    wide(dir.join(format!("{}-crash.log", APP_NAME.to_lowercase())))
 }
 
 /// "exe+0x1234" for an address in the exe; the bare address for one in a system DLL or a shell extension.

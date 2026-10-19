@@ -170,13 +170,19 @@ CommandLine parseCommandLine(const std::vector<std::wstring>& args) {
 
 // ---------------------------------------------------------------- reading a folder
 
+std::vector<std::wstring> driveRoots() {
+    std::vector<std::wstring> roots;
+    DWORD mask = GetLogicalDrives();
+    for (int i = 0; i < 26; ++i)
+        if (mask & (1u << i)) roots.push_back(std::wstring(1, wchar_t(L'A' + i)) + L":\\");
+    return roots;
+}
+
 namespace {
 void listDrives(Listing& r) {
-    DWORD mask = GetLogicalDrives();
-    for (int i = 0; i < 26; ++i) {
-        if (!(mask & (1u << i))) continue;
+    for (std::wstring& root : driveRoots()) {
         Item it;
-        it.name = std::wstring(1, wchar_t(L'A' + i)) + L":\\";
+        it.name = std::move(root);
         it.attrs = FILE_ATTRIBUTE_DIRECTORY;
         if (auto sfi = fileInfo(it.name, 0, SHGFI_DISPLAYNAME | SHGFI_TYPENAME | SHGFI_SYSICONINDEX | SHGFI_SMALLICON)) {
             it.label = sfi->szDisplayName;

@@ -44,18 +44,15 @@ void FileList::setListing(Listing&& listing) {
             if (it.type.empty()) it.type = typeName(it);
         sortItems(items_, key_, asc_);
     });
-    ensureVisible(0);
 }
 
 void FileList::setFilter(std::wstring filter) {
     if (filter == filter_) return;
     update(true, [&] { filter_ = filter; });
-    ensureVisible(focused() >= 0 ? focused() : 0);   // the old scroll position may be past the end
 }
 
 void FileList::setShowHidden(bool show) {
     update(true, [&] { showHidden_ = show; });
-    ensureVisible(focused() >= 0 ? focused() : 0);
 }
 
 void FileList::setSort(SortKey key, bool ascending) {
@@ -65,7 +62,6 @@ void FileList::setSort(SortKey key, bool ascending) {
         sortItems(items_, key_, asc_);
     });
     showSortArrow();
-    ensureVisible(focused());
 }
 
 void FileList::update(bool keepSelection, const std::function<void()>& change) {
@@ -90,6 +86,8 @@ void FileList::update(bool keepSelection, const std::function<void()>& change) {
     ListView_SetItemCountEx(lv_, int(view_.size()), LVSICF_NOSCROLL);
     InvalidateRect(lv_, nullptr, FALSE);
     select(names, focus);
+    // select() left the focus on a row; the old scroll position may be past the end.
+    ensureVisible(focused());
 }
 
 // ---------------------------------------------------------------- what is shown

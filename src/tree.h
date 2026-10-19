@@ -50,6 +50,7 @@ private:
     // Runs `reader` on a worker thread to fill a batch, then posts it as the children of `node`.
     void startWorker(HTREEITEM node, std::function<void(TreeBatch&)> reader);
     const std::wstring& pathOf(HTREEITEM node) const;
+    HTREEITEM nodeAt(POINT screenPt, UINT* where = nullptr) const;   // where: on which part of it (TVHT_*)
 
     HWND tv_ = nullptr, parent_ = nullptr;
     std::wstring bookmarks_;

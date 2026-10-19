@@ -29,7 +29,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
 };
 use windows::core::{PWSTR, w};
 
-use crate::folder::{Location, SortKey, is_shortcut, list_folder, normalize, sort_items};
+use crate::folder::{Location, SortKey, drive_roots, is_directory, is_shortcut, list_folder, sort_items, to_lower};
 use crate::shell::{
     IconBatch, describe, describe_shortcut, folder_icon, in_background, known_folder, post, read_own_icons, set_theme,
     shortcut_target, system_image_list,
@@ -72,11 +72,10 @@ fn read_children(batch: &mut TreeBatch, location: &Location, shortcuts: bool) {
     match location {
         Location::ThisPc => {
             // The drives (not via list_folder: its free-space check can wait on a network drive).
-            let mask = unsafe { windows::Win32::Storage::FileSystem::GetLogicalDrives() };
-            batch.children = (0..26u8)
-                .filter(|i| mask & (1 << i) != 0)
-                .map(|i| {
-                    let drive = Location::dir(format!("{}:\\", (b'A' + i) as char));
+            batch.children = drive_roots()
+                .into_iter()
+                .map(|root| {
+                    let drive = Location::dir(root);
                     let (text, icon) = describe(&drive);
                     Child { location: drive, text, icon: Some(icon), shortcut: false }
                 })
@@ -112,7 +111,7 @@ fn local_folder(location: Location) -> Option<Location> {
     let path = location.path()?.to_path_buf(); // This PC: none
     let location = if is_shortcut(path.as_os_str()) {
         match shortcut_target(&path)? {
-            (target, true) => normalize(&target.text()),
+            (target, true) => target,
             _ => return None, // a link to a file
         }
     } else {
@@ -128,7 +127,7 @@ fn local_folder(location: Location) -> Option<Location> {
 /// The user folders that exist, as roots, into `batch`. Worker thread: one on a dead server can take 20-60 s.
 fn read_user_folders(batch: &mut TreeBatch) {
     for id in [&FOLDERID_Desktop, &FOLDERID_Downloads, &FOLDERID_Documents, &FOLDERID_Pictures, &FOLDERID_Music, &FOLDERID_Videos] {
-        if let Some(path) = known_folder(id).filter(|p| p.is_dir()) {
+        if let Some(path) = known_folder(id).filter(|p| is_directory(p)) {
             let location = Location::dir(path);
             let (text, icon) = describe(&location);
             batch.children.push(Child { location, text, icon: Some(icon), shortcut: false });
@@ -201,7 +200,6 @@ impl FolderTree {
         send(self.hwnd, TVM_EXPAND, TVE_EXPAND.0 as usize, this_pc.0);
     }
 
-    /// Drives came or went: re-read This PC only, so expanded folders stay open (4.5); its read in flight is dropped.
     /// This PC, the last root (0 before the tree is filled).
     pub fn last_root(&self) -> isize {
         let mut last = self.root();
@@ -214,6 +212,7 @@ impl FolderTree {
         last
     }
 
+    /// Drives came or went: re-read This PC only, so expanded folders stay open (4.5); its read in flight is dropped.
     pub fn refresh_drives(&self) {
         let pc = self.last_root();
         if pc == 0 {
@@ -389,20 +388,23 @@ impl FolderTree {
         if !self.paths.borrow().contains_key(&node) {
             return;
         }
+        // By lowercase path: one look-up per node, not one per pair.
+        let icons: HashMap<Vec<u16>, i32> = batch
+            .icons
+            .iter()
+            .map(|(name, icon)| (to_lower(Location::dir(batch.dir.join(name)).text().as_os_str()), *icon))
+            .collect();
         let mut child = send(self.hwnd, TVM_GETNEXTITEM, TVGN_CHILD as usize, node);
         while child != 0 {
-            let location = self.location_of(HTREEITEM(child));
-            for (name, icon) in &batch.icons {
-                if location.same(&Location::dir(batch.dir.join(name))) {
-                    let item = TVITEMW {
-                        mask: TVIF_IMAGE | TVIF_SELECTEDIMAGE,
-                        hItem: HTREEITEM(child),
-                        iImage: *icon,
-                        iSelectedImage: *icon,
-                        ..Default::default()
-                    };
-                    send(self.hwnd, TVM_SETITEMW, 0, &item as *const _ as isize);
-                }
+            if let Some(&icon) = icons.get(&to_lower(&self.location_of(HTREEITEM(child)).text())) {
+                let item = TVITEMW {
+                    mask: TVIF_IMAGE | TVIF_SELECTEDIMAGE,
+                    hItem: HTREEITEM(child),
+                    iImage: icon,
+                    iSelectedImage: icon,
+                    ..Default::default()
+                };
+                send(self.hwnd, TVM_SETITEMW, 0, &item as *const _ as isize);
             }
             child = send(self.hwnd, TVM_GETNEXTITEM, TVGN_NEXT as usize, child);
         }
@@ -410,16 +412,21 @@ impl FolderTree {
 
     // ------------------------------------------------------------ the mouse: paths and drops
 
+    /// The node at a point on the screen (0: none), and on which part of it the point is (TVHT_*).
+    fn node_at(&self, screen_pt: POINT) -> (isize, u32) {
+        let mut hit = TVHITTESTINFO { pt: screen_pt, ..Default::default() };
+        unsafe {
+            let _ = ScreenToClient(self.hwnd, &mut hit.pt);
+        }
+        (send(self.hwnd, TVM_HITTEST, 0, &mut hit as *mut _ as isize), hit.flags.0)
+    }
+
     /// The location under a screen point, or of the selected node for (-1, -1).
     pub fn location_at(&self, pt: POINT) -> Option<Location> {
         let node = if pt.x == -1 && pt.y == -1 {
             send(self.hwnd, TVM_GETNEXTITEM, TVGN_CARET as usize, 0)
         } else {
-            let mut hit = TVHITTESTINFO { pt, ..Default::default() };
-            unsafe {
-                let _ = ScreenToClient(self.hwnd, &mut hit.pt);
-            }
-            send(self.hwnd, TVM_HITTEST, 0, &mut hit as *mut _ as isize)
+            self.node_at(pt).0
         };
         (node != 0).then(|| self.location_of(HTREEITEM(node)))
     }
@@ -429,13 +436,7 @@ impl FolderTree {
     /// times a second during a drag), so the folders inside it can be reached. Where a drop there goes is worked out
     /// once, as it lights up.
     pub fn drop_target(&self, pt: Option<POINT>) -> Option<Location> {
-        let node = pt.map_or(0, |pt| {
-            let mut hit = TVHITTESTINFO { pt, ..Default::default() };
-            unsafe {
-                let _ = ScreenToClient(self.hwnd, &mut hit.pt);
-            }
-            send(self.hwnd, TVM_HITTEST, 0, &mut hit as *mut _ as isize)
-        });
+        let node = pt.map_or(0, |pt| self.node_at(pt).0);
         let now = unsafe { GetTickCount64() };
         if node != send(self.hwnd, TVM_GETNEXTITEM, TVGN_DROPHILITE as usize, 0) {
             send(self.hwnd, TVM_SELECTITEM, TVGN_DROPHILITE as usize, node);
@@ -488,14 +489,13 @@ impl FolderTree {
             }
             NM_CLICK => {
                 // Clicking the node that is already selected sends no change, so open it here.
-                let mut hit = TVHITTESTINFO::default();
+                let mut pt = POINT::default();
                 unsafe {
-                    let _ = GetCursorPos(&mut hit.pt);
-                    let _ = ScreenToClient(self.hwnd, &mut hit.pt);
+                    let _ = GetCursorPos(&mut pt);
                 }
-                let node = send(self.hwnd, TVM_HITTEST, 0, &mut hit as *mut _ as isize);
+                let (node, part) = self.node_at(pt);
                 let selected = send(self.hwnd, TVM_GETNEXTITEM, TVGN_CARET as usize, 0);
-                let on_item = hit.flags.0 & (TVHT_ONITEM.0 | TVHT_ONITEMRIGHT.0) != 0;
+                let on_item = part & (TVHT_ONITEM.0 | TVHT_ONITEMRIGHT.0) != 0;
                 (node != 0 && node == selected && on_item).then(|| self.location_of(HTREEITEM(node)))
             }
             _ => None,
