@@ -18,7 +18,7 @@ jobs:
     timeout-minutes: 30
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # MinGW-w64 GCC with the UCRT runtime, as for releases (MSYS2's current release), CMake and
       # Ninja; no Visual Studio, as in the spec.
@@ -70,7 +70,7 @@ jobs:
           }
           Get-ChildItem logs
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: always()
         with:
           name: qoqdir
