@@ -62,8 +62,12 @@ void logCrash(const char* what) {
 }
 
 LONG WINAPI onCrash(EXCEPTION_POINTERS* e) {
-    char at[64], what[128];
     const EXCEPTION_RECORD* r = e->ExceptionRecord;
+    // A C++ exception nothing caught ("GCC" and the customer bit, any of libgcc's kinds): going on lets the library
+    // call std::terminate, and onTerminate names it. Newer mingw-w64 does this in the filter this one replaced.
+    if ((r->ExceptionCode & 0x20FFFFFF) == 0x20474343 && !(r->ExceptionFlags & EXCEPTION_NONCONTINUABLE))
+        return EXCEPTION_CONTINUE_EXECUTION;
+    char at[64], what[128];
     snprintf(what, sizeof what, "Exception 0x%08lX  [%s]", static_cast<unsigned long>(r->ExceptionCode),
              describe(r->ExceptionAddress, at, sizeof at));
     logCrash(what);

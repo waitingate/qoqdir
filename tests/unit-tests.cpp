@@ -82,6 +82,12 @@ int main(int argc, char** argv) {
         installCrashLog();
         throw std::out_of_range("map::at");
     }
+    if (argc > 1 && strcmp(argv[1], "--throw-in-thread") == 0) {   // the same on a thread of its own
+        installCrashLog();
+        HANDLE t = CreateThread(nullptr, 0, [](void*) -> DWORD { throw std::out_of_range("map::at"); }, nullptr, 0, nullptr);
+        WaitForSingleObject(t, INFINITE);
+        return 0;
+    }
     if (argc > 1 && strcmp(argv[1], "--parent") == 0) {   // the parent-process test below: started by this program
         wchar_t exe[MAX_PATH];
         GetModuleFileNameW(nullptr, exe, MAX_PATH);
@@ -328,6 +334,12 @@ int main(int argc, char** argv) {
         DeleteFileW(log.c_str());
         CHECK(runSelf(L"--throw", dir) == 3);
         std::string line = readFile(log);
+        CHECK(line.find("std::out_of_range") != std::string::npos && line.find("map::at") != std::string::npos);
+        // The same on a thread that nothing of the startup code wraps: the exception filter sees the throw first, as
+        // newer mingw-w64 has it on the main thread too.
+        DeleteFileW(log.c_str());
+        CHECK(runSelf(L"--throw-in-thread", dir) == 3);
+        line = readFile(log);
         CHECK(line.find("std::out_of_range") != std::string::npos && line.find("map::at") != std::string::npos);
         // The program this one was started from is named (main.cpp sends PowerShell, and only PowerShell, an Enter).
         CHECK(runSelf(L"--parent", dir) == 0);
