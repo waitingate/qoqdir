@@ -860,6 +860,7 @@ void App::open(const std::wstring& path, Nav nav, ViewState view, Origin origin)
     if (nav == Nav::Switch) {
         // Show the new tab at once; until its folder loads the list has none, so nothing acts on the old one.
         list_.setListing(Listing{});
+        listEmptied_ = true;
         showLocation(nav);
         showStatus();
     }
@@ -902,7 +903,7 @@ void App::onLoaded(Listing&& listing, UINT generation) {
     if (listing.error) return onLoadFailed(listing, p);
 
     std::wstring old = t.path;
-    bool sameFolder = samePath(list_.dir(), listing.path);
+    bool sameFolder = !listEmptied_ && samePath(list_.dir(), listing.path);   // an emptied list holds no folder
     switch (p.nav) {
     case Nav::New:
         if (!samePath(old, listing.path)) {
@@ -958,6 +959,7 @@ void App::onLoaded(Listing&& listing, UINT generation) {
     // The tree follows the folder shown: its node is read again when the subfolders or shortcuts changed (5.5).
     std::vector<std::wstring> treeNames = reload ? list_.treeNames() : std::vector<std::wstring>{};
     list_.setListing(std::move(listing));
+    listEmptied_ = false;
     if (reload && treeNames != list_.treeNames()) tree_.refreshFolder(t.path);
     int row = list_.select(view.select, view.focus);
     if (row < 0 && !requested && view.focusRow >= 0 && list_.count() > 0)   // the focused item is gone (4.5):
@@ -991,6 +993,12 @@ void App::showLocation(Nav nav) {
 void App::onLoadFailed(const Listing& listing, const Pending& p) {
     Tab& t = tab();
     lateHint_ = nullptr;   // the error is what to say
+    // A move that took over from a tab switch failed or opened a file: the list the switch emptied gets the tab's own
+    // folder after all, without "Loading...", so the status bar keeps saying why the move failed (4.2).
+    if (listEmptied_ && p.nav != Nav::Refresh && p.nav != Nav::Switch) {
+        refresh(t.view);
+        KillTimer(wnd_, kLoadingTimer);
+    }
     // A navigation that fails or opens a file leaves the folder shown: its filter comes back, unless retyped.
     if (p.nav != Nav::Refresh && p.nav != Nav::Switch && GetWindowTextLengthW(filter_) == 0)
         SetWindowTextW(filter_, p.filter.c_str());
@@ -1024,6 +1032,7 @@ void App::onLoadFailed(const Listing& listing, const Pending& p) {
 // no folder, so nothing asks Windows about it (that can freeze the window for 20-40 s).
 void App::showUnavailable(const std::wstring& path, DWORD error, Nav nav) {
     list_.setListing(Listing{});
+    listEmptied_ = false;   // empty on purpose: the message says why
     tab().unavailable = true;
     watch_ = {};
     showLocation(nav);

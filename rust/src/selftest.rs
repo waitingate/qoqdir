@@ -2494,6 +2494,21 @@ impl App {
             |a| a.open(Location::dir(p("big")), Nav::New, ViewState::default()),
             |a| a.at(&p("big")),
         );
+        // The switch emptied the list at once: a move that takes over and fails must not leave it empty.
+        s.add(
+            "a tab switch overtaken by a move that fails still shows the tab's folder, and why the move failed (4.2)",
+            |a| {
+                a.new_tab(Location::dir(p("sub")), true); // its read is replaced at once
+                a.open(Location::dir(p("no such folder")), Nav::New, ViewState::default());
+            },
+            |a| {
+                let sub = Location::dir(p("sub"));
+                a.idle() && a.tabs() == 2 && a.active() == 1 && a.list.location().same(&sub)
+                    && a.st.borrow().watch.as_ref().is_some_and(|w| w.watches(&sub))
+                    && a.status_message().contains("no such folder")
+            },
+        );
+        s.add("(close that tab)", |a| a.close_tab(1), |a| a.at(&p("big")) && a.tabs() == 1);
 
         s.add(
             "copies 10,000 selected files to the clipboard",

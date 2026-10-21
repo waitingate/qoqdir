@@ -172,6 +172,7 @@ private:
     bool draggingFiles_ = false;    // a drag started from our own list is in progress
     bool refreshQueued_ = false;
     bool refreshForWatch_ = false;   // ...and only the folder watch asked for it
+    bool listEmptied_ = false;       // a tab switch emptied the list, and no folder has filled it since
     struct QueuedView {             // kept by refresh() while a load is pending: what a delete, rename or new
         std::wstring dir;           // folder wanted selected. The queued refresh applies it if 'dir' is still shown.
         ViewState view;

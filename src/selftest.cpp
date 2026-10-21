@@ -1660,6 +1660,17 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
             return at(dir) && !refreshQueued_ && loadsDone_ == *tabLoads + 2;
         });
     add(L"(back into big)", [=, this] { open(path(L"big"), Nav::New); }, [=, this] { return at(path(L"big")); });
+    // The switch emptied the list at once: a move that takes over and fails must not leave it empty.
+    add(L"a tab switch overtaken by a move that fails still shows the tab's folder, and why the move failed (4.2)",
+        [=, this] {
+            newTab(path(L"sub"), true);   // its read is replaced at once
+            open(path(L"no such folder"), Nav::New);
+        },
+        [=, this] {
+            return idle() && tabs_.size() == 2 && active_ == 1 && samePath(list_.dir(), path(L"sub")) &&
+                   watch_.watches(path(L"sub")) && statusHas(L"no such folder");
+        });
+    add(L"(close that tab)", [=, this] { closeTab(1); }, [=, this] { return at(path(L"big")) && tabs_.size() == 1; });
 
     add(L"copies 10,000 selected files to the clipboard",
         [=, this] {

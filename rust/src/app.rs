@@ -226,6 +226,7 @@ pub struct App {
     dragging_files: Cell<bool>, // a drag started from our own list is in progress
     pub refresh_queued: Cell<bool>,
     refresh_for_watch: Cell<bool>, // ...and only the folder watch asked for it
+    list_emptied: Cell<bool>,      // a tab switch emptied the list, and no folder has filled it since
     load_message_shown: Cell<bool>, // "Loading..." or "not available": cleared when a folder loads
     pub generation: Cell<u32>,
     pub loads_done: Cell<u32>,   // folder reads that reported back (self-test)
@@ -532,6 +533,7 @@ impl App {
                 dragging_files: Cell::new(false),
                 refresh_queued: Cell::new(false),
                 refresh_for_watch: Cell::new(false),
+                list_emptied: Cell::new(false),
                 load_message_shown: Cell::new(false),
                 generation: Cell::new(0),
                 loads_done: Cell::new(0),
@@ -1557,6 +1559,7 @@ impl App {
         if nav == Nav::Switch {
             // Show the new tab at once; until its folder loads the list has none, so nothing acts on the old one.
             self.list.set_listing(Listing::default());
+            self.list_emptied.set(true);
             self.show_location(nav);
             self.show_status();
         }
@@ -1618,7 +1621,8 @@ impl App {
             return self.on_load_failed(&listing, &error.message(), &pending);
         }
 
-        let same_folder = self.list.location().same(&listing.location);
+        // An emptied list holds no folder.
+        let same_folder = !self.list_emptied.get() && self.list.location().same(&listing.location);
         let moved = matches!(pending.nav, Nav::New | Nav::Back | Nav::Forward);
         let reload = pending.nav == Nav::Refresh && same_folder;
         let mut view = pending.view;
@@ -1687,6 +1691,7 @@ impl App {
         // The tree follows the folder shown: its node is read again when the subfolders or shortcuts changed (5.5).
         let tree_names = if reload { self.list.tree_names() } else { Vec::new() };
         self.list.set_listing(listing);
+        self.list_emptied.set(false);
         if reload && tree_names != self.list.tree_names() {
             self.tree.refresh_folder(&location);
         }
@@ -1739,6 +1744,14 @@ impl App {
     /// The folder could not be read: decide what to show or do instead.
     fn on_load_failed(&self, listing: &Listing, error: &str, pending: &Pending) {
         self.late_hint.set(None); // the error is what to say
+        // A move that took over from a tab switch failed or opened a file: the list the switch emptied gets the tab's
+        // own folder after all, without "Loading...", so the status bar keeps saying why the move failed (4.2).
+        if self.list_emptied.get() && !matches!(pending.nav, Nav::Refresh | Nav::Switch) {
+            self.refresh(self.with_tab(|t| t.view.clone()));
+            unsafe {
+                let _ = KillTimer(Some(self.wnd), TIMER_LOADING);
+            }
+        }
         // A navigation that fails or opens a file leaves the folder shown: its filter comes back, unless retyped.
         if !matches!(pending.nav, Nav::Refresh | Nav::Switch) && window_text(self.filter).is_empty() {
             set_text(self.filter, &pending.filter);
@@ -1782,6 +1795,7 @@ impl App {
     /// list gets no folder, so nothing asks Windows about it (that can freeze the window for 20-40 s).
     pub fn show_unavailable(&self, location: &Location, error: &str, nav: Nav) {
         self.list.set_listing(Listing::default());
+        self.list_emptied.set(false); // empty on purpose: the message says why
         self.with_tab(|t| t.unavailable = true);
         let old_watch = self.st.borrow_mut().watch.take();
         drop(old_watch);

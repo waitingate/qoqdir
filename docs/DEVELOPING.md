@@ -89,7 +89,9 @@ instead of corrupting data, and the crash log says where.
   with that flag until they have loaded once. Paste, new folder, the empty-space
   menu and drops on the tab check it, so they never ask Windows about a server
   that is off (that can freeze for 20 to 40 s). A failed Back or Forward drops the
-  dead history entry; a typed path that is a file gets opened.
+  dead history entry; a typed path that is a file gets opened. A move that takes
+  over from a tab switch and fails, or opens a file, fills the list the switch
+  emptied with the tab's own folder (`listEmptied_`).
 - The right-click menu is modal, so Qoqdir's own commands in it only act if the
   folder and the selection are the same as when it opened.
 - Live updates: `FolderWatch` posts `WM_APP_CHANGED`, and a burst of changes
