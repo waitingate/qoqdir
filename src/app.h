@@ -26,9 +26,11 @@ struct ViewState {                  // what to select and scroll to after a fold
 struct Origin {
     bool typed = false;      // typed in the address bar: a file is opened instead
     std::wstring shortcut;   // opened from this shortcut: if it leads to a file, Windows opens the shortcut
+    bool restore = false;    // brings back the tab's own view, as a tab switch would (restoreTab)
 
     static Origin addressBar() { return {true, {}}; }
     static Origin fromShortcut(std::wstring lnk) { return {false, std::move(lnk)}; }
+    static Origin tabRestore() { return {false, {}, true}; }
 };
 
 struct Tab {
@@ -90,6 +92,7 @@ private:
     void onLoaded(Listing&& listing, UINT generation);
     struct Pending;
     void onLoadFailed(const Listing& listing, const Pending& p);
+    void restoreTab();   // a failed move left the list a tab switch emptied: read the tab's folder again
     void showLocation(Nav nav);
     void goBack();
     void goForward();
@@ -173,6 +176,8 @@ private:
     bool refreshQueued_ = false;
     bool refreshForWatch_ = false;   // ...and only the folder watch asked for it
     bool listEmptied_ = false;       // a tab switch emptied the list, and no folder has filled it since
+    UINT restoreRead_ = 0;           // the read restoreTab() started, until it comes back
+    std::wstring restoreSaid_;       // what the failed move said, said again once the tab's folder is back
     struct QueuedView {             // kept by refresh() while a load is pending: what a delete, rename or new
         std::wstring dir;           // folder wanted selected. The queued refresh applies it if 'dir' is still shown.
         ViewState view;

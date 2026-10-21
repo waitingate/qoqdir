@@ -39,6 +39,7 @@ void FileList::create(HWND parent, int id) {
 void FileList::setListing(Listing&& listing) {
     update(false, [&] {
         dir_ = std::move(listing.path);
+        shown_ = true;
         items_ = std::move(listing.items);
         for (Item& it : items_)   // cached per extension, so this is quick; lets Type sort by what is shown
             if (it.type.empty()) it.type = typeName(it);
@@ -46,10 +47,15 @@ void FileList::setListing(Listing&& listing) {
     });
 }
 
+void FileList::clear() {
+    setListing(Listing{});
+    shown_ = false;
+}
+
 // A late batch for a folder no longer shown is of no use. A batch replaces the last one: the map never outgrows a
 // folder, and a program replaced by another gets its new icon on the next read.
 void FileList::setIcons(const IconBatch& batch) {
-    if (!samePath(dir_, batch.dir)) return;
+    if (!shows(batch.dir)) return;
     ownIcons_.clear();
     for (const auto& [name, icon] : batch.icons) ownIcons_[joinPath(batch.dir, name)] = icon;
     InvalidateRect(lv_, nullptr, FALSE);

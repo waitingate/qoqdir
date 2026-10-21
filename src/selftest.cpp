@@ -1671,6 +1671,74 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
                    watch_.watches(path(L"sub")) && statusHas(L"no such folder");
         });
     add(L"(close that tab)", [=, this] { closeTab(1); }, [=, this] { return at(path(L"big")) && tabs_.size() == 1; });
+    // The tab comes back as the switch would have shown it: the scroll exactly, not moved to the focused file.
+    add(L"(a second tab on big)", [=, this] { newTab(path(L"big"), true); },
+        [=, this] { return at(path(L"big")) && tabs_.size() == 2 && active_ == 1; });
+    add(L"(it focuses a file, is scrolled away from it, and is left for the first tab)",
+        [=, this] {
+            SetFocus(list_.hwnd());
+            list_.select({L"item 5000.dat"}, L"item 5000.dat");
+            list_.scrollToRow(100);   // as with the mouse wheel
+            top = list_.topRow();
+            switchTab(0);
+        },
+        [=, this] { return idle() && active_ == 0; });
+    add(L"a tab whose switch a failed move overtakes comes back with its selection and scroll position (4.6)",
+        [=, this] {
+            switchTab(1);
+            open(path(L"no such folder"), Nav::New);
+        },
+        [=, this] {
+            return idle() && active_ == 1 && list_.shows(path(L"big")) && list_.focusedName() == L"item 5000.dat" &&
+                   list_.topRow() == top;
+        });
+    add(L"(close that tab)", [=, this] { closeTab(1); }, [=, this] { return at(path(L"big")) && tabs_.size() == 1; });
+    // An emptied list shows no folder, not This PC: a This PC tab left meanwhile keeps what it remembered.
+    auto drive = std::make_shared<std::wstring>();
+    add(L"(a This PC tab)", [=, this] { newTab(L"", true); },
+        [=, this] { return at(L"") && active_ == 1 && list_.count() > 0; });
+    add(L"(its last drive selected, remembered as the tab is left and shown again)",
+        [=, this] {
+            SetFocus(list_.hwnd());
+            *drive = list_.at(list_.count() - 1).name;   // not the first row, which takes the focus by itself
+            list_.select({*drive}, *drive);
+            switchTab(0);
+            switchTab(1);
+        },
+        [=, this] { return at(L"") && active_ == 1 && list_.focusedName() == *drive; });
+    add(L"a This PC tab left while its list is emptied keeps its selection (4.6)",
+        [=, this] {
+            list_.clear();   // as while its folder is read again
+            switchTab(0);
+            switchTab(1);
+        },
+        [=, this] { return at(L"") && active_ == 1 && list_.focusedName() == *drive; });
+    add(L"(close that tab too)", [=, this] { closeTab(1); },
+        [=, this] { return at(path(L"big")) && tabs_.size() == 1; });
+    // On a share that is off, each read of the tab's folder waits 20-40 s: one at a time, as with F5 (4.2). A read
+    // still out is stood in for by its number, so the test needs no network.
+    constexpr UINT kStuckRead = 0xFFFFFFFF;   // no real read gets this number
+    auto reads = std::make_shared<UINT>(0);
+    add(L"a failed move starts no read of the tab's folder while an earlier one is still out (4.2)",
+        [=, this] {
+            *reads = generation_;
+            newTab(path(L"sub"), true);
+            restoreRead_ = kStuckRead;   // as if a read of sub were still out
+            open(path(L"missing one"), Nav::New);
+        },
+        [=, this] {
+            selfTest_->note = std::to_wstring(generation_ - *reads) + L" read(s)";
+            return statusHas(L"missing one") && !loading() && generation_ == *reads + 2 && !list_.shows(path(L"sub"));
+        });
+    add(L"...and once that read is back, replaced and unused, the tab's folder is read and shown (4.2)",
+        [=, this] {
+            Listing late;
+            late.path = path(L"sub");
+            late.error = ERROR_OPERATION_ABORTED;
+            onLoaded(std::move(late), kStuckRead);
+        },
+        [=, this] { return idle() && list_.shows(path(L"sub")) && statusHas(L"missing one"); });
+    add(L"(close that tab)", [=, this] { closeTab(1); }, [=, this] { return at(path(L"big")) && tabs_.size() == 1; });
 
     add(L"copies 10,000 selected files to the clipboard",
         [=, this] {

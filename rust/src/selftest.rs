@@ -14,7 +14,7 @@ use std::sync::atomic::{AtomicIsize, AtomicUsize, Ordering};
 use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
 
-use windows::Win32::Foundation::{HGLOBAL, HWND, LPARAM, POINT, POINTL, RECT, WPARAM};
+use windows::Win32::Foundation::{ERROR_OPERATION_ABORTED, HGLOBAL, HWND, LPARAM, POINT, POINTL, RECT, WPARAM};
 use windows::Win32::Graphics::Gdi::{COLOR_WINDOW, ClientToScreen, GetSysColor, GetSysColorBrush};
 use windows::Win32::Storage::FileSystem::{
     DDD_EXACT_MATCH_ON_REMOVE, DDD_NO_BROADCAST_SYSTEM, DDD_REMOVE_DEFINITION, DefineDosDeviceW, FILE_ATTRIBUTE_ARCHIVE,
@@ -2507,6 +2507,102 @@ impl App {
                     && a.st.borrow().watch.as_ref().is_some_and(|w| w.watches(&sub))
                     && a.status_message().contains("no such folder")
             },
+        );
+        s.add("(close that tab)", |a| a.close_tab(1), |a| a.at(&p("big")) && a.tabs() == 1);
+        // The tab comes back as the switch would have shown it: the scroll exactly, not moved to the focused file.
+        s.add("(a second tab on big)", |a| a.new_tab(Location::dir(p("big")), true), |a| {
+            a.at(&p("big")) && a.tabs() == 2 && a.active() == 1
+        });
+        s.add(
+            "(it focuses a file, is scrolled away from it, and is left for the first tab)",
+            |a| {
+                focus(a.list.hwnd());
+                a.select_one("item 5000.dat");
+                a.list.scroll_to_row(100); // as with the mouse wheel
+                TOP.set(a.list.top_row());
+                a.switch_tab(0);
+            },
+            |a| a.idle() && a.active() == 0,
+        );
+        s.add(
+            "a tab whose switch a failed move overtakes comes back with its selection and scroll position (4.6)",
+            |a| {
+                a.switch_tab(1);
+                a.open(Location::dir(p("no such folder")), Nav::New, ViewState::default());
+            },
+            |a| {
+                a.idle()
+                    && a.active() == 1
+                    && a.list.shows(&Location::dir(p("big")))
+                    && a.focused_is("item 5000.dat")
+                    && a.list.top_row() == TOP.get()
+            },
+        );
+        s.add("(close that tab)", |a| a.close_tab(1), |a| a.at(&p("big")) && a.tabs() == 1);
+        // An emptied list shows no folder, not This PC: a This PC tab left meanwhile keeps what it remembered.
+        let drive = Rc::new(RefCell::new(String::new()));
+        s.add("(a This PC tab)", |a| a.new_tab(Location::ThisPc, true), |a| {
+            a.at_pc() && a.active() == 1 && a.list.count() > 0
+        });
+        s.add(
+            "(its last drive selected, remembered as the tab is left and shown again)",
+            {
+                let drive = drive.clone();
+                move |a| {
+                    focus(a.list.hwnd());
+                    // Not the first row, which takes the focus by itself.
+                    let name = a.list.item(a.list.count() - 1).map(|it| it.name).unwrap_or_default();
+                    *drive.borrow_mut() = name.to_string_lossy().into_owned();
+                    a.select_one(&drive.borrow());
+                    a.switch_tab(0);
+                    a.switch_tab(1);
+                }
+            },
+            {
+                let drive = drive.clone();
+                move |a| a.at_pc() && a.active() == 1 && a.focused_is(&drive.borrow())
+            },
+        );
+        s.add(
+            "a This PC tab left while its list is emptied keeps its selection (4.6)",
+            |a| {
+                a.list.clear(); // as while its folder is read again
+                a.switch_tab(0);
+                a.switch_tab(1);
+            },
+            move |a| a.at_pc() && a.active() == 1 && a.focused_is(&drive.borrow()),
+        );
+        s.add("(close that tab too)", |a| a.close_tab(1), |a| a.at(&p("big")) && a.tabs() == 1);
+        // On a share that is off, each read of the tab's folder waits 20-40 s: one at a time, as with F5 (4.2). A read
+        // still out is stood in for by its number, so the test needs no network.
+        const STUCK_READ: u32 = u32::MAX; // no real read gets this number
+        s.add(
+            "a failed move starts no read of the tab's folder while an earlier one is still out (4.2)",
+            |a| {
+                COUNT.set(a.generation.get());
+                a.new_tab(Location::dir(p("sub")), true);
+                a.restore_read.set(STUCK_READ); // as if a read of sub were still out
+                a.open(Location::dir(p("missing one")), Nav::New, ViewState::default());
+            },
+            |a| {
+                note(format!("{} read(s)", a.generation.get() - COUNT.get()));
+                a.status_message().contains("missing one")
+                    && !a.is_loading()
+                    && a.generation.get() == COUNT.get() + 2
+                    && !a.list.shows(&Location::dir(p("sub")))
+            },
+        );
+        s.add(
+            "...and once that read is back, replaced and unused, the tab's folder is read and shown (4.2)",
+            |a| {
+                let late = Listing {
+                    location: Location::dir(p("sub")),
+                    error: Some(ERROR_OPERATION_ABORTED.to_hresult().into()),
+                    ..Default::default()
+                };
+                a.on_loaded(late, STUCK_READ);
+            },
+            |a| a.idle() && a.list.shows(&Location::dir(p("sub"))) && a.status_message().contains("missing one"),
         );
         s.add("(close that tab)", |a| a.close_tab(1), |a| a.at(&p("big")) && a.tabs() == 1);
 

@@ -161,6 +161,7 @@ enum Origin {
     Other,
     AddressBar,        // typed in the address bar: a file is opened instead
     Shortcut(PathBuf), // opened from this shortcut: if it leads to a file, Windows opens the shortcut
+    Restore,           // brings back the tab's own view, as a tab switch would (restore_tab)
 }
 
 struct Pending {
@@ -227,6 +228,8 @@ pub struct App {
     pub refresh_queued: Cell<bool>,
     refresh_for_watch: Cell<bool>, // ...and only the folder watch asked for it
     list_emptied: Cell<bool>,      // a tab switch emptied the list, and no folder has filled it since
+    pub restore_read: Cell<u32>,   // the read restore_tab() started, until it comes back
+    restore_said: RefCell<String>, // what the failed move said, said again once the tab's folder is back
     load_message_shown: Cell<bool>, // "Loading..." or "not available": cleared when a folder loads
     pub generation: Cell<u32>,
     pub loads_done: Cell<u32>,   // folder reads that reported back (self-test)
@@ -534,6 +537,8 @@ impl App {
                 refresh_queued: Cell::new(false),
                 refresh_for_watch: Cell::new(false),
                 list_emptied: Cell::new(false),
+                restore_read: Cell::new(0),
+                restore_said: RefCell::new(String::new()),
                 load_message_shown: Cell::new(false),
                 generation: Cell::new(0),
                 loads_done: Cell::new(0),
@@ -1062,8 +1067,8 @@ impl App {
                         // Not available: F5 (4.3).
                         let queued = self.st.borrow_mut().queued_view.take();
                         if !self.with_tab(|t| t.unavailable) {
-                            let shown = self.list.location();
-                            self.refresh(queued.filter(|(dir, _)| dir.same(&shown)).map(|(_, view)| view).unwrap_or_default());
+                            let view = queued.filter(|(dir, _)| self.list.shows(dir)).map(|(_, view)| view);
+                            self.refresh(view.unwrap_or_default());
                         }
                     }
                 }
@@ -1184,7 +1189,7 @@ impl App {
                     && let Some(cm) = background_menu(self.wnd, &dir)
                 {
                     let paste = |shortcuts| {
-                        if self.list.location().same(&dir) {
+                        if self.list.shows(&dir) {
                             paste_into(self.wnd, &dir, shortcuts);
                         }
                     };
@@ -1209,7 +1214,7 @@ impl App {
                 if !is("rename") && !is("delete") && !(opens_here && (open || in_new_tab)) {
                     return false;
                 }
-                if !self.list.location().same(&dir) || self.list.selected_names() != names {
+                if !self.list.shows(&dir) || self.list.selected_names() != names {
                     return true; // changed: do nothing
                 }
                 if is("rename") {
@@ -1402,8 +1407,8 @@ impl App {
         }
         if alt && is(VK_RETURN) && focused == list {
             // The selection's properties, or with nothing selected the folder's own. A tab not available (4.3) or
-            // still switching shows an empty list with no folder: "" would be This PC's.
-            if !self.list.location().same(&self.location()) {
+            // still switching shows a cleared list, which shows no folder, not This PC.
+            if !self.list.shows(&self.location()) {
                 return true;
             }
             let (dir, items) = (self.list.location(), self.list.selected_items());
@@ -1558,7 +1563,7 @@ impl App {
         }
         if nav == Nav::Switch {
             // Show the new tab at once; until its folder loads the list has none, so nothing acts on the old one.
-            self.list.set_listing(Listing::default());
+            self.list.clear();
             self.list_emptied.set(true);
             self.show_location(nav);
             self.show_status();
@@ -1580,10 +1585,14 @@ impl App {
         });
     }
 
-    fn on_loaded(&self, listing: Listing, generation: u32) {
+    pub fn on_loaded(&self, listing: Listing, generation: u32) {
         let counted = generation != self.uncounted_load.get();
         if counted {
             self.loads_done.set(self.loads_done.get() + 1);
+        }
+        let restored = generation == self.restore_read.get(); // the read restore_tab() started is back
+        if restored {
+            self.restore_read.set(0);
         }
         let pending = self.st.borrow_mut().pending.take_if(|p| p.generation == generation);
         let Some(pending) = pending else {
@@ -1591,6 +1600,9 @@ impl App {
             let aborted = listing.error.as_ref().is_some_and(|e| e.code() == ERROR_OPERATION_ABORTED.to_hresult());
             if counted && !aborted {
                 self.loads_wasted.set(self.loads_wasted.get() + 1);
+            }
+            if restored && !self.is_loading() {
+                self.restore_tab(); // the move that replaced it came to nothing
             }
             return;
         };
@@ -1621,13 +1633,13 @@ impl App {
             return self.on_load_failed(&listing, &error.message(), &pending);
         }
 
-        // An emptied list holds no folder.
-        let same_folder = !self.list_emptied.get() && self.list.location().same(&listing.location);
+        let same_folder = self.list.shows(&listing.location);
         let moved = matches!(pending.nav, Nav::New | Nav::Back | Nav::Forward);
         let reload = pending.nav == Nav::Refresh && same_folder;
         let mut view = pending.view;
-        // An item a rename, delete or new folder asked for (a tab switch restores the scroll exactly instead).
-        let requested = pending.nav == Nav::Refresh && view.asks();
+        // An item a rename, delete or new folder asked for (a tab switch, and restore_tab, bring back the scroll
+        // exactly).
+        let requested = pending.nav == Nav::Refresh && !matches!(pending.origin, Origin::Restore) && view.asks();
         if reload {
             if !view.asks() {
                 view = self.current_view();
@@ -1719,6 +1731,9 @@ impl App {
         self.show_location(pending.nav);
         if moved {
             self.set_message(self.late_hint.get().unwrap_or("")); // a navigation clears the message, or says its hint
+        } else if matches!(pending.origin, Origin::Restore) {
+            let said = self.restore_said.borrow().clone();
+            self.set_message(&said); // after "Loading...": why the move failed
         }
         self.late_hint.set(None);
         self.show_status();
@@ -1744,57 +1759,66 @@ impl App {
     /// The folder could not be read: decide what to show or do instead.
     fn on_load_failed(&self, listing: &Listing, error: &str, pending: &Pending) {
         self.late_hint.set(None); // the error is what to say
-        // A move that took over from a tab switch failed or opened a file: the list the switch emptied gets the tab's
-        // own folder after all, without "Loading...", so the status bar keeps saying why the move failed (4.2).
-        if self.list_emptied.get() && !matches!(pending.nav, Nav::Refresh | Nav::Switch) {
-            self.refresh(self.with_tab(|t| t.view.clone()));
-            unsafe {
-                let _ = KillTimer(Some(self.wnd), TIMER_LOADING);
-            }
-        }
-        // A navigation that fails or opens a file leaves the folder shown: its filter comes back, unless retyped.
-        if !matches!(pending.nav, Nav::Refresh | Nav::Switch) && window_text(self.filter).is_empty() {
-            set_text(self.filter, &pending.filter);
-        }
-        match (&pending.origin, &listing.location) {
-            // A shortcut that leads to a file: Windows opens it (never an unreachable one: that would hang, then fail).
-            (Origin::Shortcut(lnk), _) if listing.is_file => {
-                open_file(self.wnd, lnk);
-                return;
-            }
-            (Origin::AddressBar, Location::Dir(path)) if listing.is_file => {
-                open_file(self.wnd, path); // a file typed in the address bar: open it
-                set_text(self.address, self.location().text());
-                return;
-            }
-            // Let the user fix what they typed (5.3), unless they moved on: a dead share fails a minute later.
-            (Origin::AddressBar, _) if unsafe { GetFocus() } == self.list.hwnd() => focus_edit(self.address),
-            _ => {}
-        }
         if matches!(pending.nav, Nav::Refresh | Nav::Switch) {
             return self.show_unavailable(&listing.location, error, pending.nav);
         }
-        if matches!(pending.nav, Nav::Back | Nav::Forward) {
-            // A history entry whose folder is gone is dropped, so Back/Forward can move past it.
-            let (can_back, can_forward) = self.with_tab(|t| {
-                let history = if pending.nav == Nav::Back { &mut t.back } else { &mut t.forward };
-                if history.last().is_some_and(|l| l.same(&listing.location)) {
-                    history.pop();
+        // A move that fails or opens a file leaves the tab where it was: its filter comes back, unless retyped.
+        if window_text(self.filter).is_empty() {
+            set_text(self.filter, &pending.filter);
+        }
+        let mut said = String::new();
+        match (&pending.origin, &listing.location) {
+            // A shortcut that leads to a file: Windows opens it (never an unreachable one: that would hang, then fail).
+            (Origin::Shortcut(lnk), _) if listing.is_file => open_file(self.wnd, lnk),
+            (Origin::AddressBar, Location::Dir(path)) if listing.is_file => {
+                open_file(self.wnd, path); // a file typed in the address bar: open it
+                set_text(self.address, self.location().text());
+            }
+            _ => {
+                // Let the user fix what they typed (5.3), unless they moved on: a dead share fails a minute later.
+                if matches!(pending.origin, Origin::AddressBar) && unsafe { GetFocus() } == self.list.hwnd() {
+                    focus_edit(self.address);
                 }
-                (!t.back.is_empty(), !t.forward.is_empty())
-            });
-            unsafe {
-                let _ = EnableWindow(self.back, can_back);
-                let _ = EnableWindow(self.forward, can_forward);
+                if matches!(pending.nav, Nav::Back | Nav::Forward) {
+                    // A history entry whose folder is gone is dropped, so Back/Forward can move past it.
+                    let (can_back, can_forward) = self.with_tab(|t| {
+                        let history = if pending.nav == Nav::Back { &mut t.back } else { &mut t.forward };
+                        if history.last().is_some_and(|l| l.same(&listing.location)) {
+                            history.pop();
+                        }
+                        (!t.back.is_empty(), !t.forward.is_empty())
+                    });
+                    unsafe {
+                        let _ = EnableWindow(self.back, can_back);
+                        let _ = EnableWindow(self.forward, can_forward);
+                    }
+                }
+                said = format!("{}: {}", listing.location.display_name().to_string_lossy(), error.trim());
+                self.warn(&said);
             }
         }
-        self.warn(&format!("{}: {}", listing.location.display_name().to_string_lossy(), error.trim()));
+        *self.restore_said.borrow_mut() = said;
+        self.restore_tab();
+    }
+
+    /// A tab switch emptied the list and the move that took over failed or opened a file: the tab's folder is read
+    /// again, as the switch would have shown it, and the move's error is said again once it is there (4.2). If that
+    /// read fails too, the tab is not available, which the status bar then says instead (4.3). One such read at a
+    /// time: on a share that is off, each one waits 20-40 s; one replaced by a move that came to nothing is started
+    /// again (on_loaded).
+    fn restore_tab(&self) {
+        if !self.list_emptied.get() || self.restore_read.get() != 0 {
+            return;
+        }
+        let view = self.with_tab(|t| t.view.clone());
+        self.open_from(self.location(), Nav::Refresh, view, Origin::Restore);
+        self.restore_read.set(self.generation.get());
     }
 
     /// A tab never changes its folder by itself (a drive may come back): show it empty and say why. The
     /// list gets no folder, so nothing asks Windows about it (that can freeze the window for 20-40 s).
     pub fn show_unavailable(&self, location: &Location, error: &str, nav: Nav) {
-        self.list.set_listing(Listing::default());
+        self.list.clear();
         self.list_emptied.set(false); // empty on purpose: the message says why
         self.with_tab(|t| t.unavailable = true);
         let old_watch = self.st.borrow_mut().watch.take();
@@ -1982,7 +2006,7 @@ impl App {
             return;
         }
         set_text(self.filter, ""); // the tab comes back unfiltered (5.4): remember the unfiltered rows
-        if self.list.location().same(&self.location()) {
+        if self.list.shows(&self.location()) {
             let view = self.current_view();
             self.with_tab(|t| t.view = view);
         }

@@ -38,6 +38,7 @@ const LVSICF_NOSCROLL: isize = 2;
 
 struct Model {
     location: Location,
+    shown: bool, // location is a folder that was read, not the This PC of a cleared list
     items: Vec<Item>,
     view: Vec<usize>,
     filter: Vec<u16>,  // NUL-terminated
@@ -107,6 +108,7 @@ impl FileList {
             own_icons: RefCell::new(HashMap::new()),
             model: RefCell::new(Model {
                 location: Location::ThisPc,
+                shown: false,
                 items: Vec::new(),
                 view: Vec::new(),
                 filter: vec![0],
@@ -128,6 +130,7 @@ impl FileList {
     pub fn set_listing(&self, listing: Listing) {
         self.update(false, |m| {
             m.location = listing.location;
+            m.shown = true;
             m.items = listing.items;
             for it in &mut m.items {
                 // Cached per extension, so this is quick; lets Type sort by what is shown.
@@ -142,8 +145,20 @@ impl FileList {
     /// The folder's own icons (a .exe, a .lnk), read after its listing. A late batch for a folder no longer shown is of
     /// no use. A batch replaces the last one: the map never outgrows a folder, and a program replaced by another gets
     /// its new icon on the next read.
+    /// No folder at all: while a tab switch reads its folder, or the folder is not available.
+    pub fn clear(&self) {
+        self.set_listing(Listing::default());
+        self.model.borrow_mut().shown = false;
+    }
+
+    /// Whether the list shows that folder (This PC too); a cleared list shows none.
+    pub fn shows(&self, location: &Location) -> bool {
+        let m = self.model.borrow();
+        m.shown && m.location.same(location)
+    }
+
     pub fn set_icons(&self, batch: &IconBatch) {
-        if !self.location().same(&batch.dir) {
+        if !self.shows(&batch.dir) {
             return;
         }
         *self.own_icons.borrow_mut() = batch.icons.iter().map(|(name, icon)| (batch.dir.join(name), *icon)).collect();

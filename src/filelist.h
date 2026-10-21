@@ -15,6 +15,7 @@ public:
     HWND hwnd() const { return lv_; }
 
     void setListing(Listing&& listing);   // new folder contents; keeps sort and filter
+    void clear();   // no folder at all: while a tab switch reads its folder, or the folder is not available
     void setIcons(const IconBatch& batch);   // the folder's own icons (a .exe, a .lnk), read after its listing
     void setFilter(std::wstring filter);
     void setShowHidden(bool show);   // hidden items are always read; they are listed only while this is on
@@ -24,6 +25,7 @@ public:
     bool sortAscending() const { return asc_; }
 
     const std::wstring& dir() const { return dir_; }
+    bool shows(const std::wstring& path) const { return shown_ && samePath(dir_, path); }   // "" is This PC
     int count() const { return int(view_.size()); }
     int total() const { return total_; }   // the items a filter would narrow down (not the hidden ones)
     const Item& at(int row) const { return items_[view_[row]]; }
@@ -59,6 +61,7 @@ private:
 
     HWND lv_ = nullptr;
     std::wstring dir_;
+    bool shown_ = false;   // dir_ is a folder that was read, not the "" of a cleared list
     std::vector<Item> items_;
     std::vector<int> view_;
     std::unordered_map<std::wstring, int> ownIcons_;   // full path -> own icon, for the folder shown

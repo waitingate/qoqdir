@@ -557,7 +557,7 @@ void App::onTimer(UINT_PTR id) {
         refreshQueued_ = false;
         // What a delete, rename or new folder asked to select, if its folder is still shown. Not available: F5 (4.3).
         QueuedView q = std::exchange(queuedView_, {});
-        if (!tab().unavailable) refresh(samePath(list_.dir(), q.dir) ? std::move(q.view) : ViewState{});
+        if (!tab().unavailable) refresh(list_.shows(q.dir) ? std::move(q.view) : ViewState{});
     } else if (id == kStatusTimer) {
         KillTimer(wnd_, kStatusTimer);
         showStatus();
@@ -649,7 +649,7 @@ void App::onContextMenu(HWND from, POINT pt) {
         if (rows.empty()) {
             if (!dir.empty()) {
                 bool copied = IsClipboardFormatAvailable(CF_HDROP) != 0;   // else Paste is greyed
-                auto paste = [&](bool shortcuts) { if (samePath(list_.dir(), dir)) pasteInto(wnd_, dir, shortcuts); };
+                auto paste = [&](bool shortcuts) { if (list_.shows(dir)) pasteInto(wnd_, dir, shortcuts); };
                 showMenu(wnd_, backgroundMenu(wnd_, dir).get(), pt, nullptr,
                          {{L"Paste\tCtrl+V", copied, [&] { paste(false); }},
                           {L"Paste shortcut", copied, [&] { paste(true); }},
@@ -665,7 +665,7 @@ void App::onContextMenu(HWND from, POINT pt) {
         showMenu(wnd_, itemMenu(wnd_, dir, list_.selectedItems()).get(), pt, [&](const std::wstring& verb) {
             bool open = isOpenVerb(verb), inNewTab = isNewTabVerb(verb);
             if (!is(verb, L"rename") && !is(verb, L"delete") && !(opensHere && (open || inNewTab))) return false;
-            if (!samePath(list_.dir(), dir) || list_.selectedNames() != names) return true;   // changed: do nothing
+            if (!list_.shows(dir) || list_.selectedNames() != names) return true;   // changed: do nothing
             if (is(verb, L"rename")) list_.rename(list_.focused() >= 0 ? list_.focused() : rows[0]);
             else if (is(verb, L"delete")) deleteSelection(GetKeyState(VK_SHIFT) < 0);   // like the Delete key (4.6)
             else activate(inNewTab);
@@ -769,8 +769,8 @@ bool App::onKey(const Key& key) {
     if (alt && k == VK_RIGHT) { goForward(); return true; }
     if (alt && k == VK_UP) { goUp(); return true; }
     if (alt && k == VK_RETURN && focus == list) {   // the selection's properties, or with nothing selected the folder's own
-        // A tab not available (4.3) or still switching shows an empty list with no folder: "" would be This PC's.
-        if (!samePath(list_.dir(), tab().path)) return true;
+        // A tab not available (4.3) or still switching shows a cleared list, which shows no folder, not This PC.
+        if (!list_.shows(tab().path)) return true;
         std::vector<Item> items = list_.selectedItems();
         Com<IContextMenu> menu = items.empty() ? itemMenu(wnd_, list_.dir()) : itemMenu(wnd_, list_.dir(), items);
         invokeVerb(wnd_, menu.get(), "properties");
@@ -859,7 +859,7 @@ void App::open(const std::wstring& path, Nav nav, ViewState view, Origin origin)
     SetTimer(wnd_, kLoadingTimer, 250, nullptr);   // say "Loading..." only if it is slow
     if (nav == Nav::Switch) {
         // Show the new tab at once; until its folder loads the list has none, so nothing acts on the old one.
-        list_.setListing(Listing{});
+        list_.clear();
         listEmptied_ = true;
         showLocation(nav);
         showStatus();
@@ -880,8 +880,11 @@ void App::open(const std::wstring& path, Nav nav, ViewState view, Origin origin)
 void App::onLoaded(Listing&& listing, UINT generation) {
     bool counted = generation != uncountedLoad_;
     if (counted) ++loadsDone_;
+    bool restored = generation == restoreRead_;   // the read restoreTab() started is back
+    if (restored) restoreRead_ = 0;
     if (generation != pending_.generation) {   // superseded (open() sets both together)
         if (counted && listing.error != ERROR_OPERATION_ABORTED) ++loadsWasted_;
+        if (restored && !loading()) restoreTab();   // the move that replaced it came to nothing
         return;
     }
     KillTimer(wnd_, kLoadingTimer);
@@ -903,7 +906,7 @@ void App::onLoaded(Listing&& listing, UINT generation) {
     if (listing.error) return onLoadFailed(listing, p);
 
     std::wstring old = t.path;
-    bool sameFolder = !listEmptied_ && samePath(list_.dir(), listing.path);   // an emptied list holds no folder
+    bool sameFolder = list_.shows(listing.path);
     switch (p.nav) {
     case Nav::New:
         if (!samePath(old, listing.path)) {
@@ -927,8 +930,8 @@ void App::onLoaded(Listing&& listing, UINT generation) {
     if (t.forward.size() > kMaxHistory) t.forward.erase(t.forward.begin());
 
     ViewState view = std::move(p.view);
-    // An item a rename, delete or new folder asked for (a tab switch restores the scroll exactly instead).
-    bool requested = p.nav == Nav::Refresh && view.asks();
+    // An item a rename, delete or new folder asked for (a tab switch, and restoreTab, bring back the scroll exactly).
+    bool requested = p.nav == Nav::Refresh && !p.origin.restore && view.asks();
     bool moved = p.nav == Nav::New || p.nav == Nav::Back || p.nav == Nav::Forward;
     bool reload = p.nav == Nav::Refresh && sameFolder;
     if (reload) {
@@ -973,6 +976,7 @@ void App::onLoaded(Listing&& listing, UINT generation) {
     if (CompareFileTime(&now, &written) != 0) queueRefresh();
     showLocation(p.nav);
     if (moved) setMessage(lateHint_ ? lateHint_ : L"");   // a navigation clears the message, or says its hint
+    else if (p.origin.restore) setMessage(restoreSaid_);   // after "Loading...": why the move failed
     lateHint_ = nullptr;
     showStatus();
 }
@@ -993,45 +997,50 @@ void App::showLocation(Nav nav) {
 void App::onLoadFailed(const Listing& listing, const Pending& p) {
     Tab& t = tab();
     lateHint_ = nullptr;   // the error is what to say
-    // A move that took over from a tab switch failed or opened a file: the list the switch emptied gets the tab's own
-    // folder after all, without "Loading...", so the status bar keeps saying why the move failed (4.2).
-    if (listEmptied_ && p.nav != Nav::Refresh && p.nav != Nav::Switch) {
-        refresh(t.view);
-        KillTimer(wnd_, kLoadingTimer);
-    }
-    // A navigation that fails or opens a file leaves the folder shown: its filter comes back, unless retyped.
-    if (p.nav != Nav::Refresh && p.nav != Nav::Switch && GetWindowTextLengthW(filter_) == 0)
-        SetWindowTextW(filter_, p.filter.c_str());
-    // A shortcut that leads to a file: Windows opens it (never an unreachable one: that would hang, then fail).
-    if (!p.origin.shortcut.empty() && listing.isFile) {
-        openFile(wnd_, p.origin.shortcut);
-        return;
-    }
-    if (p.origin.typed && listing.isFile) {   // a file typed in the address bar: open it
-        openFile(wnd_, listing.path);
-        SetWindowTextW(address_, locationText(t.path).c_str());
-        return;
-    }
-    // Let the user fix what they typed (5.3), unless they moved on: a dead share fails a minute later.
-    if (p.origin.typed && GetFocus() == list_.hwnd()) focusEdit(address_);
     if (p.nav == Nav::Refresh || p.nav == Nav::Switch) {
         showUnavailable(listing.path, listing.error, p.nav);
         return;
     }
-    // A history entry whose folder is gone is dropped, so Back/Forward can move past it.
-    std::vector<std::wstring>& history = p.nav == Nav::Back ? t.back : t.forward;
-    if ((p.nav == Nav::Back || p.nav == Nav::Forward) && !history.empty() && samePath(history.back(), listing.path)) {
-        history.pop_back();
-        EnableWindow(back_, !t.back.empty());
-        EnableWindow(forward_, !t.forward.empty());
+    // A move that fails or opens a file leaves the tab where it was: its filter comes back, unless retyped.
+    if (GetWindowTextLengthW(filter_) == 0) SetWindowTextW(filter_, p.filter.c_str());
+    restoreSaid_.clear();
+    if (!p.origin.shortcut.empty() && listing.isFile) {
+        // A shortcut that leads to a file: Windows opens it (never an unreachable one: that would hang, then fail).
+        openFile(wnd_, p.origin.shortcut);
+    } else if (p.origin.typed && listing.isFile) {   // a file typed in the address bar: open it
+        openFile(wnd_, listing.path);
+        SetWindowTextW(address_, locationText(t.path).c_str());
+    } else {
+        // Let the user fix what they typed (5.3), unless they moved on: a dead share fails a minute later.
+        if (p.origin.typed && GetFocus() == list_.hwnd()) focusEdit(address_);
+        // A history entry whose folder is gone is dropped, so Back/Forward can move past it.
+        std::vector<std::wstring>& history = p.nav == Nav::Back ? t.back : t.forward;
+        if ((p.nav == Nav::Back || p.nav == Nav::Forward) && !history.empty() &&
+            samePath(history.back(), listing.path)) {
+            history.pop_back();
+            EnableWindow(back_, !t.back.empty());
+            EnableWindow(forward_, !t.forward.empty());
+        }
+        restoreSaid_ = displayName(listing.path) + L": " + errorText(listing.error);
+        warn(restoreSaid_);
     }
-    warn(displayName(listing.path) + L": " + errorText(listing.error));
+    restoreTab();
+}
+
+// A tab switch emptied the list and the move that took over failed or opened a file: the tab's folder is read again,
+// as the switch would have shown it, and the move's error is said again once it is there (4.2). If that read fails
+// too, the tab is not available, which the status bar then says instead (4.3). One such read at a time: on a share
+// that is off, each one waits 20-40 s; one replaced by a move that came to nothing is started again (onLoaded).
+void App::restoreTab() {
+    if (!listEmptied_ || restoreRead_) return;
+    open(tab().path, Nav::Refresh, tab().view, Origin::tabRestore());
+    restoreRead_ = generation_;
 }
 
 // A tab never changes its folder by itself (a drive may come back): show it empty and say why. The list gets
 // no folder, so nothing asks Windows about it (that can freeze the window for 20-40 s).
 void App::showUnavailable(const std::wstring& path, DWORD error, Nav nav) {
-    list_.setListing(Listing{});
+    list_.clear();
     listEmptied_ = false;   // empty on purpose: the message says why
     tab().unavailable = true;
     watch_ = {};
@@ -1168,7 +1177,7 @@ ViewState App::currentView() const {
 void App::rememberView() {
     if (loading() && pending_.nav == Nav::Switch) return;
     SetWindowTextW(filter_, L"");   // the tab comes back unfiltered (5.4): remember the unfiltered rows
-    if (samePath(list_.dir(), tab().path)) tab().view = currentView();
+    if (list_.shows(tab().path)) tab().view = currentView();
 }
 
 // ---------------------------------------------------------------- tabs

@@ -118,7 +118,8 @@ These describe what the user sees. Each must hold in every situation.
   running. When the old result arrives, it is ignored.
 - A tab's folder, history and title change only once its new folder has loaded.
   A failed or slow load never leaves a tab half updated. One that took over
-  from a tab switch and failed leaves that tab showing its own folder.
+  from a tab switch and failed leaves that tab showing its own folder as the
+  switch would have, with the error, reading it once at a time.
 - Refreshes never pile up: refreshing while the folder is still loading starts
   nothing new, so holding F5 on a slow network folder starts one load.
 - An automatic refresh (the folder changed on disk) never cancels a navigation or
@@ -756,7 +757,9 @@ result:
     while This PC is being read gets it read again, a switch that another move
     overtakes still moves the watch to the folder shown, going up keeps a
     refresh the old watch asked for, and a switch that a failed move overtakes
-    still shows its tab's folder and the error.
+    still shows its tab's folder as the switch would have, with the error,
+    reading it once at a time. A This PC tab left while its list is emptied
+    keeps its selection.
 67. Last, a window thread stuck for 7 s leaves a line in the crash log naming
     where it is (the self-test's crash log is in its own folder).
 
