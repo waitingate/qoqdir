@@ -14,7 +14,9 @@ use std::sync::atomic::{AtomicIsize, AtomicUsize, Ordering};
 use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
 
-use windows::Win32::Foundation::{ERROR_OPERATION_ABORTED, HGLOBAL, HWND, LPARAM, POINT, POINTL, RECT, WPARAM};
+use windows::Win32::Foundation::{
+    ERROR_BAD_NETPATH, ERROR_OPERATION_ABORTED, HGLOBAL, HWND, LPARAM, POINT, POINTL, RECT, WPARAM,
+};
 use windows::Win32::Graphics::Gdi::{COLOR_WINDOW, ClientToScreen, GetSysColor, GetSysColorBrush};
 use windows::Win32::Storage::FileSystem::{
     DDD_EXACT_MATCH_ON_REMOVE, DDD_NO_BROADCAST_SYSTEM, DDD_REMOVE_DEFINITION, DefineDosDeviceW, FILE_ATTRIBUTE_ARCHIVE,
@@ -2574,14 +2576,20 @@ impl App {
         );
         s.add("(close that tab too)", |a| a.close_tab(1), |a| a.at(&p("big")) && a.tabs() == 1);
         // On a share that is off, each read of the tab's folder waits 20-40 s: one at a time, as with F5 (4.2). A read
-        // still out is stood in for by its number, so the test needs no network.
+        // still out is stood in for by its number, so the test needs no network. The tab has loaded before, so a
+        // refresh would read it (one that never loaded is not available, 4.3).
         const STUCK_READ: u32 = u32::MAX; // no real read gets this number
+        s.add("(a second tab on sub)", |a| a.new_tab(Location::dir(p("sub")), true), |a| {
+            a.at(&p("sub")) && a.tabs() == 2 && a.active() == 1
+        });
+        s.add("(the first tab again)", |a| a.switch_tab(0), |a| a.at(&p("big")) && a.active() == 0);
         s.add(
             "a failed move starts no read of the tab's folder while an earlier one is still out (4.2)",
             |a| {
                 COUNT.set(a.generation.get());
-                a.new_tab(Location::dir(p("sub")), true);
+                a.switch_tab(1);
                 a.restore_read.set(STUCK_READ); // as if a read of sub were still out
+                *a.restore_path.borrow_mut() = Location::dir(p("sub"));
                 a.open(Location::dir(p("missing one")), Nav::New, ViewState::default());
             },
             |a| {
@@ -2590,6 +2598,18 @@ impl App {
                     && !a.is_loading()
                     && a.generation.get() == COUNT.get() + 2
                     && !a.list.shows(&Location::dir(p("sub")))
+            },
+        );
+        s.add(
+            "...nor does a refresh the folder watch asks for meanwhile (4.2)",
+            |a| {
+                COUNT.set(a.generation.get());
+                a.on_folder_changed(); // stands in for a change in big, which the watch is still on
+            },
+            |a| {
+                note(format!("{} read(s)", a.generation.get() - COUNT.get()));
+                // 0.8 s of nothing (the watch's refresh comes at 400 ms).
+                step_ms() >= 800 && !a.refresh_queued.get() && a.generation.get() == COUNT.get()
             },
         );
         s.add(
@@ -2603,6 +2623,85 @@ impl App {
                 a.on_loaded(late, STUCK_READ);
             },
             |a| a.idle() && a.list.shows(&Location::dir(p("sub"))) && a.status_message().contains("missing one"),
+        );
+        s.add("(the first tab, once more)", |a| a.switch_tab(0), |a| a.at(&p("big")) && a.active() == 0);
+        s.add(
+            "a read still out for another folder does not hold back the tab's own (4.2)",
+            |a| {
+                a.restore_read.set(STUCK_READ); // as if a read of a share that is off were still out
+                *a.restore_path.borrow_mut() = Location::dir(PathBuf::from(r"\\192.0.2.1\share"));
+                a.switch_tab(1);
+                a.open(Location::dir(p("missing two")), Nav::New, ViewState::default());
+            },
+            |a| {
+                a.idle()
+                    && a.active() == 1
+                    && a.list.shows(&Location::dir(p("sub")))
+                    && a.status_message().contains("missing two")
+            },
+        );
+        // What the status bar says after the error stays: only "Loading..." gives the error its place back.
+        s.add("(the first tab, a third time)", |a| a.switch_tab(0), |a| a.at(&p("big")) && a.active() == 0);
+        s.add(
+            "(a failed move overtakes the switch while a read of sub is still out)",
+            |a| {
+                a.restore_read.set(STUCK_READ);
+                *a.restore_path.borrow_mut() = Location::dir(p("sub"));
+                a.switch_tab(1);
+                a.open(Location::dir(p("missing three")), Nav::New, ViewState::default());
+            },
+            |a| a.status_message().contains("missing three") && !a.is_loading(),
+        );
+        s.add(
+            "a message shown while the tab's folder is read again stays once it is back (4.2)",
+            |a| {
+                a.set_message("a newer message");
+                let late = Listing {
+                    location: Location::dir(p("sub")),
+                    error: Some(ERROR_OPERATION_ABORTED.to_hresult().into()),
+                    ..Default::default()
+                };
+                a.on_loaded(late, STUCK_READ);
+            },
+            |a| a.idle() && a.list.shows(&Location::dir(p("sub"))) && a.status_message().contains("a newer message"),
+        );
+        // A read that comes back with an error has its answer: the folder is not available (4.3), no second read.
+        s.add("(the first tab, a fourth time)", |a| a.switch_tab(0), |a| a.at(&p("big")) && a.active() == 0);
+        s.add(
+            "(a failed move overtakes the switch while a read of sub is still out, again)",
+            |a| {
+                a.restore_read.set(STUCK_READ);
+                *a.restore_path.borrow_mut() = Location::dir(p("sub"));
+                a.switch_tab(1);
+                a.open(Location::dir(p("missing four")), Nav::New, ViewState::default());
+            },
+            |a| a.status_message().contains("missing four") && !a.is_loading(),
+        );
+        s.add(
+            "...and if that read comes back with an error, the tab is not available at once (4.3)",
+            |a| {
+                COUNT.set(a.generation.get());
+                let late = Listing {
+                    location: Location::dir(p("sub")),
+                    error: Some(ERROR_BAD_NETPATH.to_hresult().into()), // what a share that is off answers in the end
+                    ..Default::default()
+                };
+                a.on_loaded(late, STUCK_READ);
+            },
+            |a| {
+                note(format!("{} read(s)", a.generation.get() - COUNT.get()));
+                !a.is_loading()
+                    && a.generation.get() == COUNT.get()
+                    && a.st.borrow().tabs[a.active()].unavailable
+                    && a.status_message().contains("is not available")
+            },
+        );
+        s.add(
+            "(F5 shows it again)",
+            |a| {
+                a.refresh(ViewState::default());
+            },
+            |a| a.idle() && a.list.shows(&Location::dir(p("sub"))),
         );
         s.add("(close that tab)", |a| a.close_tab(1), |a| a.at(&p("big")) && a.tabs() == 1);
 

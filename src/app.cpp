@@ -556,8 +556,9 @@ void App::onTimer(UINT_PTR id) {
         KillTimer(wnd_, kRefreshTimer);
         refreshQueued_ = false;
         // What a delete, rename or new folder asked to select, if its folder is still shown. Not available: F5 (4.3).
+        // A list a tab switch emptied waits for restoreTab(), which reads the tab's folder one read at a time (4.2).
         QueuedView q = std::exchange(queuedView_, {});
-        if (!tab().unavailable) refresh(list_.shows(q.dir) ? std::move(q.view) : ViewState{});
+        if (!tab().unavailable && !listEmptied_) refresh(list_.shows(q.dir) ? std::move(q.view) : ViewState{});
     } else if (id == kStatusTimer) {
         KillTimer(wnd_, kStatusTimer);
         showStatus();
@@ -884,10 +885,17 @@ void App::onLoaded(Listing&& listing, UINT generation) {
     if (restored) restoreRead_ = 0;
     if (generation != pending_.generation) {   // superseded (open() sets both together)
         if (counted && listing.error != ERROR_OPERATION_ABORTED) ++loadsWasted_;
-        if (restored && !loading()) restoreTab();   // the move that replaced it came to nothing
+        // The move that replaced it came to nothing. An error other than "stopped" is the folder's answer: it is not
+        // available (4.3), and no second read is due.
+        bool answered = listing.error && listing.error != ERROR_OPERATION_ABORTED;
+        if (restored && !loading() && answered && listEmptied_ && samePath(listing.path, tab().path))
+            showUnavailable(listing.path, listing.error, Nav::Refresh);
+        else if (restored && !loading())
+            restoreTab();
         return;
     }
     KillTimer(wnd_, kLoadingTimer);
+    bool loadingShown = loadMessageShown_;   // "Loading..." took the place of what the status bar said
     if (loadMessageShown_) {   // any load, not only navigation, may have shown one
         setMessage(L"");
         loadMessageShown_ = false;
@@ -976,7 +984,7 @@ void App::onLoaded(Listing&& listing, UINT generation) {
     if (CompareFileTime(&now, &written) != 0) queueRefresh();
     showLocation(p.nav);
     if (moved) setMessage(lateHint_ ? lateHint_ : L"");   // a navigation clears the message, or says its hint
-    else if (p.origin.restore) setMessage(restoreSaid_);   // after "Loading...": why the move failed
+    else if (p.origin.restore && loadingShown) setMessage(restoreSaid_);   // the error gets its place back
     lateHint_ = nullptr;
     showStatus();
 }
@@ -1003,7 +1011,9 @@ void App::onLoadFailed(const Listing& listing, const Pending& p) {
     }
     // A move that fails or opens a file leaves the tab where it was: its filter comes back, unless retyped.
     if (GetWindowTextLengthW(filter_) == 0) SetWindowTextW(filter_, p.filter.c_str());
-    restoreSaid_.clear();
+    bool opensFile = listing.isFile && (!p.origin.shortcut.empty() || p.origin.typed);
+    restoreSaid_ = opensFile ? std::wstring() : displayName(listing.path) + L": " + errorText(listing.error);
+    restoreTab();   // before the file opens: Windows may keep a prompt about it up for a while
     if (!p.origin.shortcut.empty() && listing.isFile) {
         // A shortcut that leads to a file: Windows opens it (never an unreachable one: that would hang, then fail).
         openFile(wnd_, p.origin.shortcut);
@@ -1021,20 +1031,20 @@ void App::onLoadFailed(const Listing& listing, const Pending& p) {
             EnableWindow(back_, !t.back.empty());
             EnableWindow(forward_, !t.forward.empty());
         }
-        restoreSaid_ = displayName(listing.path) + L": " + errorText(listing.error);
         warn(restoreSaid_);
     }
-    restoreTab();
 }
 
 // A tab switch emptied the list and the move that took over failed or opened a file: the tab's folder is read again,
-// as the switch would have shown it, and the move's error is said again once it is there (4.2). If that read fails
-// too, the tab is not available, which the status bar then says instead (4.3). One such read at a time: on a share
-// that is off, each one waits 20-40 s; one replaced by a move that came to nothing is started again (onLoaded).
+// as the switch would have shown it, and the move's error comes back once it is there, if "Loading..." took its place
+// (4.2). If that read fails too, the tab is not available, which the status bar then says instead (4.3). One read of
+// a folder at a time: on a share that is off, each one waits 20-40 s. One replaced by a move that came to nothing is
+// started again, unless it came back with an error (onLoaded). A read still out for another folder holds none back.
 void App::restoreTab() {
-    if (!listEmptied_ || restoreRead_) return;
+    if (!listEmptied_ || (restoreRead_ && samePath(restorePath_, tab().path))) return;
     open(tab().path, Nav::Refresh, tab().view, Origin::tabRestore());
     restoreRead_ = generation_;
+    restorePath_ = tab().path;
 }
 
 // A tab never changes its folder by itself (a drive may come back): show it empty and say why. The list gets

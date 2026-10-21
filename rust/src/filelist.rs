@@ -142,9 +142,6 @@ impl FileList {
         });
     }
 
-    /// The folder's own icons (a .exe, a .lnk), read after its listing. A late batch for a folder no longer shown is of
-    /// no use. A batch replaces the last one: the map never outgrows a folder, and a program replaced by another gets
-    /// its new icon on the next read.
     /// No folder at all: while a tab switch reads its folder, or the folder is not available.
     pub fn clear(&self) {
         self.set_listing(Listing::default());
@@ -157,6 +154,9 @@ impl FileList {
         m.shown && m.location.same(location)
     }
 
+    /// The folder's own icons (a .exe, a .lnk), read after its listing. A late batch for a folder no longer shown is of
+    /// no use. A batch replaces the last one: the map never outgrows a folder, and a program replaced by another gets
+    /// its new icon on the next read.
     pub fn set_icons(&self, batch: &IconBatch) {
         if !self.shows(&batch.dir) {
             return;
