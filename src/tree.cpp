@@ -86,8 +86,7 @@ void FolderTree::create(HWND parent, int id, UINT batchMsg, UINT iconMsg, const 
 }
 
 void FolderTree::fill() {
-    reading_.clear();   // results still being read for the old nodes will be dropped
-    TreeView_DeleteAllItems(tv_);   // forgets each node's path too (TVN_DELETEITEM)
+    TreeView_DeleteAllItems(tv_);   // forgets each node's path and its read in flight too (TVN_DELETEITEM)
     HTREEITEM bookmarksNode = add(TVI_ROOT, bookmarks_, L"Bookmarks", folderIcon());
     startWorker(nullptr, readUserFolders);   // the user folders arrive later, like the drives
     SHFILEINFOW pc{};
@@ -111,13 +110,12 @@ void FolderTree::refreshDrives() {
     if (!TreeView_GetChild(tv_, pc)) {
         // No drives shown yet: their first read is still in flight (read again, so the drive that came or went is
         // in the list), or This PC is closed and unread (its next expand reads them).
-        if (reading_.erase(pc)) startReading(pc, true);
+        if (reading_.erase(pc)) startReading(pc);
         return;
     }
-    bool expanded = (TreeView_GetItemState(tv_, pc, TVIS_EXPANDED) & TVIS_EXPANDED) != 0;
     reading_.erase(pc);
     TreeView_Expand(tv_, pc, TVE_COLLAPSE | TVE_COLLAPSERESET);   // forget the drives; the next expand reads them
-    if (expanded) TreeView_Expand(tv_, pc, TVE_EXPAND);
+    TreeView_Expand(tv_, pc, TVE_EXPAND);   // and read them again
 }
 
 // Each folder whose subfolders are shown is read again, and each known to have none (it may have some now).
@@ -139,7 +137,7 @@ void FolderTree::reread(HTREEITEM n) {
     TreeView_GetItem(tv_, &item);
     // An empty Bookmarks keeps its arrow (addChildren), so the arrow can't tell: its last read does.
     bool emptyRoot = bookmarksEmpty_ && n == TreeView_GetRoot(tv_);
-    if (TreeView_GetChild(tv_, n) || (!item.cChildren && !isShortcut(pathOf(n))) || emptyRoot) startReading(n, true);
+    if (TreeView_GetChild(tv_, n) || (!item.cChildren && !isShortcut(pathOf(n))) || emptyRoot) startReading(n);
 }
 
 HTREEITEM FolderTree::add(HTREEITEM parent, const std::wstring& path, const std::wstring& text, int icon, bool leaf,
@@ -160,8 +158,8 @@ const std::wstring& FolderTree::pathOf(HTREEITEM node) const {
     return paths_.at(node);   // a node that is not there is a dead handle: stop loudly (4.10)
 }
 
-void FolderTree::startReading(HTREEITEM node, bool again) {
-    if ((!again && TreeView_GetChild(tv_, node)) || reading_.count(node)) return;   // already read, or being read
+void FolderTree::startReading(HTREEITEM node) {
+    if (reading_.count(node)) return;   // being read
     std::wstring dir = pathOf(node);
     HTREEITEM top = node;   // shortcuts show under Bookmarks, the first root, at any depth (5.6)
     while (HTREEITEM up = TreeView_GetParent(tv_, top)) top = up;
@@ -282,7 +280,8 @@ bool FolderTree::onNotify(NMHDR* nm, std::wstring* open) {
     switch (nm->code) {
     case TVN_ITEMEXPANDINGW: {
         auto* tv = reinterpret_cast<NMTREEVIEWW*>(nm);
-        if (tv->action & TVE_EXPAND) startReading(tv->itemNew.hItem);
+        // Not a node whose subfolders are shown: addChildren expands the node it has just filled.
+        if ((tv->action & TVE_EXPAND) && !TreeView_GetChild(tv_, tv->itemNew.hItem)) startReading(tv->itemNew.hItem);
         return false;
     }
     case TVN_ITEMEXPANDEDW: {

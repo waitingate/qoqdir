@@ -67,12 +67,14 @@ use crate::folder::{
     is_relative_path, is_shortcut, list_folder, normalize, row_after_deleting,
 };
 use crate::shell::{
-    FolderWatch, IconBatch, OwnItem, acknowledge_change, fill_types, has_own_icon, read_own_icons, remember_icons, background_menu, bookmark_folder, copy_to_clipboard, delete_items, drag_out, open_in_explorer,
+    FolderWatch, IconBatch, OwnItem, acknowledge_change, fill_types, has_own_icon, read_own_icons, background_menu, bookmark_folder, copy_to_clipboard, delete_items, drag_out, open_in_explorer,
     shortcut_target, forward_menu_message, in_background, invoke_verb, item_menu, item_menu_at, known_folder, new_drop_target, open_file,
     paste_into, post, rename_item, run_command, save_folder_shortcuts, saved_folders, show_menu,
 };
 use crate::tree::{FolderTree, TreeBatch};
-use crate::util::{Font, OwnedMenu, focus, from_wide, key_down, pcwstr, scale, send, set_text, wide, window_text};
+use crate::util::{
+    Font, OwnedMenu, focus, from_wide, key_down, pcwstr, scale, send, set_text, unscale, wide, window_text,
+};
 
 const ID_BACK: i32 = 100;
 const ID_FORWARD: i32 = 101;
@@ -596,7 +598,6 @@ impl App {
             app.tree.fill();
             app.load_settings(&cmd);
             app.layout();
-            app.show_tabs();
             app.show_tab();
             if !Self::started_quiet() {
                 app.focus_list(); // giving a control the focus activates the window, which a quiet start may not
@@ -744,7 +745,7 @@ impl App {
             let split_w = scale(SPLITTER_WIDTH, dpi);
             let tree_w = scale(self.tree_width.get(), dpi).clamp(scale(80, dpi), scale(80, dpi).max(w - scale(200, dpi)));
             if self.dragging.get() {
-                self.tree_width.set((i64::from(tree_w) * 96 / i64::from(dpi)) as i32); // a drag past the edge keeps the width shown, not one past it
+                self.tree_width.set(unscale(tree_w, dpi)); // a drag past the edge keeps the width shown, not one past it
             }
             let body_h = h - status_h - y;
             place(self.tree.hwnd(), 0, y, tree_w, body_h);
@@ -854,12 +855,8 @@ impl App {
                     return LRESULT(0);
                 }
                 WM_APP_ICONS => {
-                    // The shown folder's own icons (a late batch for a folder no longer shown is of no use).
-                    let batch = Box::from_raw(lp.0 as *mut IconBatch);
-                    if self.list.location().same(&batch.dir) {
-                        remember_icons(&batch);
-                        let _ = InvalidateRect(Some(self.list.hwnd()), None, false);
-                    }
+                    // The shown folder's own icons.
+                    self.list.set_icons(&Box::from_raw(lp.0 as *mut IconBatch));
                     return LRESULT(0);
                 }
                 WM_APP_TREE_ICONS => {
@@ -879,8 +876,7 @@ impl App {
                     if wp.0 != 0 {
                         self.set_message("Tabs saved in Bookmarks\\Tabs, replacing the earlier set");
                     } else {
-                        self.set_message("Can't save every tab in Bookmarks\\Tabs");
-                        self.warn();
+                        self.warn("Can't save every tab in Bookmarks\\Tabs");
                     }
                     return LRESULT(0);
                 }
@@ -966,7 +962,7 @@ impl App {
                 }
                 WM_MOUSEMOVE => {
                     if self.dragging.get() {
-                        self.tree_width.set((point_from(lp).x.max(0) as i64 * 96 / dpi as i64) as i32);
+                        self.tree_width.set(unscale(point_from(lp).x.max(0), dpi));
                         self.layout();
                     }
                     return LRESULT(0);
@@ -1500,8 +1496,7 @@ impl App {
                 if copy_to_clipboard(self.wnd, &self.list.location(), &items, cut) {
                     self.set_message(&format!("{} item(s) {}", items.len(), if cut { "cut" } else { "copied" }));
                 } else {
-                    self.set_message("Can't put the items on the clipboard");
-                    self.warn();
+                    self.warn("Can't put the items on the clipboard");
                 }
                 return true;
             }
@@ -1609,10 +1604,11 @@ impl App {
 
         let same_folder = self.list.location().same(&listing.location);
         let moved = matches!(pending.nav, Nav::New | Nav::Back | Nav::Forward);
+        let reload = pending.nav == Nav::Refresh && same_folder;
         let mut view = pending.view;
         // An item a rename, delete or new folder asked for (a tab switch restores the scroll exactly instead).
         let requested = pending.nav == Nav::Refresh && view.asks();
-        if pending.nav == Nav::Refresh && same_folder {
+        if reload {
             if !view.asks() {
                 view = self.current_view();
             }
@@ -1657,7 +1653,6 @@ impl App {
         let location = listing.location.clone();
         let written = listing.written;
         // The tree follows the folder shown: its node is read again when the subfolders or shortcuts changed (5.5).
-        let reload = pending.nav == Nav::Refresh && same_folder;
         let tree_names = if reload { self.list.tree_names() } else { Vec::new() };
         self.list.set_listing(listing);
         if reload && tree_names != self.list.tree_names() {
@@ -1755,8 +1750,7 @@ impl App {
                 let _ = EnableWindow(self.forward, can_forward);
             }
         }
-        self.set_message(&format!("{}: {}", listing.location.display_name().to_string_lossy(), error.trim()));
-        self.warn();
+        self.warn(&format!("{}: {}", listing.location.display_name().to_string_lossy(), error.trim()));
     }
 
     /// A tab never changes its folder by itself (a drive may come back): show it empty and say why. The
@@ -1844,9 +1838,8 @@ impl App {
         // On This PC a relative place has no folder (Windows would open its own start folder in Explorer).
         let shown = self.list.location();
         if (relative && matches!(here, Location::ThisPc)) || !run_command(self.wnd, &typed, shown.path()) {
-            self.set_message(&format!("Can't find \"{}\"", text.to_string_lossy()));
+            self.warn(&format!("Can't find \"{}\"", text.to_string_lossy()));
             focus_edit(self.address); // left selected, like a bad path, so it can be corrected (5.3)
-            self.warn();
             return;
         }
         set_text(self.address, here.text());
@@ -2108,10 +2101,7 @@ impl App {
         let Some((folder, dir)) = folder.zip(self.tree.bookmarks().path().map(|p| p.to_path_buf())) else { return };
         let ok = bookmark_folder(&dir, &folder);
         self.tree.refresh_folder(self.tree.bookmarks());
-        self.set_message(if ok { "Bookmarked" } else { "Can't make the bookmark" });
-        if !ok {
-            self.warn();
-        }
+        if ok { self.set_message("Bookmarked") } else { self.warn("Can't make the bookmark") }
     }
 
     // ------------------------------------------------------------ saved tabs (Bookmarks\Tabs)
@@ -2188,8 +2178,7 @@ impl App {
                     i += 1;
                 }
                 Err(e) => {
-                    self.set_message(e.message().trim());
-                    self.warn(); // 4.9: an impossible action beeps
+                    self.warn(e.message().trim()); // 4.9: an impossible action beeps
                     return;
                 }
             }
@@ -2234,7 +2223,9 @@ impl App {
         if after_load { self.late_hint.set(Some(text)) } else { self.set_message(text) }
     }
 
-    fn warn(&self) {
+    /// An error: in the status bar, with a beep.
+    fn warn(&self, text: &str) {
+        self.set_message(text);
         if !self.quiet.get() {
             unsafe {
                 let _ = MessageBeep(MB_ICONWARNING);
@@ -2331,9 +2322,9 @@ impl App {
             let (key, asc) = self.list.sort();
             number("SortColumn", key as i32);
             number("SortAscending", asc as i32);
-            let dpi = self.dpi.get() as i64;
+            let dpi = self.dpi.get();
             for (i, w) in self.list.column_widths().iter().enumerate() {
-                number(&format!("Column{i}"), (*w as i64 * 96 / dpi) as i32);
+                number(&format!("Column{i}"), unscale(*w, dpi));
             }
         }
     }

@@ -14,8 +14,8 @@ use windows::Win32::UI::Controls::{
     HTREEITEM, NM_CLICK, NMHDR, NMTREEVIEWW, TVE_COLLAPSE, TVE_COLLAPSERESET, TVE_EXPAND, TVGN_CARET,
     TVGN_CHILD, TVGN_DROPHILITE, TVGN_NEXT, TVGN_NEXTVISIBLE, TVGN_PARENT, TVGN_ROOT, TVHITTESTINFO, TVHT_ONITEM, TVHT_ONITEMRIGHT,
     TVI_FIRST, TVI_LAST, TVI_ROOT,
-    TVIF_CHILDREN, TVIF_IMAGE, TVIF_SELECTEDIMAGE, TVIF_TEXT, TVINSERTSTRUCTW, TVINSERTSTRUCTW_0, TVIS_EXPANDED, TVITEMEXW,
-    TVITEMEXW_CHILDREN, TVITEMW, TVM_DELETEITEM, TVM_EXPAND, TVM_GETITEMSTATE, TVM_GETITEMW, TVM_GETNEXTITEM, TVM_HITTEST,
+    TVIF_CHILDREN, TVIF_IMAGE, TVIF_SELECTEDIMAGE, TVIF_TEXT, TVINSERTSTRUCTW, TVINSERTSTRUCTW_0, TVITEMEXW,
+    TVITEMEXW_CHILDREN, TVITEMW, TVM_DELETEITEM, TVM_EXPAND, TVM_GETITEMW, TVM_GETNEXTITEM, TVM_HITTEST,
     TVM_INSERTITEMW, TVM_SELECTITEM, TVM_SETEXTENDEDSTYLE, TVM_SETIMAGELIST, TVM_SETITEMW, TVN_DELETEITEMW, TVN_ITEMEXPANDEDW,
     TVN_ITEMEXPANDINGW, TVN_SELCHANGEDW, TVS_EX_DOUBLEBUFFER, TVS_EX_FADEINOUTEXPANDOS, TVS_FULLROWSELECT,
     TVS_HASBUTTONS, TVS_LINESATROOT, TVS_NOHSCROLL, TVS_SHOWSELALWAYS, TVS_TRACKSELECT, TVSIL_NORMAL, TVC_BYKEYBOARD,
@@ -190,8 +190,8 @@ impl FolderTree {
 
     /// Rebuilds the roots: Bookmarks, the user folders, then This PC with its drives.
     pub fn fill(&self) {
-        self.reading.borrow_mut().clear(); // results still being read for the old nodes will be dropped
-        send(self.hwnd, TVM_DELETEITEM, 0, TVI_ROOT.0); // forgets each node's path too (TVN_DELETEITEM)
+        // Forgets each node's path and its read in flight too (TVN_DELETEITEM).
+        send(self.hwnd, TVM_DELETEITEM, 0, TVI_ROOT.0);
         let bookmarks = self.add(TVI_ROOT, self.bookmarks.clone(), OsStr::new("Bookmarks"), folder_icon(), false, TVI_LAST);
         self.start_worker(0, read_user_folders); // the user folders arrive later, like the drives
         let (_, icon) = describe(&Location::ThisPc);
@@ -222,17 +222,14 @@ impl FolderTree {
             // No drives shown yet: their first read is still in flight (read again, so the drive that came or went is
             // in the list), or This PC is closed and unread (its next expand reads them).
             if self.reading.borrow_mut().remove(&pc).is_some() {
-                self.start_reading(HTREEITEM(pc), true);
+                self.start_reading(HTREEITEM(pc));
             }
             return;
         }
-        let expanded = send(self.hwnd, TVM_GETITEMSTATE, pc as usize, TVIS_EXPANDED.0 as isize) & TVIS_EXPANDED.0 as isize != 0;
         self.reading.borrow_mut().remove(&pc);
         // Forget the drives; the next expand reads them.
         send(self.hwnd, TVM_EXPAND, (TVE_COLLAPSE.0 | TVE_COLLAPSERESET.0) as usize, pc);
-        if expanded {
-            send(self.hwnd, TVM_EXPAND, TVE_EXPAND.0 as usize, pc);
-        }
+        send(self.hwnd, TVM_EXPAND, TVE_EXPAND.0 as usize, pc); // and read them again
     }
 
     /// F5: each folder whose subfolders are shown is read again, and each known to have none (it may have some now).
@@ -260,7 +257,7 @@ impl FolderTree {
         // An empty Bookmarks keeps its arrow (add_children), so the arrow can't tell: its last read does.
         let empty_root = self.bookmarks_empty.get() && node == self.root();
         if send(self.hwnd, TVM_GETNEXTITEM, TVGN_CHILD as usize, node) != 0 || none || empty_root {
-            self.start_reading(HTREEITEM(node), true);
+            self.start_reading(HTREEITEM(node));
         }
     }
 
@@ -295,11 +292,9 @@ impl FolderTree {
         self.paths.borrow()[&node.0].clone() // a node that is not there is a dead handle: stop loudly (4.10)
     }
 
-    /// `again`: also when its subfolders are shown.
-    fn start_reading(&self, node: HTREEITEM, again: bool) {
-        let shown = send(self.hwnd, TVM_GETNEXTITEM, TVGN_CHILD as usize, node.0) != 0;
-        if (shown && !again) || self.reading.borrow().contains_key(&node.0) {
-            return; // already read, or being read
+    fn start_reading(&self, node: HTREEITEM) {
+        if self.reading.borrow().contains_key(&node.0) {
+            return; // being read
         }
         let location = self.location_of(node);
         let mut top = node.0; // shortcuts show under Bookmarks, the first root, at any depth (5.6)
@@ -460,8 +455,12 @@ impl FolderTree {
         match unsafe { (*nm).code } {
             TVN_ITEMEXPANDINGW => {
                 let tv = unsafe { &*(nm as *const NMTREEVIEWW) };
-                if tv.action.0 & TVE_EXPAND.0 != 0 {
-                    self.start_reading(tv.itemNew.hItem, false);
+                let node = tv.itemNew.hItem;
+                // Not a node whose subfolders are shown: add_children expands the node it has just filled.
+                if tv.action.0 & TVE_EXPAND.0 != 0
+                    && send(self.hwnd, TVM_GETNEXTITEM, TVGN_CHILD as usize, node.0) == 0
+                {
+                    self.start_reading(node);
                 }
                 None
             }

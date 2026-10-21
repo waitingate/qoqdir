@@ -22,6 +22,7 @@ std::wstring locationText(const std::wstring& path); // for the address bar: the
 std::wstring childToward(const std::wstring& ancestor, const std::wstring& descendant);
 bool samePath(const std::wstring& a, const std::wstring& b);
 bool isDirectory(const std::wstring& path);
+bool exists(const std::wstring& path);           // a file or a folder is there
 bool isAbsolutePath(const std::wstring& path);   // "C:\..." or "\\server\...", not a command like "cmd"
 bool isRelativePath(const std::wstring& text);   // ".", "..\x", "sub\deeper": a place here, not a command
 // Cleans up a path; "" for This PC. Leaves %VARS% alone: a folder may really be named "%TEMP%".

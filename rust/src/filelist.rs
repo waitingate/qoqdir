@@ -4,8 +4,9 @@
 //! never borrowed while a message goes to the ListView, which can call straight back into `on_notify`.
 
 use std::cell::RefCell;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::ffi::{OsStr, OsString};
+use std::path::PathBuf;
 
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
 use windows::Win32::Graphics::Gdi::InvalidateRect;
@@ -29,7 +30,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
 use windows::core::w;
 
 use crate::folder::{Item, Listing, Location, SortKey, equal_no_case, is_shortcut, matches_filter, sort_items, to_lower, format_size, format_time};
-use crate::shell::{icon_for, set_theme, system_image_list, type_name};
+use crate::shell::{IconBatch, has_own_icon, set_theme, system_image_list, type_icon, type_name};
 use crate::util::{copy_to, focus, send, wide};
 
 const COLUMNS: [&str; 4] = ["Name", "Date modified", "Type", "Size"];
@@ -46,9 +47,17 @@ struct Model {
     ascending: bool,
 }
 
+impl Model {
+    /// The item at a row, or None past the end.
+    fn item(&self, row: usize) -> Option<&Item> {
+        self.view.get(row).map(|&i| &self.items[i])
+    }
+}
+
 pub struct FileList {
     hwnd: HWND,
     model: RefCell<Model>,
+    own_icons: RefCell<HashMap<PathBuf, i32>>, // full path -> own icon, for the folder shown
 }
 
 impl FileList {
@@ -95,6 +104,7 @@ impl FileList {
         }
         let list = FileList {
             hwnd,
+            own_icons: RefCell::new(HashMap::new()),
             model: RefCell::new(Model {
                 location: Location::ThisPc,
                 items: Vec::new(),
@@ -127,6 +137,19 @@ impl FileList {
             }
             sort_items(&mut m.items, m.key, m.ascending);
         });
+    }
+
+    /// The folder's own icons (a .exe, a .lnk), read after its listing. A late batch for a folder no longer shown is of
+    /// no use. A batch replaces the last one: the map never outgrows a folder, and a program replaced by another gets
+    /// its new icon on the next read.
+    pub fn set_icons(&self, batch: &IconBatch) {
+        if !self.location().same(&batch.dir) {
+            return;
+        }
+        *self.own_icons.borrow_mut() = batch.icons.iter().map(|(name, icon)| (batch.dir.join(name), *icon)).collect();
+        unsafe {
+            let _ = InvalidateRect(Some(self.hwnd), None, false);
+        }
     }
 
     pub fn set_filter(&self, filter: &OsStr) {
@@ -202,8 +225,7 @@ impl FileList {
         self.model.borrow().total
     }
     pub fn item(&self, row: usize) -> Option<Item> {
-        let m = self.model.borrow();
-        m.view.get(row).map(|&i| m.items[i].clone())
+        self.model.borrow().item(row).cloned()
     }
 
     // ------------------------------------------------------------ what is shown
@@ -223,13 +245,22 @@ impl FileList {
     /// How many of these rows are files (not folders), and their total size: for the status bar.
     pub fn file_sizes(&self, rows: &[usize]) -> (usize, u64) {
         let m = self.model.borrow();
-        let files = rows.iter().filter_map(|&r| m.view.get(r).map(|&i| &m.items[i])).filter(|it| !it.is_dir());
+        let files = rows.iter().filter_map(|&r| m.item(r)).filter(|it| !it.is_dir());
         files.fold((0, 0), |(n, bytes), it| (n + 1, bytes + it.size))
     }
     /// The item at a row, as a location of its own (for shell commands).
     pub fn item_location(&self, row: usize) -> Option<Location> {
         let m = self.model.borrow();
-        m.view.get(row).map(|&i| Location::dir(m.location.join(&m.items[i].name)))
+        m.item(row).map(|it| Location::dir(m.location.join(&it.name)))
+    }
+
+    /// An item's own icon if it has been read by now, else its type's.
+    fn icon_of(&self, m: &Model, it: &Item) -> i32 {
+        if it.icon >= 0 {
+            return it.icon;
+        }
+        let own = if has_own_icon(it) { self.own_icons.borrow().get(&m.location.join(&it.name)).copied() } else { None };
+        own.unwrap_or_else(|| type_icon(it))
     }
 
     pub fn selection(&self) -> Vec<usize> {
@@ -249,13 +280,13 @@ impl FileList {
     pub fn selected_items(&self) -> Vec<Item> {
         let rows = self.selection();
         let m = self.model.borrow();
-        rows.into_iter().filter_map(|r| m.view.get(r).map(|&i| m.items[i].clone())).collect()
+        rows.into_iter().filter_map(|r| m.item(r).cloned()).collect()
     }
 
     pub fn selected_names(&self) -> Vec<OsString> {
         let rows = self.selection();
         let m = self.model.borrow();
-        rows.into_iter().filter_map(|r| m.view.get(r).map(|&i| m.items[i].name.clone())).collect()
+        rows.into_iter().filter_map(|r| m.item(r).map(|it| it.name.clone())).collect()
     }
 
     pub fn focused(&self) -> Option<usize> {
@@ -266,7 +297,7 @@ impl FileList {
     pub fn focused_name(&self) -> Option<OsString> {
         let row = self.focused()?; // asks the control: before the borrow
         let m = self.model.borrow();
-        m.view.get(row).map(|&i| m.items[i].name.clone())
+        m.item(row).map(|it| it.name.clone())
     }
 
     // ------------------------------------------------------------ selection and scrolling
@@ -293,8 +324,13 @@ impl FileList {
             }
             (rows, focus_row)
         };
-        for row in rows {
-            self.set_state(Some(row), LVIS_SELECTED, LVIS_SELECTED);
+        // All of them (Ctrl+A, then a sort or a filter key) in one message, not one per row and its notification.
+        if !rows.is_empty() && rows.len() == self.count() {
+            self.select_all();
+        } else {
+            for row in rows {
+                self.set_state(Some(row), LVIS_SELECTED, LVIS_SELECTED);
+            }
         }
         self.focus_row(found.unwrap_or(0)); // something always has keyboard focus, so arrow keys work right away
         found
@@ -394,8 +430,7 @@ impl FileList {
             LVN_GETDISPINFOW => {
                 let lvi = unsafe { &mut (*(nm as *mut NMLVDISPINFOW)).item };
                 let m = self.model.borrow(); // held while painting: nothing below sends the list a message
-                let Some(&i) = m.view.get(lvi.iItem as usize) else { return Some(LRESULT(0)) };
-                let it = &m.items[i];
+                let Some(it) = m.item(lvi.iItem as usize) else { return Some(LRESULT(0)) };
                 if lvi.mask.contains(LVIF_TEXT) {
                     let text: OsString = match lvi.iSubItem {
                         0 => it.shown().to_os_string(),
@@ -407,8 +442,7 @@ impl FileList {
                     unsafe { copy_to(lvi.pszText.0, lvi.cchTextMax, &text) };
                 }
                 if lvi.mask.contains(LVIF_IMAGE) {
-                    // Not stored in the item: a file's own icon may arrive later.
-                    lvi.iImage = if it.icon >= 0 { it.icon } else { icon_for(&m.location.join(&it.name), it) };
+                    lvi.iImage = self.icon_of(&m, it); // not stored in the item: a file's own icon may come later
                 }
                 Some(LRESULT(0))
             }

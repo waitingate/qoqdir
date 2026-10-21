@@ -135,7 +135,7 @@ private:
     void setMessage(const std::wstring& text);
     // A status message once per run (5.3); with 'afterLoad', once the folder being loaded has landed.
     void hint(bool& said, const wchar_t* text, bool afterLoad = false);
-    void warn();                    // error beep
+    void warn(const std::wstring& text);   // an error: in the status bar, with a beep
     void loadSettings(const CommandLine& cmd);
     void saveSettings();
 

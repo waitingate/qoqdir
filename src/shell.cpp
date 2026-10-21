@@ -28,7 +28,7 @@ HRESULT uiObject(HWND owner, const std::wstring& path, REFIID iid, void** out) {
     Pidl pidl = pidlFromPath(path);
     Com<IShellFolder> parent;
     PCUITEMID_CHILD child = nullptr;
-    if (!pidl || FAILED(SHBindToParent(pidl.get(), IID_IShellFolder, reinterpret_cast<void**>(parent.put()), &child)))
+    if (!pidl || FAILED(SHBindToParent(pidl.get(), IID_PPV_ARGS(parent.put()), &child)))
         return E_FAIL;
     return parent->GetUIObjectOf(owner, 1, &child, iid, nullptr, out);
 }
@@ -86,7 +86,7 @@ Com<IShellFolder> shellFolder(const std::wstring& dir) {
     Pidl pidl = pidlFromPath(dir);
     if (!pidl || FAILED(SHGetDesktopFolder(desktop.put()))) return folder;
     if (pidl->mkid.cb == 0) return desktop;
-    desktop->BindToObject(pidl.get(), nullptr, IID_IShellFolder, reinterpret_cast<void**>(folder.put()));
+    desktop->BindToObject(pidl.get(), nullptr, IID_PPV_ARGS(folder.put()));
     return folder;
 }
 
@@ -124,7 +124,7 @@ HRESULT uiObject(HWND owner, const std::wstring& dir, const std::vector<Item>& i
 template <class I, class... Where>
 Com<I> shellObject(HWND owner, const Where&... where) {
     Com<I> obj;
-    uiObject(owner, where..., __uuidof(I), reinterpret_cast<void**>(obj.put()));
+    uiObject(owner, where..., IID_PPV_ARGS(obj.put()));
     return obj;
 }
 
@@ -132,8 +132,7 @@ Com<I> shellObject(HWND owner, const Where&... where) {
 template <class AddWork>
 HRESULT fileOperation(HWND owner, DWORD flags, AddWork addWork) {
     Com<IFileOperation> op;
-    HRESULT hr = CoCreateInstance(CLSID_FileOperation, nullptr, CLSCTX_ALL, IID_IFileOperation,
-                                  reinterpret_cast<void**>(op.put()));
+    HRESULT hr = CoCreateInstance(CLSID_FileOperation, nullptr, CLSCTX_ALL, IID_PPV_ARGS(op.put()));
     if (FAILED(hr)) return hr;
     op->SetOwnerWindow(owner);
     op->SetOperationFlags(flags);
@@ -192,8 +191,6 @@ const TypeInfo& typeInfo(const Item& it) {
     if (fresh) at->second = askType(it);
     return at->second;
 }
-
-std::unordered_map<std::wstring, int> g_ownIcons;   // full path -> icon; UI thread only
 }  // namespace
 
 bool hasOwnIcon(const Item& it) {
@@ -213,20 +210,7 @@ IconBatch readOwnIcons(const std::wstring& dir, const std::vector<std::wstring>&
     return batch;
 }
 
-// The shown folder's own icons. A batch replaces the last one: the cache never outgrows a folder, and a program
-// replaced by another gets its new icon on the next read.
-void rememberIcons(const IconBatch& batch) {
-    g_ownIcons.clear();
-    for (const auto& [name, icon] : batch.icons) g_ownIcons[joinPath(batch.dir, name)] = icon;
-}
-
-int iconFor(const std::wstring& path, const Item& it) {
-    if (hasOwnIcon(it)) {
-        auto found = g_ownIcons.find(path);
-        if (found != g_ownIcons.end()) return found->second;
-    }
-    return typeInfo(it).icon;
-}
+int typeIcon(const Item& it) { return typeInfo(it).icon; }
 
 void fillTypes(std::vector<Item>& items) {
     std::unordered_map<std::wstring, TypeInfo> seen;
@@ -269,7 +253,7 @@ Com<IContextMenu> itemMenu(HWND owner, const std::wstring& path) { return shellO
 Com<IContextMenu> backgroundMenu(HWND owner, const std::wstring& dir) {
     Com<IContextMenu> cm;
     if (Com<IShellFolder> folder = shellFolder(dir))
-        folder->CreateViewObject(owner, IID_IContextMenu, reinterpret_cast<void**>(cm.put()));
+        folder->CreateViewObject(owner, IID_PPV_ARGS(cm.put()));
     return cm;
 }
 
@@ -285,10 +269,8 @@ void showMenu(HWND owner, IContextMenu* cm, POINT pt, const std::function<bool(c
     if (GetKeyState(VK_SHIFT) < 0) flags |= CMF_EXTENDEDVERBS;
     if (FAILED(cm->QueryContextMenu(menu.get(), UINT(GetMenuItemCount(menu.get())), kFirstCmd, kLastCmd, flags))) return;
 
-    g_menu2.reset();
-    g_menu3.reset();
-    cm->QueryInterface(IID_IContextMenu2, reinterpret_cast<void**>(g_menu2.put()));
-    cm->QueryInterface(IID_IContextMenu3, reinterpret_cast<void**>(g_menu3.put()));
+    cm->QueryInterface(IID_PPV_ARGS(g_menu2.put()));
+    cm->QueryInterface(IID_PPV_ARGS(g_menu3.put()));
     UINT id = UINT(TrackPopupMenuEx(menu.get(), TPM_RETURNCMD | TPM_RIGHTBUTTON, pt.x, pt.y, owner, nullptr));
     g_menu2.reset();
     g_menu3.reset();
@@ -314,23 +296,15 @@ void showMenu(HWND owner, IContextMenu* cm, POINT pt, const std::function<bool(c
 }
 
 bool forwardMenuMessage(UINT msg, WPARAM wp, LPARAM lp, LRESULT* result) {
-    if (g_menu3) {
-        LRESULT r = 0;
-        if (SUCCEEDED(g_menu3->HandleMenuMsg2(msg, wp, lp, &r))) {
-            *result = r;
-            return true;
-        }
-    } else if (g_menu2 && SUCCEEDED(g_menu2->HandleMenuMsg(msg, wp, lp))) {
-        *result = 0;
-        return true;
-    }
-    return false;
+    *result = 0;
+    if (g_menu3) return SUCCEEDED(g_menu3->HandleMenuMsg2(msg, wp, lp, result));
+    return g_menu2 && SUCCEEDED(g_menu2->HandleMenuMsg(msg, wp, lp));
 }
 
-bool invokeVerb(HWND owner, IContextMenu* cm, const char* verb) {
-    if (!cm) return false;
+void invokeVerb(HWND owner, IContextMenu* cm, const char* verb) {
+    if (!cm) return;
     Menu menu(CreatePopupMenu());
-    if (!menu || FAILED(cm->QueryContextMenu(menu.get(), 0, kFirstCmd, kLastCmd, CMF_NORMAL))) return false;
+    if (!menu || FAILED(cm->QueryContextMenu(menu.get(), 0, kFirstCmd, kLastCmd, CMF_NORMAL))) return;
     std::wstring verbW(verb, verb + strlen(verb));
     CMINVOKECOMMANDINFOEX ici{};
     ici.cbSize = sizeof ici;
@@ -339,7 +313,7 @@ bool invokeVerb(HWND owner, IContextMenu* cm, const char* verb) {
     ici.lpVerb = verb;
     ici.lpVerbW = verbW.c_str();
     ici.nShow = SW_SHOWNORMAL;
-    return SUCCEEDED(cm->InvokeCommand(reinterpret_cast<CMINVOKECOMMANDINFO*>(&ici)));
+    cm->InvokeCommand(reinterpret_cast<CMINVOKECOMMANDINFO*>(&ici));
 }
 
 // ---------------------------------------------------------------- file operations
@@ -379,7 +353,7 @@ bool deleteItems(HWND owner, const std::wstring& dir, const std::vector<Item>& i
 
 HRESULT renameItem(HWND owner, const std::wstring& path, const std::wstring& newName) {
     Com<IShellItem> item;
-    HRESULT hr = SHCreateItemFromParsingName(path.c_str(), nullptr, IID_IShellItem, reinterpret_cast<void**>(item.put()));
+    HRESULT hr = SHCreateItemFromParsingName(path.c_str(), nullptr, IID_PPV_ARGS(item.put()));
     if (FAILED(hr)) return hr;
     return fileOperation(owner, FOF_ALLOWUNDO,
                          [&](IFileOperation* op) { return op->RenameItem(item.get(), newName.c_str(), nullptr); });
@@ -472,8 +446,7 @@ std::optional<std::wstring> shortcutTarget(const std::wstring& lnkPath, bool* fo
     *folder = false;
     if (extensionOf(lnkPath) != L".lnk") return std::nullopt;
     Com<IShellLinkW> link;
-    if (FAILED(CoCreateInstance(CLSID_ShellLink, nullptr, CLSCTX_INPROC_SERVER, IID_IShellLinkW,
-                                reinterpret_cast<void**>(link.put()))))
+    if (FAILED(CoCreateInstance(CLSID_ShellLink, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(link.put()))))
         return std::nullopt;
     Com<IPersistFile> file = link.as<IPersistFile>();
     if (!file || FAILED(file->Load(lnkPath.c_str(), STGM_READ))) return std::nullopt;
@@ -519,8 +492,7 @@ bool writeFolderShortcut(const std::wstring& lnk, const std::wstring& folder) {
     Com<IShellLinkW> link;
     Com<IPersistFile> file;
     return pidl &&
-           SUCCEEDED(CoCreateInstance(CLSID_ShellLink, nullptr, CLSCTX_INPROC_SERVER, IID_IShellLinkW,
-                                      reinterpret_cast<void**>(link.put()))) &&
+           SUCCEEDED(CoCreateInstance(CLSID_ShellLink, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(link.put()))) &&
            SUCCEEDED(link->SetIDList(pidl.get())) && (file = link.as<IPersistFile>()) &&
            SUCCEEDED(file->Save(lnk.c_str(), TRUE));
 }
@@ -545,7 +517,7 @@ bool saveFolderShortcuts(const std::wstring& dir, const std::vector<std::wstring
 
 bool bookmarkFolder(const std::wstring& dir, const std::wstring& folder) {
     std::wstring lnk = joinPath(dir, shortcutName(folder));
-    return GetFileAttributesW(lnk.c_str()) != INVALID_FILE_ATTRIBUTES || writeFolderShortcut(lnk, folder);
+    return exists(lnk) || writeFolderShortcut(lnk, folder);
 }
 
 std::vector<std::wstring> savedFolders(const std::wstring& dir) {
@@ -607,9 +579,7 @@ FolderWatch& FolderWatch::operator=(FolderWatch&& o) noexcept {
 }
 
 void acknowledgeChange(WPARAM wp, LPARAM lp) {
-    PIDLIST_ABSOLUTE* pidls = nullptr;
-    LONG event = 0;
-    HANDLE lock = SHChangeNotification_Lock(reinterpret_cast<HANDLE>(wp), DWORD(lp), &pidls, &event);
+    HANDLE lock = SHChangeNotification_Lock(reinterpret_cast<HANDLE>(wp), DWORD(lp), nullptr, nullptr);
     if (lock) SHChangeNotification_Unlock(lock);
 }
 
@@ -620,8 +590,7 @@ namespace {
 class DropTarget final : public IDropTarget {
 public:
     DropTarget(HWND owner, DropTargetFn target) : owner_(owner), target_(std::move(target)) {
-        CoCreateInstance(CLSID_DragDropHelper, nullptr, CLSCTX_INPROC_SERVER, IID_IDropTargetHelper,
-                         reinterpret_cast<void**>(helper_.put()));
+        CoCreateInstance(CLSID_DragDropHelper, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(helper_.put()));
     }
 
     HRESULT STDMETHODCALLTYPE QueryInterface(REFIID iid, void** out) override {
@@ -641,11 +610,8 @@ public:
     }
 
     HRESULT STDMETHODCALLTYPE DragEnter(IDataObject* data, DWORD keys, POINTL pt, DWORD* effect) override {
-        data_.reset();
-        if (data) {
-            data->AddRef();
-            *data_.put() = data;
-        }
+        if (data) data->AddRef();
+        *data_.put() = data;
         if (!aim(keys, pt, effect)) *effect = DROPEFFECT_NONE;   // still no folder (each drag starts with none)
         POINT p{pt.x, pt.y};
         if (helper_) helper_->DragEnter(owner_, data, &p, *effect);
@@ -682,7 +648,7 @@ private:
         if (folder_) folder_->DragLeave();
         folder_.reset();
         dir_ = dir;
-        if (dir) uiObject(owner_, *dir, IID_IDropTarget, reinterpret_cast<void**>(folder_.put()));
+        if (dir) folder_ = shellObject<IDropTarget>(owner_, *dir);
         if (folder_ && FAILED(folder_->DragEnter(data_.get(), keys, pt, effect))) folder_.reset();
         if (!folder_) *effect = DROPEFFECT_NONE;
         return true;
@@ -706,8 +672,10 @@ private:
 
 }  // namespace
 
-IDropTarget* newDropTarget(HWND owner, DropTargetFn target) {
-    return new DropTarget(owner, std::move(target));
+Com<IDropTarget> newDropTarget(HWND owner, DropTargetFn target) {
+    Com<IDropTarget> t;
+    *t.put() = new DropTarget(owner, std::move(target));
+    return t;
 }
 
 // ---------------------------------------------------------------- shell process

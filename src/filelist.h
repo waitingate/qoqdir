@@ -4,8 +4,10 @@
 // clears the selection with them, so no row or selection can point at the wrong file.
 
 #include "folder.h"
+#include "shell.h"
 
 #include <functional>
+#include <unordered_map>
 
 class FileList {
 public:
@@ -13,6 +15,7 @@ public:
     HWND hwnd() const { return lv_; }
 
     void setListing(Listing&& listing);   // new folder contents; keeps sort and filter
+    void setIcons(const IconBatch& batch);   // the folder's own icons (a .exe, a .lnk), read after its listing
     void setFilter(std::wstring filter);
     void setShowHidden(bool show);   // hidden items are always read; they are listed only while this is on
     bool showHidden() const { return showHidden_; }
@@ -52,11 +55,13 @@ public:
 private:
     void update(bool keepSelection, const std::function<void()>& change);
     void showSortArrow();
+    int iconOf(const Item& it) const;   // its own icon if read by now, else its type's
 
     HWND lv_ = nullptr;
     std::wstring dir_;
     std::vector<Item> items_;
     std::vector<int> view_;
+    std::unordered_map<std::wstring, int> ownIcons_;   // full path -> own icon, for the folder shown
     std::wstring filter_;
     bool showHidden_ = false;
     int total_ = 0;

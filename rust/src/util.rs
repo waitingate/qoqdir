@@ -78,6 +78,10 @@ pub fn scale(px: i32, dpi: u32) -> i32 {
     (px as i64 * dpi as i64 / 96) as i32
 }
 
+pub fn unscale(px: i32, dpi: u32) -> i32 {
+    (px as i64 * 96 / dpi as i64) as i32
+}
+
 /// Owns a shell item ID list.
 pub struct Pidl(pub *mut ITEMIDLIST);
 

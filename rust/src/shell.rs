@@ -66,7 +66,6 @@ const OWN_FIRST: u32 = 0x8000; // the app's own items' ids, after the shell's
 
 thread_local! {
     static TYPES: RefCell<HashMap<String, (i32, OsString)>> = RefCell::new(HashMap::new());
-    static OWN_ICONS: RefCell<HashMap<PathBuf, i32>> = RefCell::new(HashMap::new()); // full path -> icon
     // Set only while a context menu is on screen, for owner-drawn submenus.
     static OPEN_MENU: RefCell<(Option<IContextMenu2>, Option<IContextMenu3>)> = const { RefCell::new((None, None)) };
 }
@@ -283,23 +282,8 @@ pub fn read_own_icons(dir: &Location, names: Vec<OsString>) -> IconBatch {
     IconBatch { dir: dir.clone(), icons }
 }
 
-/// UI thread: the shown folder's own icons. A batch replaces the last one: the cache never outgrows a folder, and a
-/// program replaced by another gets its new icon on the next read.
-pub fn remember_icons(batch: &IconBatch) {
-    OWN_ICONS.with(|cache| {
-        let mut cache = cache.borrow_mut();
-        cache.clear();
-        for (name, icon) in &batch.icons {
-            cache.insert(batch.dir.join(name), *icon);
-        }
-    });
-}
-
-/// UI thread. Never touches the disk.
-pub fn icon_for(path: &Path, it: &Item) -> i32 {
-    if has_own_icon(it) && let Some(icon) = OWN_ICONS.with(|cache| cache.borrow().get(path).copied()) {
-        return icon;
-    }
+/// The icon of an item's type. UI thread; never touches the disk.
+pub fn type_icon(it: &Item) -> i32 {
     type_info(it).0
 }
 
@@ -448,15 +432,15 @@ pub fn forward_menu_message(msg: u32, wp: WPARAM, lp: LPARAM) -> Option<LRESULT>
     }
 }
 
-pub fn invoke_verb(owner: HWND, cm: Option<IContextMenu>, verb: &str) -> bool {
-    let Some(cm) = cm else { return false };
-    let Ok(menu) = (unsafe { CreatePopupMenu() }) else { return false };
+pub fn invoke_verb(owner: HWND, cm: Option<IContextMenu>, verb: &str) {
+    let Some(cm) = cm else { return };
+    let Ok(menu) = (unsafe { CreatePopupMenu() }) else { return };
     let menu = OwnedMenu(menu);
     let verb_a: Vec<u8> = verb.bytes().chain(Some(0)).collect();
     let verb_w = wide(verb);
     unsafe {
         if cm.QueryContextMenu(menu.0, 0, FIRST_CMD, LAST_CMD, CMF_NORMAL).is_err() {
-            return false;
+            return;
         }
         let ici = CMINVOKECOMMANDINFOEX {
             cbSize: size_of::<CMINVOKECOMMANDINFOEX>() as u32,
@@ -467,7 +451,7 @@ pub fn invoke_verb(owner: HWND, cm: Option<IContextMenu>, verb: &str) -> bool {
             nShow: SW_SHOWNORMAL.0,
             ..Default::default()
         };
-        cm.InvokeCommand(&ici as *const _ as *const CMINVOKECOMMANDINFO).is_ok()
+        let _ = cm.InvokeCommand(&ici as *const _ as *const CMINVOKECOMMANDINFO);
     }
 }
 
@@ -802,9 +786,7 @@ impl Drop for FolderWatch {
 
 pub fn acknowledge_change(wp: WPARAM, lp: LPARAM) {
     unsafe {
-        let mut pidls: *mut *mut ITEMIDLIST = std::ptr::null_mut();
-        let mut event = 0i32;
-        let lock = SHChangeNotification_Lock(HANDLE(wp.0 as _), lp.0 as u32, Some(&mut pidls), Some(&mut event));
+        let lock = SHChangeNotification_Lock(HANDLE(wp.0 as _), lp.0 as u32, None, None);
         if !lock.is_invalid() {
             let _ = SHChangeNotification_Unlock(lock);
         }

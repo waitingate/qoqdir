@@ -92,6 +92,8 @@ bool isDirectory(const std::wstring& path) {
     return a != INVALID_FILE_ATTRIBUTES && (a & FILE_ATTRIBUTE_DIRECTORY);
 }
 
+bool exists(const std::wstring& path) { return GetFileAttributesW(path.c_str()) != INVALID_FILE_ATTRIBUTES; }
+
 bool isAbsolutePath(const std::wstring& path) {
     return (path.size() >= 3 && path[1] == L':' && path[2] == L'\\') || isUnc(path);
 }
@@ -161,7 +163,7 @@ CommandLine parseCommandLine(const std::vector<std::wstring>& args) {
         // All after "=" is the folder, even a name that starts with "-". "-t=" is short for "--tab=", but Windows
         // PowerShell takes "-t=" for a switch of its own: unquoted, it splits "-t=my.folder" at the dot and keeps
         // "-t=$HOME" as typed, so there the folder after "-t=" needs quotes (5.10).
-        else if (arg.rfind(L"--tab=", 0) == 0 || arg.rfind(L"-t=", 0) == 0) addFolder(arg.substr(arg.find(L'=') + 1));
+        else if (arg.starts_with(L"--tab=") || arg.starts_with(L"-t=")) addFolder(arg.substr(arg.find(L'=') + 1));
         else cmd.error = L"Unknown option: " + arg;
         if (!cmd.error.empty()) break;
     }
@@ -179,6 +181,10 @@ std::vector<std::wstring> driveRoots() {
 }
 
 namespace {
+struct FindCloser {
+    void operator()(HANDLE h) const { FindClose(h); }
+};
+
 void listDrives(Listing& r) {
     for (std::wstring& root : driveRoots()) {
         Item it;
@@ -216,12 +222,10 @@ Listing listFolder(const std::wstring& path, bool showHidden, const std::functio
         r.isFile = attrs != INVALID_FILE_ATTRIBUTES && !(attrs & FILE_ATTRIBUTE_DIRECTORY);
         return r;
     }
+    std::unique_ptr<std::remove_pointer_t<HANDLE>, FindCloser> owned(h);   // closed on every return below
     size_t seen = 0;
     do {
-        if (stop && ++seen % 256 == 0 && stop()) {
-            FindClose(h);
-            return Listing{path, {}, ERROR_OPERATION_ABORTED, false};
-        }
+        if (stop && ++seen % 256 == 0 && stop()) return Listing{path, {}, ERROR_OPERATION_ABORTED};
         const wchar_t* n = fd.cFileName;
         if (n[0] == L'.' && (n[1] == 0 || (n[1] == L'.' && n[2] == 0))) continue;
         if (!showHidden && (fd.dwFileAttributes & FILE_ATTRIBUTE_HIDDEN)) continue;
@@ -233,8 +237,7 @@ Listing listFolder(const std::wstring& path, bool showHidden, const std::functio
         r.items.push_back(std::move(it));
     } while (FindNextFileW(h, &fd));
     DWORD end = GetLastError();   // ERROR_NO_MORE_FILES, or why the read broke off (e.g. the network went)
-    FindClose(h);
-    if (end != ERROR_NO_MORE_FILES) return Listing{path, {}, end, false};   // never half a folder as all of it
+    if (end != ERROR_NO_MORE_FILES) return Listing{path, {}, end};   // never half a folder as all of it
     return r;
 }
 

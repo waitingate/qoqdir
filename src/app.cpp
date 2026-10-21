@@ -180,7 +180,7 @@ bool App::create(HINSTANCE instance, const CommandLine& cmd, bool useSettings) {
     // Each button's tooltip says what it does and its key, and screen readers read the same as its name (5.1).
     tips_ = CreateWindowExW(0, TOOLTIPS_CLASSW, nullptr, WS_POPUP | TTS_ALWAYSTIP, CW_USEDEFAULT, CW_USEDEFAULT,
                             CW_USEDEFAULT, CW_USEDEFAULT, wnd_, nullptr, instance, nullptr);
-    Com<IAccPropServices> names;
+    Com<IAccPropServices> names;   // its IID by hand: MinGW's oleacc.h gives it no __uuidof for IID_PPV_ARGS
     CoCreateInstance(CLSID_AccPropServices, nullptr, CLSCTX_INPROC_SERVER, IID_IAccPropServices,
                      reinterpret_cast<void**>(names.put()));
     const std::pair<HWND, const wchar_t*> named[] = {{back_, L"Back (Alt+Left)"}, {forward_, L"Forward (Alt+Right)"},
@@ -202,17 +202,16 @@ bool App::create(HINSTANCE instance, const CommandLine& cmd, bool useSettings) {
     SetWindowSubclass(list_.hwnd(), middleClickProc, 1, 0);
     SetWindowSubclass(tree_.hwnd(), middleClickProc, 1, 0);
     // Drops land in the current folder; never in This PC, and never back onto our own drag.
-    IDropTarget* drop = newDropTarget(wnd_, [this](const POINT* pt) -> std::optional<std::wstring> {
+    Com<IDropTarget> drop = newDropTarget(wnd_, [this](const POINT* pt) -> std::optional<std::wstring> {
         if (!pt || draggingFiles_ || list_.dir().empty()) return std::nullopt;
         return list_.dir();
     });
-    RegisterDragDrop(list_.hwnd(), drop);
-    drop->Release();
+    RegisterDragDrop(list_.hwnd(), drop.get());
     // Dropping on a tab puts the files in that tab's folder.
-    *tabDrop_.put() = newDropTarget(wnd_, [this](const POINT* pt) { return tabDropTarget(pt); });
+    tabDrop_ = newDropTarget(wnd_, [this](const POINT* pt) { return tabDropTarget(pt); });
     RegisterDragDrop(tabBar_, tabDrop_.get());
     // And on a folder in the tree, in that folder; not back where they come from.
-    *treeDrop_.put() = newDropTarget(wnd_, [this](const POINT* pt) -> std::optional<std::wstring> {
+    treeDrop_ = newDropTarget(wnd_, [this](const POINT* pt) -> std::optional<std::wstring> {
         std::optional<std::wstring> dir = tree_.dropTarget(pt);
         bool fromHere = dir && draggingFiles_ && samePath(*dir, list_.dir());
         std::wstring over;   // a node that refuses says why in the status bar (5.5)
@@ -230,7 +229,6 @@ bool App::create(HINSTANCE instance, const CommandLine& cmd, bool useSettings) {
     ini_ = useSettings_ ? joinPath(parentPath(exe), toLower(kAppName) + L".ini") : L"?";
     loadSettings(cmd);
     layout();
-    showTabs();
     showTab();
     if (!startedQuiet()) focusList();   // giving a control the focus activates the window, which a quiet start may not
     watchForHangs(wnd_);
@@ -315,7 +313,7 @@ void App::layout() {
 
     int splitW = scale(kSplitterWidth, dpi_);
     int treeW = std::clamp(scale(treeWidth_, dpi_), scale(80, dpi_), std::max(scale(80, dpi_), w - scale(200, dpi_)));
-    if (dragging_) treeWidth_ = MulDiv(treeW, 96, int(dpi_));   // a drag past the edge keeps the width shown, not one past it
+    if (dragging_) treeWidth_ = unscale(treeW, dpi_);   // a drag past the edge keeps the width shown, not one past it
     int bodyH = h - statusH - y;
     place(tree_.hwnd(), 0, y, treeW, bodyH);
     place(list_.hwnd(), treeW + splitW, y, w - treeW - splitW, bodyH);
@@ -406,12 +404,9 @@ LRESULT App::onMessage(UINT msg, WPARAM wp, LPARAM lp) {
         acknowledgeChange(wp, lp);
         tree_.refreshFolder(tree_.bookmarks());
         return 0;
-    case WM_APP_ICONS: {   // the shown folder's own icons (a late batch for a folder no longer shown is of no use)
+    case WM_APP_ICONS: {   // the shown folder's own icons
         std::unique_ptr<IconBatch> batch(reinterpret_cast<IconBatch*>(lp));
-        if (samePath(list_.dir(), batch->dir)) {
-            rememberIcons(*batch);
-            InvalidateRect(list_.hwnd(), nullptr, FALSE);
-        }
+        list_.setIcons(*batch);
         return 0;
     }
     case WM_APP_TREE_ICONS: {   // bookmark shortcuts get their own icons the same way
@@ -428,8 +423,8 @@ LRESULT App::onMessage(UINT msg, WPARAM wp, LPARAM lp) {
         onMiddleClick(reinterpret_cast<HWND>(wp), {GET_X_LPARAM(lp), GET_Y_LPARAM(lp)});
         return 0;
     case WM_APP_TABS_SAVED:
-        setMessage(wp ? L"Tabs saved in Bookmarks\\Tabs, replacing the earlier set" : L"Can't save every tab in Bookmarks\\Tabs");
-        if (!wp) warn();
+        if (wp) setMessage(L"Tabs saved in Bookmarks\\Tabs, replacing the earlier set");
+        else warn(L"Can't save every tab in Bookmarks\\Tabs");
         return 0;
     case WM_APP_TABS_READ: {
         std::unique_ptr<std::vector<std::wstring>> folders(reinterpret_cast<std::vector<std::wstring>*>(lp));
@@ -500,7 +495,7 @@ LRESULT App::onMessage(UINT msg, WPARAM wp, LPARAM lp) {
     }
     case WM_MOUSEMOVE:
         if (dragging_) {
-            treeWidth_ = MulDiv(std::max(GET_X_LPARAM(lp), 0), 96, int(dpi_));
+            treeWidth_ = unscale(std::max(GET_X_LPARAM(lp), 0), dpi_);
             layout();
         }
         return 0;
@@ -827,8 +822,7 @@ bool App::onKey(const Key& key) {
             if (copyToClipboard(wnd_, list_.dir(), items, k == 'X')) {
                 setMessage(std::to_wstring(items.size()) + (k == 'X' ? L" item(s) cut" : L" item(s) copied"));
             } else {
-                setMessage(L"Can't put the items on the clipboard");
-                warn();
+                warn(L"Can't put the items on the clipboard");
             }
             return true;
         }
@@ -926,7 +920,8 @@ void App::onLoaded(Listing&& listing, UINT generation) {
     // An item a rename, delete or new folder asked for (a tab switch restores the scroll exactly instead).
     bool requested = p.nav == Nav::Refresh && view.asks();
     bool moved = p.nav == Nav::New || p.nav == Nav::Back || p.nav == Nav::Forward;
-    if (p.nav == Nav::Refresh && sameFolder) {
+    bool reload = p.nav == Nav::Refresh && sameFolder;
+    if (reload) {
         if (!view.asks()) view = currentView();
         if (view.top < 0) view.top = list_.topRow();
     }
@@ -940,7 +935,6 @@ void App::onLoaded(Listing&& listing, UINT generation) {
     t.unavailable = false;
     FILETIME written = listing.written;
     // The tree follows the folder shown: its node is read again when the subfolders or shortcuts changed (5.5).
-    bool reload = p.nav == Nav::Refresh && sameFolder;
     std::vector<std::wstring> treeNames = reload ? list_.treeNames() : std::vector<std::wstring>{};
     list_.setListing(std::move(listing));
     if (reload && treeNames != list_.treeNames()) tree_.refreshFolder(t.path);
@@ -1005,8 +999,7 @@ void App::onLoadFailed(const Listing& listing, const Pending& p) {
         EnableWindow(back_, !t.back.empty());
         EnableWindow(forward_, !t.forward.empty());
     }
-    setMessage(displayName(listing.path) + L": " + errorText(listing.error));
-    warn();
+    warn(displayName(listing.path) + L": " + errorText(listing.error));
 }
 
 // A tab never changes its folder by itself (a drive may come back): show it empty and say why. The list gets
@@ -1068,9 +1061,8 @@ void App::goToTyped() {
     // A command ("cmd", a web address...), run in the folder shown: a dead tab folder would hold up its start.
     // On This PC a relative place has no folder (Windows would open its own start folder in Explorer).
     if ((relative && tab().path.empty()) || !runCommand(wnd_, typed, list_.dir())) {
-        setMessage(L"Can't find \"" + text + L"\"");
+        warn(L"Can't find \"" + text + L"\"");
         focusEdit(address_);   // left selected, like a bad path, so it can be corrected (5.3)
-        warn();
         return;
     }
     SetWindowTextW(address_, locationText(tab().path).c_str());
@@ -1267,8 +1259,8 @@ void App::showTabs() {
 void App::bookmarkTab(int index) {
     bool ok = bookmarkFolder(tree_.bookmarks(), tabs_[size_t(index)].path);
     tree_.refreshFolder(tree_.bookmarks());
-    setMessage(ok ? L"Bookmarked" : L"Can't make the bookmark");
-    if (!ok) warn();
+    if (ok) setMessage(L"Bookmarked");
+    else warn(L"Can't make the bookmark");
 }
 
 // ---------------------------------------------------------------- saved tabs (Bookmarks\Tabs)
@@ -1323,8 +1315,7 @@ void App::newFolder() {
     for (int i = 2; !CreateDirectoryW(joinPath(dir, name).c_str(), nullptr); ++i) {
         DWORD error = GetLastError();
         if (error != ERROR_ALREADY_EXISTS || i > 999) {
-            setMessage(errorText(error));
-            warn();   // 4.9: an impossible action beeps
+            warn(errorText(error));   // 4.9: an impossible action beeps
             return;
         }
         name = L"New folder (" + std::to_wstring(i) + L")";
@@ -1355,7 +1346,8 @@ void App::showStatus() {
     SendMessageW(status_, SB_SETTEXTW, 0, reinterpret_cast<LPARAM>(s.c_str()));
 }
 
-void App::warn() {
+void App::warn(const std::wstring& text) {
+    setMessage(text);
     if (!selfTest_) MessageBeep(MB_ICONWARNING);   // self-tests trigger errors on purpose; keep them quiet
 }
 
@@ -1432,5 +1424,5 @@ void App::saveSettings() {
     number(L"SortAscending", list_.sortAscending() ? 1 : 0);
     std::vector<int> widths = list_.columnWidths();
     for (size_t i = 0; i < widths.size(); ++i)
-        number(L"Column" + std::to_wstring(i), MulDiv(widths[i], 96, int(dpi_)));
+        number(L"Column" + std::to_wstring(i), unscale(widths[i], dpi_));
 }

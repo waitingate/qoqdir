@@ -15,7 +15,7 @@ Pidl pidlFromPath(const std::wstring& path);   // "" is This PC; empty when Wind
 
 HIMAGELIST systemImageList();                          // small icons, shared by the whole process
 void setTheme(HWND control, const wchar_t* name);     // "Explorer": Explorer's look for a list or tree; "": plain
-int iconFor(const std::wstring& path, const Item& it); // UI thread only; never touches the disk
+int typeIcon(const Item& it);                          // its type's icon; UI thread only, never touches the disk
 
 // .exe, .lnk and the like have their own icon, read on a worker thread (it may need the network).
 bool hasOwnIcon(const Item& it);
@@ -24,7 +24,6 @@ struct IconBatch {
     std::vector<std::pair<std::wstring, int>> icons;   // file name, icon
 };
 IconBatch readOwnIcons(const std::wstring& dir, const std::vector<std::wstring>& names);   // worker thread
-void rememberIcons(const IconBatch& batch);                                                 // UI thread
 int folderIcon();
 // Each item's type name and, unless it has an icon of its own, its icon, from the shell's answer for the extension,
 // asked once per extension. Worker thread: a file type's icon handler (a DLL some program installed) can hang, and
@@ -53,7 +52,7 @@ void showMenu(HWND owner, IContextMenu* menu, POINT screenPt,
               const std::function<bool(const std::wstring& verb)>& intercept, const std::vector<OwnItem>& own = {});
 // Forwards owner-drawn submenu messages (Send to, Open with) while a menu is open.
 bool forwardMenuMessage(UINT msg, WPARAM wp, LPARAM lp, LRESULT* result);
-bool invokeVerb(HWND owner, IContextMenu* menu, const char* verb);
+void invokeVerb(HWND owner, IContextMenu* menu, const char* verb);
 
 // ---------------------------------------------------------------- file operations
 
@@ -119,7 +118,7 @@ void acknowledgeChange(WPARAM wp, LPARAM lp);
 
 // Drops go to the folder 'target' returns for the cursor (none: refused); nullptr means the drag left or ended.
 using DropTargetFn = std::function<std::optional<std::wstring>(const POINT* screenPt)>;
-IDropTarget* newDropTarget(HWND owner, DropTargetFn target);
+Com<IDropTarget> newDropTarget(HWND owner, DropTargetFn target);
 
 // ---------------------------------------------------------------- shell process
 

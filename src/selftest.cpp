@@ -54,20 +54,14 @@ void deleteTree(const std::wstring& dir) {
     Listing l = listFolder(dir, true);
     for (const Item& it : l.items) {
         std::wstring p = joinPath(dir, it.name);
-        SetFileAttributesW(p.c_str(), FILE_ATTRIBUTE_NORMAL);
-        if (it.attrs & FILE_ATTRIBUTE_REPARSE_POINT) {   // a junction or link: remove it, never what it points to
-            if (it.isDir()) RemoveDirectoryW(p.c_str());
-            else DeleteFileW(p.c_str());
-        } else if (it.isDir()) {
-            deleteTree(p);
-        } else {
-            DeleteFileW(p.c_str());
-        }
+        // Read-only is the one attribute that stops DeleteFileW and RemoveDirectoryW.
+        if (it.attrs & FILE_ATTRIBUTE_READONLY) SetFileAttributesW(p.c_str(), FILE_ATTRIBUTE_NORMAL);
+        if (!it.isDir()) DeleteFileW(p.c_str());
+        else if (it.attrs & FILE_ATTRIBUTE_REPARSE_POINT) RemoveDirectoryW(p.c_str());   // a junction: never followed
+        else if (!RemoveDirectoryW(p.c_str())) deleteTree(p);   // an empty folder goes without being listed
     }
     RemoveDirectoryW(dir.c_str());
 }
-
-bool exists(const std::wstring& p) { return GetFileAttributesW(p.c_str()) != INVALID_FILE_ATTRIBUTES; }
 
 std::vector<std::wstring> clipboardFiles() {
     std::vector<std::wstring> files;
@@ -88,8 +82,7 @@ std::vector<std::wstring> clipboardFiles() {
 
 void makeShortcut(const std::wstring& lnk, const std::wstring& target) {   // target "": This PC, which has no path
     Com<IShellLinkW> link;
-    if (FAILED(CoCreateInstance(CLSID_ShellLink, nullptr, CLSCTX_INPROC_SERVER, IID_IShellLinkW,
-                                reinterpret_cast<void**>(link.put()))))
+    if (FAILED(CoCreateInstance(CLSID_ShellLink, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(link.put()))))
         return;
     if (!target.empty()) link->SetPath(target.c_str());
     else if (Pidl pc = pidlFromPath(target)) link->SetIDList(pc.get());
@@ -146,6 +139,7 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
         SendMessageW(status_, SB_GETTEXTW, 1, reinterpret_cast<LPARAM>(s.data()));
         return std::wstring(s.c_str());
     };
+    auto statusHas = [statusMessage](const wchar_t* text) { return statusMessage().find(text) != std::wstring::npos; };
     auto listed = [this](const std::wstring& name) {
         for (int i = 0; i < list_.count(); ++i)
             if (list_.at(i).name == name) return true;
@@ -155,9 +149,13 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
         HWND edit = ListView_GetEditControl(list_.hwnd());
         return edit ? windowText(edit) : std::wstring();
     };
-    auto tabPoint = [this](int index) {   // the middle of a tab, in screen coordinates, where a drag is aimed
+    auto tabRect = [this](int index) {   // a tab's rectangle in the bar
         RECT r{};
         TabCtrl_GetItemRect(tabBar_, index, &r);
+        return r;
+    };
+    auto tabPoint = [this, tabRect](int index) {   // the middle of a tab, in screen coordinates, where a drag is aimed
+        RECT r = tabRect(index);
         POINT pt{(r.left + r.right) / 2, (r.top + r.bottom) / 2};
         ClientToScreen(tabBar_, &pt);
         return POINTL{pt.x, pt.y};
@@ -171,11 +169,10 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
         TabCtrl_GetItem(tabBar_, index, &item);
         return std::wstring(text);
     };
-    auto tabWidth = [this] {   // the width every tab has (0: they differ)
+    auto tabWidth = [this, tabRect] {   // the width every tab has (0: they differ)
         int width = 0;
         for (int i = 0; i < TabCtrl_GetItemCount(tabBar_); ++i) {
-            RECT r{};
-            TabCtrl_GetItemRect(tabBar_, i, &r);
+            RECT r = tabRect(i);
             if (i > 0 && r.right - r.left != width) return 0;
             width = r.right - r.left;
         }
@@ -199,6 +196,16 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
         TreeView_GetItem(tree_.hwnd(), &item);
         return item;
     };
+    auto nodeText = [this](HTREEITEM node) {
+        wchar_t text[64] = {};
+        TVITEMW item{};
+        item.mask = TVIF_TEXT;
+        item.hItem = node;
+        item.pszText = text;
+        item.cchTextMax = 64;
+        TreeView_GetItem(tree_.hwnd(), &item);
+        return std::wstring(text);
+    };
     auto expanded = [this](HTREEITEM node) {
         return (TreeView_GetItemState(tree_.hwnd(), node, TVIS_EXPANDED) & TVIS_EXPANDED) != 0;
     };
@@ -212,14 +219,15 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
             return true;
         };
     };
-    auto add = [&t](std::wstring name, std::function<void()> act, std::function<bool()> done, ULONGLONG timeout = 5000,
-                    bool whileLoading = false) -> SelfTest::Step& {
-        t.steps.push_back({std::move(name), std::move(act), std::move(done), timeout, whileLoading});
+    auto add = [&t](std::wstring name, std::function<void()> act, std::function<bool()> done,
+                    ULONGLONG timeout = 5000) -> SelfTest::Step& {
+        t.steps.push_back({std::move(name), std::move(act), std::move(done), timeout});
         return t.steps.back();
     };
     auto backHome = [&](const wchar_t* name) {   // a step that opens the test folder again
         add(name, [=, this] { open(dir, Nav::New); }, [=, this] { return at(dir); });
     };
+    auto oneTabHome = [=, this] { return tabs_.size() == 1 && at(dir); };   // back to the test folder's own tab
     static double t0 = 0, keyMs = 0;   // keyMs: how long a key press kept the window busy
     static int rows = 0;               // list rows before a refresh that must wait
     static DWORD dragEffect = 0;       // what a simulated drag was allowed to do
@@ -245,7 +253,7 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
                                                           {up_, L"Up (Backspace)"}, {refresh_, L"Refresh (F5)"}};
         for (auto [h, text] : named) {
             Com<IAccessible> acc;
-            if (FAILED(AccessibleObjectFromWindow(h, OBJID_CLIENT, IID_IAccessible, reinterpret_cast<void**>(acc.put())))) return false;
+            if (FAILED(AccessibleObjectFromWindow(h, OBJID_CLIENT, IID_PPV_ARGS(acc.put())))) return false;
             VARIANT self{};
             self.vt = VT_I4;
             self.lVal = CHILDID_SELF;
@@ -323,7 +331,7 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
         [=, this] {
             RECT rc{};
             GetClientRect(wnd_, &rc);
-            int limit = MulDiv(std::max(scale(80, dpi_), int(rc.right) - scale(200, dpi_)), 96, int(dpi_));
+            int limit = unscale(std::max(scale(80, dpi_), int(rc.right) - scale(200, dpi_)), dpi_);
             selfTest_->note = L"far " + std::to_wstring(drag->second) + L", limit " + std::to_wstring(limit) +
                               L", back to " + std::to_wstring(treeWidth_);
             return drag->second <= limit + 1 && std::abs(treeWidth_ - drag->first) <= 1 && !dragging_;
@@ -455,25 +463,21 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
         [=, this] { return at(path(L"gone")); });
     add(L"...that another program deletes stays in its tab, shown as not available",
         [=, this] { RemoveDirectoryW(path(L"gone").c_str()); },
-        [=, this] {
-            return at(path(L"gone")) && list_.count() == 0 && statusMessage().find(L"not available") != std::wstring::npos;
-        });
+        [=, this] { return at(path(L"gone")) && list_.count() == 0 && statusHas(L"not available"); });
     // The tab keeps its gone folder (4.3), which a command must not get as its working folder.
     add(L"(F5 while it is still gone keeps it shown as not available)", [=, this] { selfTestKey(VK_F5); },
-        [=, this] {
-            return at(path(L"gone")) && list_.count() == 0 && statusMessage().find(L"not available") != std::wstring::npos;
-        });
+        [=, this] { return at(path(L"gone")) && list_.count() == 0 && statusHas(L"not available"); });
     add(L"a command typed there still runs (the dead folder is not its working folder)",
         [=, this] { goTo(L"rundll32"); },
-        [=, this] { return at(path(L"gone")) && statusMessage().find(L"not available") != std::wstring::npos; });
+        [=, this] { return at(path(L"gone")) && statusHas(L"not available"); });
     add(L"F5 tries again once it is back", [=, this] { CreateDirectoryW(path(L"gone").c_str(), nullptr); selfTestKey(VK_F5); },
         [=, this] { return at(path(L"gone")) && statusMessage().empty(); });
     add(L"(back up to the test folder)", [=, this] { SetFocus(list_.hwnd()); selfTestKey(VK_BACK); }, [=, this] { return at(dir); });
     add(L"Ctrl+T opens a tab of the same folder", [=, this] { selfTestKey('T', true); },
-        [=, this] { return idle() && tabs_.size() == 2 && at(dir); });
-    add(L"Ctrl+W closes it", [=, this] { selfTestKey('W', true); }, [=, this] { return idle() && tabs_.size() == 1 && at(dir); });
+        [=, this] { return tabs_.size() == 2 && at(dir); });
+    add(L"Ctrl+W closes it", [=, this] { selfTestKey('W', true); }, oneTabHome);
     add(L"Ctrl+W on the last tab keeps it (the last tab cannot be closed)", [=, this] { selfTestKey('W', true); },
-        [=, this] { return idle() && tabs_.size() == 1 && at(dir); });
+        oneTabHome);
     add(L"Ctrl+Shift+PgDn moves the tab one place right, and no further; it stays the current tab",
         [=, this] {
             newTab(path(L"sub"), false);   // a second tab, right of this one
@@ -493,19 +497,13 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
             return tabs_.size() == 2 && samePath(tabs_[1].path, path(L"sub")) && active_ == 0 &&
                    TabCtrl_GetCurSel(tabBar_) == 0 && at(dir);
         });
-    add(L"(close that tab)", [=, this] { closeTab(1); }, [=, this] { return idle() && tabs_.size() == 1 && at(dir); });
-    auto dragAlongBar = [this](int from, int x) {   // a mouse drag of tab 'from' to x, as the tab bar gets it
-        RECT r{};
-        TabCtrl_GetItemRect(tabBar_, from, &r);
+    add(L"(close that tab)", [=, this] { closeTab(1); }, oneTabHome);
+    auto dragAlongBar = [this, tabRect](int from, int x) {   // a mouse drag of tab 'from' to x, as the tab bar gets it
+        RECT r = tabRect(from);
         int y = (r.top + r.bottom) / 2;
         SendMessageW(tabBar_, WM_LBUTTONDOWN, MK_LBUTTON, MAKELPARAM((r.left + r.right) / 2, y));
         SendMessageW(tabBar_, WM_MOUSEMOVE, MK_LBUTTON, MAKELPARAM(x, y));
         SendMessageW(tabBar_, WM_LBUTTONUP, 0, MAKELPARAM(x, y));
-    };
-    auto tabEdge = [this](int index, bool right) {   // a tab's left or right edge, just inside it
-        RECT r{};
-        TabCtrl_GetItemRect(tabBar_, index, &r);
-        return right ? r.right - 1 : r.left + 1;
     };
     auto wheel = [this, tabPoint](int delta) {   // the mouse wheel turned with the cursor over the tab bar
         POINTL pt = tabPoint(0);
@@ -516,14 +514,14 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
         [=, this] {
             newTab(path(L"sub"), false);
             newTab(L"", false);   // tabs: the test folder, sub, This PC
-            dragAlongBar(0, tabEdge(1, false));   // a slip during a click, short of the next tab's middle
-            dragAlongBar(1, tabEdge(2, true));
+            dragAlongBar(0, tabRect(1).left + 1);   // a slip during a click, short of the next tab's middle
+            dragAlongBar(1, tabRect(2).right - 1);
         },
         [=, this] {
             return tabs_.size() == 3 && samePath(tabs_[0].path, dir) && tabs_[1].path.empty() && active_ == 2 &&
                    TabCtrl_GetCurSel(tabBar_) == 2 && at(path(L"sub"));
         });
-    add(L"dragging it back to the start puts it first", [=, this] { dragAlongBar(2, tabEdge(0, false)); },
+    add(L"dragging it back to the start puts it first", [=, this] { dragAlongBar(2, tabRect(0).left + 1); },
         [=, this] {
             return samePath(tabs_[1].path, dir) && tabs_[2].path.empty() && active_ == 0 &&
                    TabCtrl_GetCurSel(tabBar_) == 0 && at(path(L"sub"));
@@ -534,13 +532,13 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
             wheel(-120);
             wheel(-120);   // past the last tab: nothing
         },
-        [=, this] { return idle() && active_ == 2 && at(L""); });
+        [=, this] { return active_ == 2 && at(L""); });
     add(L"turning the wheel the other way goes back to the first tab, and stops there",
         [=, this] { for (int i = 0; i < 3; ++i) wheel(120); },
-        [=, this] { return idle() && active_ == 0 && at(path(L"sub")); });
+        [=, this] { return active_ == 0 && at(path(L"sub")); });
     add(L"the current tab's name, and only its, starts with a bullet", nullptr, [=, this] {
         for (int i = 0; i < int(tabs_.size()); ++i)
-            if ((caption(i).rfind(L"• ", 0) == 0) != (i == active_)) return false;
+            if (caption(i).starts_with(L"• ") != (i == active_)) return false;
         return true;
     });
     add(L"a new tab goes at the end, so the newest is the last one", [=, this] { selfTestKey('T', true); },
@@ -549,11 +547,10 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
                    at(path(L"sub"));
         });
     add(L"(close the other tabs)", [=, this] { closeOtherTabs(1); },   // keeps the test folder's own tab
-        [=, this] { return idle() && tabs_.size() == 1 && at(dir); });
+        oneTabHome);
     add(L"a double-click on a tab opens no tab; one on the empty bar right of the tabs opens one, as \"+\" does",
         [=, this] {
-            RECT r{};
-            TabCtrl_GetItemRect(tabBar_, 0, &r);
+            RECT r = tabRect(0);
             int y = (r.top + r.bottom) / 2;
             for (int x : {(r.left + r.right) / 2, r.right + scale(20, dpi_)}) {   // on the tab, then right of it
                 SendMessageW(tabBar_, WM_LBUTTONDBLCLK, MK_LBUTTON, MAKELPARAM(x, y));
@@ -561,14 +558,14 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
             }
         },
         [=, this] {
-            RECT r{};   // a real click lands only where the bar says it is its own: right of the last tab
-            TabCtrl_GetItemRect(tabBar_, TabCtrl_GetItemCount(tabBar_) - 1, &r);
+            // A real click lands only where the bar says it is its own: right of the last tab.
+            RECT r = tabRect(TabCtrl_GetItemCount(tabBar_) - 1);
             POINT pt{r.right + scale(20, dpi_), (r.top + r.bottom) / 2};
             ClientToScreen(tabBar_, &pt);
             bool takesClick = SendMessageW(tabBar_, WM_NCHITTEST, 0, MAKELPARAM(pt.x, pt.y)) == HTCLIENT;
-            return idle() && takesClick && tabs_.size() == 2 && active_ == 1 && at(dir);
+            return takesClick && tabs_.size() == 2 && active_ == 1 && at(dir);
         });
-    add(L"(close it)", [=, this] { closeTab(1); }, [=, this] { return idle() && tabs_.size() == 1 && at(dir); });
+    add(L"(close it)", [=, this] { closeTab(1); }, oneTabHome);
     add(L"a lone tab is 150 wide at 100% scaling", nullptr, [=, this] { return tabWidth() == scale(150, dpi_); });
     std::wstring longName = path(L"a folder with a name too long for its tab");   // never opened: only its caption
     auto openTabsPast = [=, this](int width) {   // background tabs until more are open than fit at that width
@@ -579,9 +576,9 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
     add(L"when more tabs are open than fit that wide, all get narrower alike, and all still show",
         [=, this] { openTabsPast(scale(150, dpi_)); },
         [=, this] {
-            RECT bar{}, last{};
+            RECT bar{};
             GetClientRect(tabBar_, &bar);
-            TabCtrl_GetItemRect(tabBar_, int(tabs_.size()) - 1, &last);
+            RECT last = tabRect(int(tabs_.size()) - 1);
             int width = tabWidth();
             selfTest_->note = std::to_wstring(tabs_.size()) + L" tabs " + std::to_wstring(width) + L" wide";
             return width >= scale(80, dpi_) && width < scale(150, dpi_) && last.right <= bar.right;
@@ -591,14 +588,14 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
             HWND arrows = FindWindowExW(tabBar_, nullptr, UPDOWN_CLASSW, nullptr);
             return tabWidth() == scale(80, dpi_) && arrows && IsWindowVisible(arrows);
         });
-    add(L"(close them)", [=, this] { closeOtherTabs(active_); }, [=, this] { return idle() && tabs_.size() == 1 && at(dir); });
+    add(L"(close them)", [=, this] { closeOtherTabs(active_); }, oneTabHome);
     add(L"a tab the control selects by itself (as assistive tools select one) switches to its folder",
         [=, this] {
             newTab(path(L"sub"), false);        // a second tab, right of this one
             TabCtrl_SetCurFocus(tabBar_, 1);   // on plain tabs this selects, and notifies the window as a click would
         },
-        [=, this] { return idle() && active_ == 1 && at(path(L"sub")); });
-    add(L"(close that tab)", [=, this] { closeTab(1); }, [=, this] { return idle() && tabs_.size() == 1 && at(dir); });
+        [=, this] { return active_ == 1 && at(path(L"sub")); });
+    add(L"(close that tab)", [=, this] { closeTab(1); }, oneTabHome);
     // What Windows sends when the window reaches a monitor with another scaling: the dots per inch there, and where
     // the window goes.
     static UINT dpi0 = 0;
@@ -655,7 +652,7 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
             return at(path(L"sub")) && selfTest_->note == L"address bar switched" && !exists(path(L"New folder")) &&
                    !exists(path(L"sub\\New folder"));
         });
-    add(L"(close that tab)", [=, this] { closeTab(active_); }, [=, this] { return idle() && tabs_.size() == 1 && at(dir); });
+    add(L"(close that tab)", [=, this] { closeTab(active_); }, oneTabHome);
     add(L"a typed path that fails while a rename box is open leaves the box alone",
         [=, this] {
             // The failure lands after the rename box opens (a dead share fails a minute later).
@@ -696,8 +693,7 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
         [=, this] {
             DWORD from = 0, to = 0;   // the text stays selected, so it can be corrected (5.3)
             SendMessageW(address_, EM_GETSEL, WPARAM(&from), LPARAM(&to));
-            return at(dir) && statusMessage().find(L"Can't find") != std::wstring::npos && from == 0 &&
-                   int(to) == GetWindowTextLengthW(address_);
+            return at(dir) && statusHas(L"Can't find") && from == 0 && int(to) == GetWindowTextLengthW(address_);
         });
     add(L"a program typed by name is Windows' own, not a file of that name in the folder shown",
         [=, this] {
@@ -716,7 +712,7 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
         [=, this] { setMessage(L""); goTo(L"."); },
         [=, this] {
             selfTest_->note = L"status: " + statusMessage();
-            return at(L"") && statusMessage().find(L"Can't find") != std::wstring::npos;
+            return at(L"") && statusHas(L"Can't find");
         });
     backHome(L"(back to the test folder from This PC)");
 
@@ -731,7 +727,8 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
             selfTest_->note = L"Enter took " + std::to_wstring(int(keyMs)) + L" ms";
         },
         [=, this] { return keyMs < 500; });
-    add(L"...and opening another folder cancels it", [=, this] { open(dir, Nav::New); }, [=, this] { return at(dir); }, 5000, true);
+    add(L"...and opening another folder cancels it", [=, this] { open(dir, Nav::New); },
+        [=, this] { return at(dir); }).whileLoading = true;
     add(L"typing a subfolder's name opens it here (not in Explorer)", [=, this] { goTo(L"sub"); },
         [=, this] { return at(path(L"sub")); });
     add(L"typing ..\\ goes up", [=, this] { goTo(L"..\\"); }, [=, this] { return at(dir); });
@@ -842,7 +839,7 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
             SendMessageW(wnd_, WM_TIMER, kRefreshTimer, 0);          // and the queued refresh fires
         },
         [=, this] {
-            return idle() && tab().unavailable && statusMessage().find(L"not available") != std::wstring::npos;
+            return idle() && tab().unavailable && statusHas(L"not available");
         });
     add(L"(F5 shows it again)", [=, this] { selfTestKey(VK_F5); }, [=, this] { return at(dir) && !tab().unavailable; });
 
@@ -889,7 +886,7 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
         return samePath(tabs_[1].path, path(L"sub")) && samePath(tabs_[2].path, path(L"sub"));   // not "sub\"
     });
     add(L"(close those tabs)", [=, this] { closeTab(1); closeTab(1); },
-        [=, this] { return idle() && tabs_.size() == 1 && at(dir); });
+        oneTabHome);
     add(L"in a network folder that is not available, paste, new folder and a drag over its tab return at once",
         [=, this] {
             // As if this tab's folder had just failed to load (a real failure can take minutes to arrive).
@@ -938,7 +935,7 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
         },
         enterWhen([=, this] { return list_.focusedName() == L"gone.lnk"; }));
     add(L"(the status bar names the missing folder, and the tab stays put)", nullptr,
-        [=, this] { return at(dir) && statusMessage().find(L"no-such-folder") != std::wstring::npos; });
+        [=, this] { return at(dir) && statusHas(L"no-such-folder"); });
     add(L"a bookmark whose drive letter is gone (a flash drive that came back under another letter) opens its folder "
         L"where the shortcut says it is, relative to itself (5.6)",
         [=, this] {
@@ -958,13 +955,7 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
         },
         [=, this] { return at(path(L"pack\\target")); });
     backHome(L"(back to the test folder)");
-    add(L"(remove them)",
-        [=, this] {
-            DeleteFileW(path(L"pack\\go.lnk").c_str());
-            RemoveDirectoryW(path(L"pack\\target").c_str());
-            RemoveDirectoryW(path(L"pack").c_str());
-        },
-        [=, this] { return !exists(path(L"pack")); });
+    add(L"(remove them)", [=, this] { deleteTree(path(L"pack")); }, [=, this] { return !exists(path(L"pack")); });
     add(L"a shortcut to This PC opens This PC here (not in Explorer)",
         [=, this] {
             makeShortcut(path(L"pc.lnk"), L"");
@@ -1009,8 +1000,7 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
             volumeChange(DBT_DEVICEREMOVECOMPLETE);
         },
         [=, this] {
-            return at(path(L"sub\\deep")) && list_.count() == 0 &&
-                   statusMessage().find(L"not available") != std::wstring::npos;
+            return at(path(L"sub\\deep")) && list_.count() == 0 && statusHas(L"not available");
         });
     add(L"(back to the test folder)", reopenHome, [=, this] { return at(dir); });
 
@@ -1053,14 +1043,7 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
             return ordered;
         });
     add(L"the Bookmarks folder is created and shown at the top of the tree", nullptr, [=, this] {
-        TVITEMW item{};
-        item.mask = TVIF_TEXT;
-        wchar_t text[64] = {};
-        item.pszText = text;
-        item.cchTextMax = 64;
-        item.hItem = TreeView_GetRoot(tree_.hwnd());
-        TreeView_GetItem(tree_.hwnd(), &item);
-        return isDirectory(path(L"Bookmarks")) && std::wstring(text) == L"Bookmarks";
+        return isDirectory(path(L"Bookmarks")) && nodeText(TreeView_GetRoot(tree_.hwnd())) == L"Bookmarks";
     });
     add(L"right-click menus can be built for This PC, a drive and a file", nullptr, [=, this] {
         return itemMenu(wnd_, L"") && itemMenu(wnd_, L"C:\\") && itemMenu(wnd_, path(L"file1.txt"));
@@ -1145,22 +1128,15 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
             // Done when the subfolders are shown, or the node knows it has none.
             return expected > 0 ? shown == expected : treeItem(root, TVIF_CHILDREN).cChildren == 0;
         });
-    auto nodeTexts = [this](HTREEITEM first) {   // the texts of a node and its next siblings, comma-separated
+    auto nodeTexts = [this, nodeText](HTREEITEM first) {   // the texts of a node and its next siblings, comma-separated
         std::wstring texts;
-        for (HTREEITEM c = first; c; c = TreeView_GetNextSibling(tree_.hwnd(), c)) {
-            wchar_t text[64] = {};
-            TVITEMW item{};
-            item.mask = TVIF_TEXT;
-            item.hItem = c;
-            item.pszText = text;
-            item.cchTextMax = 64;
-            TreeView_GetItem(tree_.hwnd(), &item);
-            texts += (texts.empty() ? L"" : L",") + std::wstring(text);
-        }
+        for (HTREEITEM c = first; c; c = TreeView_GetNextSibling(tree_.hwnd(), c))
+            texts += (texts.empty() ? L"" : L",") + nodeText(c);
         return texts;
     };
+    auto one = [this] { return TreeView_GetChild(tree_.hwnd(), TreeView_GetRoot(tree_.hwnd())); };   // the first bookmark
     auto bookmarkNodes = [=, this] {   // the texts under Bookmarks, the tree's first root
-        return nodeTexts(TreeView_GetChild(tree_.hwnd(), TreeView_GetRoot(tree_.hwnd())));
+        return nodeTexts(one());
     };
     auto rootTexts = [=, this] { return nodeTexts(TreeView_GetRoot(tree_.hwnd())); };
     auto twoRoots = std::make_shared<bool>(false);
@@ -1203,13 +1179,12 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
             if (bookmarkNodes() != L"one,sub") return false;
             // The shortcut's own icon arrives after its node (it may wait on the target).
             SHFILEINFOW own = fileInfo(path(L"Bookmarks\\sub.lnk"), 0, SHGFI_SYSICONINDEX | SHGFI_SMALLICON).value_or(SHFILEINFOW{});
-            HWND tv = tree_.hwnd();
-            HTREEITEM sub = TreeView_GetNextSibling(tv, TreeView_GetChild(tv, TreeView_GetRoot(tv)));
+            HTREEITEM sub = TreeView_GetNextSibling(tree_.hwnd(), one());
             return treeItem(sub, TVIF_IMAGE).iImage == own.iIcon;
         });
     add(L"choosing a bookmark shortcut in the tree opens its folder",
         [=, this] {
-            TreeView_SelectItem(tree_.hwnd(), TreeView_GetChild(tree_.hwnd(), TreeView_GetRoot(tree_.hwnd())));   // "one"
+            TreeView_SelectItem(tree_.hwnd(), one());
             SendMessageW(tree_.hwnd(), WM_KEYDOWN, VK_DOWN, 0);   // to "sub", as the user would
         },
         [=, this] { return at(path(L"sub")); });
@@ -1229,7 +1204,7 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
         [=, this] {
             CreateDirectoryW(path(L"Bookmarks\\one\\deep").c_str(), nullptr);
             HWND tv = tree_.hwnd();
-            TreeView_Expand(tv, TreeView_GetChild(tv, TreeView_GetRoot(tv)), TVE_EXPAND);   // "one": its read starts
+            TreeView_Expand(tv, one(), TVE_EXPAND);   // its read starts
             TreeView_SelectItem(tv, TreeView_GetRoot(tv));
             SendMessageW(tv, WM_KEYDOWN, VK_LEFT, 0);    // collapse Bookmarks: deletes "one" before its read lands
             SendMessageW(tv, WM_KEYDOWN, VK_RIGHT, 0);   // and read it fresh
@@ -1238,7 +1213,7 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
             // Both reads landed: no late "deep" under Bookmarks, and every node the tree counts is reachable.
             HWND tv = tree_.hwnd();
             if (GetTickCount64() - selfTest_->startTick < 400 || bookmarkNodes() != L"one,two,sub") return false;
-            for (HTREEITEM c = TreeView_GetChild(tv, TreeView_GetRoot(tv)); c; c = TreeView_GetNextSibling(tv, c))
+            for (HTREEITEM c = one(); c; c = TreeView_GetNextSibling(tv, c))
                 if (TreeView_GetChild(tv, c)) return false;
             std::function<UINT(HTREEITEM)> count = [&](HTREEITEM n) {
                 UINT k = 0;
@@ -1249,14 +1224,9 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
         });
     add(L"(expand a bookmark folder in the tree)",
         [=, this] {
-            HWND tv = tree_.hwnd();
-            TreeView_Expand(tv, TreeView_GetChild(tv, TreeView_GetRoot(tv)), TVE_EXPAND);   // "one"
+            TreeView_Expand(tree_.hwnd(), one(), TVE_EXPAND);
         },
-        [=, this] {
-            HWND tv = tree_.hwnd();
-            return TreeView_GetChild(tv, TreeView_GetChild(tv, TreeView_GetRoot(tv))) != nullptr;   // "deep" is shown
-        });
-    auto one = [this] { return TreeView_GetChild(tree_.hwnd(), TreeView_GetRoot(tree_.hwnd())); };   // the first bookmark
+        [=, this] { return TreeView_GetChild(tree_.hwnd(), one()) != nullptr; });   // "deep" is shown
     add(L"collapsing a folder while F5 reads it again leaves it collapsed, with its arrow (4.5)",
         [=, this] {
             TreeView_SelectItem(tree_.hwnd(), one());   // open, with "deep"
@@ -1335,10 +1305,7 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
         ClientToScreen(tree_.hwnd(), &pt);
         return POINTL{pt.x, pt.y};
     };
-    auto two = [this] {   // Bookmarks' folder "two", closed
-        HWND tv = tree_.hwnd();
-        return TreeView_GetNextSibling(tv, TreeView_GetChild(tv, TreeView_GetRoot(tv)));
-    };
+    auto two = [=, this] { return TreeView_GetNextSibling(tree_.hwnd(), one()); };   // Bookmarks' folder "two", closed
     auto dragged = std::make_shared<Com<IDataObject>>();
     add(L"This PC in the tree takes no drop",
         [=, this] {
@@ -1440,7 +1407,7 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
             closeTab(1);
             deleteTree(path(L"Bookmarks\\Tabs"));
         },
-        [=, this] { return tabs_.size() == 1 && at(dir); });
+        oneTabHome);
     add(L"Bookmark this folder on a tab's menu writes a shortcut to the tab's folder in Bookmarks and shows it in the "
         L"tree (5.6)",
         [=, this] { bookmarkTab(active_); },
@@ -1632,13 +1599,13 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
     // would reload This PC for nothing, and This PC's own changes would go unseen (4.5).
     add(L"(a tab for This PC, shown by switching to it)", [=, this] { newTab(L"", true); },
         [=, this] { return at(L"") && tabs_.size() == 2 && active_ == 1; });
-    auto unwatched = std::make_shared<std::pair<int, ULONGLONG>>();   // loads done so far, and when the check began
+    auto unwatched = std::make_shared<int>(0);   // loads done before the change
     add(L"switching to a This PC tab drops the other tab's watch: a change in that folder reloads nothing (4.5)",
-        [=, this] { *unwatched = {loadsDone_, 0}; writeFile(path(L"big\\zz unwatched.dat")); },
+        [=, this] { *unwatched = loadsDone_; writeFile(path(L"big\\zz unwatched.dat")); },
         [=, this] {
-            if (!unwatched->second) unwatched->second = GetTickCount64();
-            selfTest_->note = std::to_wstring(loadsDone_ - unwatched->first) + L" reload(s)";
-            return GetTickCount64() - unwatched->second >= 800 && loadsDone_ == unwatched->first;   // 0.8 s of nothing (the watch's refresh comes at 400 ms)
+            selfTest_->note = std::to_wstring(loadsDone_ - *unwatched) + L" reload(s)";
+            // 0.8 s of nothing (the watch's refresh comes at 400 ms).
+            return GetTickCount64() - selfTest_->startTick >= 800 && loadsDone_ == *unwatched;
         });
     add(L"(remove that file and close the tab)",
         [=, this] { DeleteFileW(path(L"big\\zz unwatched.dat").c_str()); closeTab(1); },

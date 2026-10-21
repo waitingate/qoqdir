@@ -45,7 +45,7 @@ public:
 private:
     HTREEITEM add(HTREEITEM parent, const std::wstring& path, const std::wstring& text, int icon, bool leaf = false,
                   HTREEITEM after = TVI_LAST);
-    void startReading(HTREEITEM node, bool again = false);   // again: also when its subfolders are shown
+    void startReading(HTREEITEM node);
     void reread(HTREEITEM node);   // what refresh() does for one node
     // Runs `reader` on a worker thread to fill a batch, then posts it as the children of `node`.
     void startWorker(HTREEITEM node, std::function<void(TreeBatch&)> reader);

@@ -46,6 +46,15 @@ void FileList::setListing(Listing&& listing) {
     });
 }
 
+// A late batch for a folder no longer shown is of no use. A batch replaces the last one: the map never outgrows a
+// folder, and a program replaced by another gets its new icon on the next read.
+void FileList::setIcons(const IconBatch& batch) {
+    if (!samePath(dir_, batch.dir)) return;
+    ownIcons_.clear();
+    for (const auto& [name, icon] : batch.icons) ownIcons_[joinPath(batch.dir, name)] = icon;
+    InvalidateRect(lv_, nullptr, FALSE);
+}
+
 void FileList::setFilter(std::wstring filter) {
     if (filter == filter_) return;
     update(true, [&] { filter_ = filter; });
@@ -104,6 +113,15 @@ std::vector<std::wstring> FileList::treeNames() const {
     return names;
 }
 
+int FileList::iconOf(const Item& it) const {
+    if (it.icon >= 0) return it.icon;
+    if (hasOwnIcon(it)) {
+        auto found = ownIcons_.find(joinPath(dir_, it.name));
+        if (found != ownIcons_.end()) return found->second;
+    }
+    return typeIcon(it);
+}
+
 std::vector<int> FileList::selection() const {
     std::vector<int> rows;
     for (int i = ListView_GetNextItem(lv_, -1, LVNI_SELECTED); i >= 0; i = ListView_GetNextItem(lv_, i, LVNI_SELECTED))
@@ -142,11 +160,15 @@ int FileList::select(const std::vector<std::wstring>& names, const std::wstring&
         std::unordered_set<std::wstring> wanted;
         for (const auto& n : names) wanted.insert(toLower(n));
         std::wstring focusLower = toLower(focus);
+        std::vector<int> rows;
         for (int row = 0; row < count(); ++row) {
             std::wstring name = toLower(at(row).name);
-            if (wanted.count(name)) ListView_SetItemState(lv_, row, LVIS_SELECTED, LVIS_SELECTED);
+            if (wanted.count(name)) rows.push_back(row);
             if (found < 0 && name == focusLower) found = row;
         }
+        // All of them (Ctrl+A, then a sort or a filter key) in one message, not one per row and its notification.
+        if (!rows.empty() && int(rows.size()) == count()) selectAll();
+        else for (int row : rows) ListView_SetItemState(lv_, row, LVIS_SELECTED, LVIS_SELECTED);
     }
     focusRow(found >= 0 ? found : 0);   // something always has keyboard focus, so arrow keys work right away
     return found;
@@ -216,7 +238,7 @@ bool FileList::onNotify(NMHDR* nm, LRESULT* result) {
     case LVN_GETDISPINFOW: {
         LVITEMW& lvi = reinterpret_cast<NMLVDISPINFOW*>(nm)->item;
         if (lvi.iItem < 0 || lvi.iItem >= count()) return true;
-        Item& it = items_[view_[lvi.iItem]];
+        const Item& it = at(lvi.iItem);
         if ((lvi.mask & LVIF_TEXT) && lvi.pszText && lvi.cchTextMax > 0) {
             std::wstring text;
             switch (lvi.iSubItem) {
@@ -227,8 +249,7 @@ bool FileList::onNotify(NMHDR* nm, LRESULT* result) {
             }
             lstrcpynW(lvi.pszText, text.c_str(), lvi.cchTextMax);
         }
-        if (lvi.mask & LVIF_IMAGE)   // not stored in the item: a file's own icon may arrive later
-            lvi.iImage = it.icon >= 0 ? it.icon : iconFor(joinPath(dir_, it.name), it);
+        if (lvi.mask & LVIF_IMAGE) lvi.iImage = iconOf(it);   // not stored in the item: a file's own icon may come later
         return true;
     }
     case LVN_COLUMNCLICK: {

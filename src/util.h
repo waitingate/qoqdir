@@ -33,7 +33,7 @@ public:
     template <class U>
     Com<U> as() const {
         Com<U> r;
-        if (p_) p_->QueryInterface(__uuidof(U), reinterpret_cast<void**>(r.put()));
+        if (p_) p_->QueryInterface(IID_PPV_ARGS(r.put()));
         return r;
     }
 
@@ -60,3 +60,4 @@ using Font = std::unique_ptr<std::remove_pointer_t<HFONT>, FontDeleter>;
 constexpr wchar_t kAppName[] = L"Qoqdir";
 
 inline int scale(int px, UINT dpi) { return MulDiv(px, static_cast<int>(dpi), 96); }
+inline int unscale(int px, UINT dpi) { return MulDiv(px, 96, static_cast<int>(dpi)); }

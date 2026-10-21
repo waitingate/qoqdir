@@ -60,7 +60,7 @@ use crate::shell::{
 };
 use windows::core::Interface;
 
-use crate::util::{focus, from_wide, pcwstr, scale, send, set_text, wide, window_text};
+use crate::util::{focus, from_wide, pcwstr, scale, send, set_text, unscale, wide, window_text};
 
 type Act = Rc<dyn Fn(&App)>;
 type Check = Rc<dyn Fn(&App) -> bool>;
@@ -137,7 +137,6 @@ thread_local! {
     static DRAGGED: RefCell<Option<IDataObject>> = const { RefCell::new(None) }; // what a simulated drag carries
     static COUNT: Cell<u32> = const { Cell::new(0) };   // a load count to compare with
     static LOADS: Cell<(u32, u32)> = const { Cell::new((0, 0)) };
-    static UNWATCHED: Cell<(u32, Option<Instant>)> = const { Cell::new((0, None)) }; // loads done so far, and when the check began
     static FLAG: Cell<bool> = const { Cell::new(false) };
     static NEXT: RefCell<OsString> = const { RefCell::new(OsString::new()) }; // the item after the one Delete removes
     static RUN: RefCell<Option<SelfTest>> = const { RefCell::new(None) }; // the steps, and how far the run is
@@ -465,8 +464,7 @@ impl App {
 
     /// The middle of a tab, in screen coordinates, where a drag is aimed.
     fn tab_point(&self, index: usize) -> POINTL {
-        let mut r = RECT::default();
-        send(self.tab_bar, TCM_GETITEMRECT, index, &mut r as *mut _ as isize);
+        let r = tab_rect(self, index);
         let mut pt = POINT { x: (r.left + r.right) / 2, y: (r.top + r.bottom) / 2 };
         unsafe {
             let _ = ClientToScreen(self.tab_bar, &mut pt);
@@ -486,9 +484,14 @@ impl App {
         send(self.tree.hwnd(), TVM_GETNEXTITEM, TVGN_NEXT as usize, node)
     }
 
+    /// Bookmarks' folder "one", the first.
+    fn tree_one(&self) -> isize {
+        self.tree_child(self.tree_root())
+    }
+
     /// Bookmarks' folder "two".
     fn tree_two(&self) -> isize {
-        self.tree_next(self.tree_child(self.tree_root()))
+        self.tree_next(self.tree_one())
     }
 
     /// The middle of a tree node, in screen coordinates, where a drag is aimed.
@@ -522,21 +525,29 @@ impl App {
         item
     }
 
+    fn expanded(&self, node: isize) -> bool {
+        send(self.tree.hwnd(), TVM_GETITEMSTATE, node as usize, TVIS_EXPANDED.0 as isize) & TVIS_EXPANDED.0 as isize != 0
+    }
+
+    fn node_text(&self, node: isize) -> String {
+        let mut text = [0u16; 64];
+        let mut item = TVITEMW {
+            mask: TVIF_TEXT,
+            hItem: HTREEITEM(node),
+            pszText: windows::core::PWSTR(text.as_mut_ptr()),
+            cchTextMax: 64,
+            ..Default::default()
+        };
+        send(self.tree.hwnd(), TVM_GETITEMW, 0, &mut item as *mut _ as isize);
+        from_wide(&text).to_string_lossy().into_owned()
+    }
+
     /// The texts of a node and its next siblings, comma-separated.
     fn node_texts(&self, first: isize) -> String {
         let mut texts = Vec::new();
         let mut node = first;
         while node != 0 {
-            let mut text = [0u16; 64];
-            let mut item = TVITEMW {
-                mask: TVIF_TEXT,
-                hItem: HTREEITEM(node),
-                pszText: windows::core::PWSTR(text.as_mut_ptr()),
-                cchTextMax: 64,
-                ..Default::default()
-            };
-            send(self.tree.hwnd(), TVM_GETITEMW, 0, &mut item as *mut _ as isize);
-            texts.push(from_wide(&text).to_string_lossy().into_owned());
+            texts.push(self.node_text(node));
             node = self.tree_next(node);
         }
         texts.join(",")
@@ -544,7 +555,7 @@ impl App {
 
     /// The texts under Bookmarks, the tree's first root.
     fn bookmark_nodes(&self) -> String {
-        self.node_texts(self.tree_child(self.tree_root()))
+        self.node_texts(self.tree_one())
     }
 
     /// The nodes from `first` on, and all below them.
@@ -688,7 +699,7 @@ impl App {
                     let _ = GetClientRect(a.wnd, &mut rc);
                 }
                 let dpi = a.dpi.get();
-                let limit = (i64::from(scale(80, dpi).max(rc.right - scale(200, dpi))) * 96 / i64::from(dpi)) as i32;
+                let limit = unscale(scale(80, dpi).max(rc.right - scale(200, dpi)), dpi);
                 note(format!("far {far}, limit {limit}, back to {}", a.tree_width.get()));
                 far <= limit + 1 && (a.tree_width.get() - before).abs() <= 1 && !a.dragging.get()
             },
@@ -898,13 +909,16 @@ impl App {
             },
             move |a| a.at(&dir()),
         );
+        let one_tab_home = move |a: &App| a.tabs() == 1 && a.at(&dir()); // back to the test folder's own tab
         s.add("Ctrl+T opens a tab of the same folder", |a| a.press(letter(b'T'), CTRL), move |a| {
-            a.idle() && a.tabs() == 2 && a.at(&dir())
+            a.tabs() == 2 && a.at(&dir())
         });
-        s.add("Ctrl+W closes it", |a| a.press(letter(b'W'), CTRL), move |a| a.idle() && a.tabs() == 1 && a.at(&dir()));
-        s.add("Ctrl+W on the last tab keeps it (the last tab cannot be closed)", |a| a.press(letter(b'W'), CTRL), move |a| {
-            a.idle() && a.tabs() == 1 && a.at(&dir())
-        });
+        s.add("Ctrl+W closes it", |a| a.press(letter(b'W'), CTRL), one_tab_home);
+        s.add(
+            "Ctrl+W on the last tab keeps it (the last tab cannot be closed)",
+            |a| a.press(letter(b'W'), CTRL),
+            one_tab_home,
+        );
         s.add(
             "Ctrl+Shift+PgDn moves the tab one place right, and no further; it stays the current tab",
             |a| {
@@ -934,7 +948,7 @@ impl App {
                     && a.at(&dir())
             },
         );
-        s.add("(close that tab)", |a| a.close_tab(1), move |a| a.idle() && a.tabs() == 1 && a.at(&dir()));
+        s.add("(close that tab)", |a| a.close_tab(1), one_tab_home);
         s.add(
             "pressing a tab makes it current at once, and dragging it along the bar moves it past the others \
              (a slip just into the next tab moves nothing)",
@@ -973,7 +987,7 @@ impl App {
                 wheel(a, -120);
                 wheel(a, -120); // past the last tab: nothing
             },
-            |a| a.idle() && a.active() == 2 && a.at_pc(),
+            |a| a.active() == 2 && a.at_pc(),
         );
         s.add(
             "turning the wheel the other way goes back to the first tab, and stops there",
@@ -982,7 +996,7 @@ impl App {
                     wheel(a, 120);
                 }
             },
-            |a| a.idle() && a.active() == 0 && a.at(&p("sub")),
+            |a| a.active() == 0 && a.at(&p("sub")),
         );
         s.check("the current tab's name, and only its, starts with a bullet", |a| {
             (0..a.tabs()).all(|i| caption(a, i).starts_with(&[0x2022, 0x20]) == (i == a.active()))
@@ -995,7 +1009,7 @@ impl App {
                 && a.at(&p("sub"))
         });
         // Keeps the test folder's own tab.
-        s.add("(close the other tabs)", |a| a.close_other_tabs(1), move |a| a.idle() && a.tabs() == 1 && a.at(&dir()));
+        s.add("(close the other tabs)", |a| a.close_other_tabs(1), one_tab_home);
         s.add(
             "a double-click on a tab opens no tab; one on the empty bar right of the tabs opens one, as \"+\" does",
             |a| {
@@ -1012,10 +1026,10 @@ impl App {
                 let mut pt = POINT { x: r.right + scale(20, a.dpi.get()), y: (r.top + r.bottom) / 2 };
                 let _ = unsafe { ClientToScreen(a.tab_bar, &mut pt) };
                 let takes_click = send(a.tab_bar, WM_NCHITTEST, 0, packed(pt.x, pt.y)) == HTCLIENT as isize;
-                a.idle() && takes_click && a.tabs() == 2 && a.active() == 1 && a.at(&dir())
+                takes_click && a.tabs() == 2 && a.active() == 1 && a.at(&dir())
             },
         );
-        s.add("(close it)", |a| a.close_tab(1), move |a| a.idle() && a.tabs() == 1 && a.at(&dir()));
+        s.add("(close it)", |a| a.close_tab(1), one_tab_home);
         s.check("a lone tab is 150 wide at 100% scaling", |a| tab_width(a) == scale(150, a.dpi.get()));
         let long_name = || Location::dir(p("a folder with a name too long for its tab")); // never opened: only its caption
         s.add(
@@ -1043,16 +1057,16 @@ impl App {
                 tab_width(a) == scale(80, a.dpi.get()) && arrows.is_ok_and(|h| unsafe { IsWindowVisible(h) }.as_bool())
             },
         );
-        s.add("(close them)", |a| a.close_other_tabs(a.active()), move |a| a.idle() && a.tabs() == 1 && a.at(&dir()));
+        s.add("(close them)", |a| a.close_other_tabs(a.active()), one_tab_home);
         s.add(
             "a tab the control selects by itself (as assistive tools select one) switches to its folder",
             |a| {
                 a.new_tab(Location::dir(p("sub")), false); // a second tab, right of this one
                 send(a.tab_bar, TCM_SETCURFOCUS, 1, 0); // on plain tabs this selects, and notifies the window as a click would
             },
-            |a| a.idle() && a.active() == 1 && a.at(&p("sub")),
+            |a| a.active() == 1 && a.at(&p("sub")),
         );
-        s.add("(close that tab)", |a| a.close_tab(1), move |a| a.idle() && a.tabs() == 1 && a.at(&dir()));
+        s.add("(close that tab)", |a| a.close_tab(1), one_tab_home);
         // What Windows sends when the window reaches a monitor with another scaling: the dots per inch there, and where
         // the window goes.
         let dpi_change = |a: &App, dpi: u32, at: RECT| send(a.wnd, WM_DPICHANGED, (dpi | dpi << 16) as usize, &at as *const _ as isize);
@@ -1127,7 +1141,7 @@ impl App {
                     && !exists(&p("sub\\New folder"))
             },
         );
-        s.add("(close that tab)", |a| a.close_tab(a.active()), move |a| a.idle() && a.tabs() == 1 && a.at(&dir()));
+        s.add("(close that tab)", |a| a.close_tab(a.active()), one_tab_home);
         s.add(
             "a typed path that fails while a rename box is open leaves the box alone",
             |a| {
@@ -1460,7 +1474,7 @@ impl App {
                 a.close_tab(1);
                 a.close_tab(1);
             },
-            move |a| a.idle() && a.tabs() == 1 && a.at(&dir()),
+            one_tab_home,
         );
         s.add(
             "in a network folder that is not available, paste, new folder and a drag over its tab return at once",
@@ -1552,13 +1566,13 @@ impl App {
             },
             |a| a.at(&p("pack\\target")),
         );
-        s.add("(back to the test folder)", reopen_home, move |a| a.at(&dir()));
+        s.home("(back to the test folder)");
         s.add(
             "(remove them)",
             |_| {
                 let _ = std::fs::remove_dir_all(p("pack"));
             },
-            |_| !p("pack").exists(),
+            |_| !exists(&p("pack")),
         );
         s.add(
             "a shortcut to This PC opens This PC here (not in Explorer)",
@@ -1672,7 +1686,7 @@ impl App {
             },
         );
         s.check("the Bookmarks folder is created and shown at the top of the tree", |a| {
-            is_directory(&p("Bookmarks")) && a.node_texts(a.tree_root()).split(',').next() == Some("Bookmarks")
+            is_directory(&p("Bookmarks")) && a.node_text(a.tree_root()) == "Bookmarks"
         });
         s.check("right-click menus can be built for This PC, a drive and a file", |a| {
             item_menu_at(a.wnd, &Location::ThisPc).is_some()
@@ -1738,8 +1752,7 @@ impl App {
                 if let Some(row) = row {
                     let mut r = RECT { left: LVIR_LABEL as i32, ..Default::default() };
                     send(a.list.hwnd(), LVM_GETITEMRECT, row, &mut r as *mut _ as isize);
-                    let packed = ((r.left + r.right) / 2) as u16 as isize | ((((r.top + r.bottom) / 2) as u16 as isize) << 16);
-                    send(a.list.hwnd(), WM_MBUTTONUP, 0, packed);
+                    send(a.list.hwnd(), WM_MBUTTONUP, 0, packed((r.left + r.right) / 2, (r.top + r.bottom) / 2));
                 }
             },
             move |a| a.tabs() == 2 && a.tab_path(a.active() + 1).same(&Location::dir(p("sub"))) && a.at(&dir()),
@@ -1752,8 +1765,7 @@ impl App {
                 let mut r = RECT::default();
                 unsafe { (&raw mut r).cast::<isize>().write_unaligned(desktop) }; // TVM_GETITEMRECT takes the item in the rect
                 send(a.tree.hwnd(), TVM_GETITEMRECT, 1, &mut r as *mut _ as isize);
-                let packed = ((r.left + r.right) / 2) as u16 as isize | ((((r.top + r.bottom) / 2) as u16 as isize) << 16);
-                send(a.tree.hwnd(), WM_MBUTTONUP, 0, packed);
+                send(a.tree.hwnd(), WM_MBUTTONUP, 0, packed((r.left + r.right) / 2, (r.top + r.bottom) / 2));
             },
             move |a| {
                 let desktop = known_folder(&FOLDERID_Desktop).map(Location::dir).unwrap_or(Location::ThisPc);
@@ -1816,7 +1828,7 @@ impl App {
             },
             |a| {
                 let last = a.tree.last_root(); // This PC
-                let expanded = send(a.tree.hwnd(), TVM_GETITEMSTATE, last as usize, TVIS_EXPANDED.0 as isize) & TVIS_EXPANDED.0 as isize != 0;
+                let expanded = a.expanded(last);
                 a.tree_child(last) != 0 && expanded
             },
         );
@@ -1842,14 +1854,14 @@ impl App {
                 }
                 // The shortcut's own icon arrives after its node (it may wait on the target).
                 let own = file_info(&wide(p("Bookmarks\\sub.lnk")), FILE_FLAGS_AND_ATTRIBUTES(0), SHGFI_SYSICONINDEX | SHGFI_SMALLICON).unwrap_or_default();
-                let sub = a.tree_next(a.tree_child(a.tree_root()));
+                let sub = a.tree_next(a.tree_one());
                 a.tree_item(sub, TVIF_IMAGE).iImage == own.iIcon
             },
         );
         s.add(
             "choosing a bookmark shortcut in the tree opens its folder",
             |a| {
-                a.tree_select(a.tree_child(a.tree_root())); // "one"
+                a.tree_select(a.tree_one());
                 a.tree_key(VK_DOWN); // to "sub", as the user would
             },
             |a| a.at(&p("sub")),
@@ -1874,7 +1886,7 @@ impl App {
             "collapsing a node while a child is being read drops the late result",
             |a| {
                 let _ = std::fs::create_dir(p("Bookmarks\\one\\deep"));
-                send(a.tree.hwnd(), TVM_EXPAND, TVE_EXPAND.0 as usize, a.tree_child(a.tree_root())); // "one": its read starts
+                send(a.tree.hwnd(), TVM_EXPAND, TVE_EXPAND.0 as usize, a.tree_one()); // its read starts
                 a.tree_select(a.tree_root());
                 a.tree_key(VK_LEFT); // collapse Bookmarks: deletes "one" before its read lands
                 a.tree_key(VK_RIGHT); // and read it fresh
@@ -1884,7 +1896,7 @@ impl App {
                 if step_ms() < 400 || a.bookmark_nodes() != "one,two,sub" {
                     return false;
                 }
-                let mut node = a.tree_child(a.tree_root());
+                let mut node = a.tree_one();
                 while node != 0 {
                     if a.tree_child(node) != 0 {
                         return false;
@@ -1897,23 +1909,23 @@ impl App {
         s.add(
             "(expand a bookmark folder in the tree)",
             |a| {
-                send(a.tree.hwnd(), TVM_EXPAND, TVE_EXPAND.0 as usize, a.tree_child(a.tree_root())); // "one"
+                send(a.tree.hwnd(), TVM_EXPAND, TVE_EXPAND.0 as usize, a.tree_one());
             },
-            |a| a.tree_child(a.tree_child(a.tree_root())) != 0, // "deep" is shown
+            |a| a.tree_child(a.tree_one()) != 0, // "deep" is shown
         );
         s.add(
             "collapsing a folder while F5 reads it again leaves it collapsed, with its arrow (4.5)",
             |a| {
-                a.tree_select(a.tree_child(a.tree_root())); // "one", open
+                a.tree_select(a.tree_one()); // open
                 a.press(VK_F5, 0); // reads every open node again, "one" among them
                 a.tree_key(VK_LEFT); // collapsed before that read lands
             },
             |a| {
-                let one = a.tree_child(a.tree_root());
+                let one = a.tree_one();
                 if step_ms() < 400 || a.is_loading() || one == 0 {
                     return false;
                 }
-                let expanded = send(a.tree.hwnd(), TVM_GETITEMSTATE, one as usize, TVIS_EXPANDED.0 as isize) & TVIS_EXPANDED.0 as isize != 0;
+                let expanded = a.expanded(one);
                 !expanded && a.tree_child(one) == 0 && a.tree_item(one, TVIF_CHILDREN).cChildren.0 == 1 && a.bookmark_nodes() == "one,two,sub"
             },
         );
@@ -1921,17 +1933,17 @@ impl App {
             "(expand it again)",
             |a| {
                 // As the user would: TVM_EXPAND tells nothing about a node expanded before.
-                a.tree_select(a.tree_child(a.tree_root()));
+                a.tree_select(a.tree_one());
                 a.tree_key(VK_RIGHT);
             },
-            |a| a.tree_child(a.tree_child(a.tree_root())) != 0,
+            |a| a.tree_child(a.tree_one()) != 0,
         );
         s.add(
             "a drive coming or going re-reads This PC and leaves the rest of the tree as it was (4.5)",
             |a| volume_change(a, DBT_DEVICEARRIVAL),
             |a| {
-                let one = a.tree_child(a.tree_root());
-                let expanded = send(a.tree.hwnd(), TVM_GETITEMSTATE, one as usize, TVIS_EXPANDED.0 as isize) & TVIS_EXPANDED.0 as isize != 0;
+                let one = a.tree_one();
+                let expanded = a.expanded(one);
                 a.bookmark_nodes() == "one,two,sub" && one != 0 && a.tree_child(one) != 0 && expanded && a.tree_child(a.tree.last_root()) != 0
             },
         );
@@ -1943,13 +1955,13 @@ impl App {
                 a.press(VK_F5, 0);
             },
             |a| {
-                let one = a.tree_child(a.tree_root()); // open, with "deep"
-                let expanded = send(a.tree.hwnd(), TVM_GETITEMSTATE, one as usize, TVIS_EXPANDED.0 as isize) & TVIS_EXPANDED.0 as isize != 0;
+                let one = a.tree_one(); // open, with "deep"
+                let expanded = a.expanded(one);
                 a.bookmark_nodes() == "one,two,sub" && a.node_texts(a.tree_child(one)) == "deep,new" && expanded
             },
         );
         s.check("(the status bar says Refreshed)", |a| a.status_message() == "Refreshed");
-        let new_node = |a: &App| a.tree_next(a.tree_child(a.tree_child(a.tree_root())));
+        let new_node = |a: &App| a.tree_next(a.tree_child(a.tree_one()));
         s.add(
             "(open the folder new in the tree: it has no subfolders, so its arrow goes)",
             move |a| {
@@ -1976,14 +1988,14 @@ impl App {
             |_| {
                 let _ = std::fs::create_dir(p("Bookmarks\\one\\later"));
             },
-            |a| a.node_texts(a.tree_child(a.tree_child(a.tree_root()))) == "deep,later,new",
+            |a| a.node_texts(a.tree_child(a.tree_one())) == "deep,later,new",
         );
         s.add(
             "a shortcut made in the folder shown shows up in the tree by itself too, after the subfolders, with its own icon \
              and no arrow (5.6)",
             |_| make_shortcut(&p("Bookmarks\\one\\sub.lnk"), p("sub")),
             |a| {
-                let one = a.tree_child(a.tree_root());
+                let one = a.tree_one();
                 if a.node_texts(a.tree_child(one)) != "deep,later,new,sub" {
                     return false;
                 }
@@ -2004,7 +2016,7 @@ impl App {
                 let _ = std::fs::remove_dir(p("Bookmarks\\one\\later"));
                 a.tree.refresh_folder(&Location::dir(p("Bookmarks\\one")));
             },
-            |a| a.node_texts(a.tree_child(a.tree_child(a.tree_root()))) == "deep,new,sub",
+            |a| a.node_texts(a.tree_child(a.tree_one())) == "deep,new,sub",
         );
         s.add(
             "This PC in the tree takes no drop",
@@ -2150,7 +2162,7 @@ impl App {
                 a.close_tab(1);
                 let _ = std::fs::remove_dir_all(p("Bookmarks\\Tabs"));
             },
-            move |a| a.tabs() == 1 && a.at(&dir()),
+            one_tab_home,
         );
         s.add(
             "Bookmark this folder on a tab's menu writes a shortcut to the tab's folder in Bookmarks and shows it in the \
@@ -2161,7 +2173,7 @@ impl App {
             },
             move |a| {
                 let name = dir().file_name().unwrap_or_default().to_string_lossy().into_owned();
-                p(&format!("Bookmarks\\{name}.lnk")).exists() && a.bookmark_nodes().contains(&name)
+                exists(&p(&format!("Bookmarks\\{name}.lnk"))) && a.bookmark_nodes().contains(&name)
             },
         );
         s.add(
@@ -2401,15 +2413,13 @@ impl App {
         s.add(
             "switching to a This PC tab drops the other tab's watch: a change in that folder reloads nothing (4.5)",
             |a| {
-                UNWATCHED.set((a.loads_done.get(), None));
+                COUNT.set(a.loads_done.get());
                 write_file(&p("big\\zz unwatched.dat"));
             },
             |a| {
-                let (loads, since) = UNWATCHED.get();
-                let since = since.unwrap_or_else(Instant::now);
-                UNWATCHED.set((loads, Some(since)));
-                note(format!("{} reload(s)", a.loads_done.get() - loads));
-                since.elapsed() >= Duration::from_millis(800) && a.loads_done.get() == loads // 0.8 s of nothing (the watch's refresh comes at 400 ms)
+                note(format!("{} reload(s)", a.loads_done.get() - COUNT.get()));
+                // 0.8 s of nothing (the watch's refresh comes at 400 ms).
+                step_ms() >= 800 && a.loads_done.get() == COUNT.get()
             },
         );
         s.add(

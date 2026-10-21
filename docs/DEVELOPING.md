@@ -119,8 +119,8 @@ instead of corrupting data, and the crash log says where.
 
 - Keep it small: one mechanism rather than special cases, and nothing outside the
   spec without asking first.
-- No message boxes of our own in normal use. Errors go to the status bar
-  (`setMessage`) with a beep (`warn()`), never during the self-test.
+- No message boxes of our own in normal use. Errors go to the status bar with a
+  beep (`warn(text)`), never during the self-test.
 - Anything that can block (reading a folder, `SHGetFileInfoW` on a real path, any
   network path) runs on a worker thread.
 - No exceptions of our own: nothing is thrown or caught in the app's code. The
