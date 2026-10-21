@@ -192,6 +192,7 @@ private:
     UINT generation_ = 0;
     int loadsDone_ = 0;     // folder reads that reported back (self-test)
     int loadsWasted_ = 0;   // ...of which a newer load had replaced, yet they read the whole folder (self-test)
+    UINT uncountedLoad_ = 0;   // a read the self-test leaves stuck on a network timeout: in neither count
 
     struct Rename {                 // done after the edit box has closed
         std::wstring path, name;

@@ -1239,7 +1239,11 @@ impl App {
         );
         s.add(
             "...and opening another folder cancels it",
-            move |a| a.open(Location::dir(dir()), Nav::New, ViewState::default()),
+            move |a| {
+                // The network read reports back after its timeout, during a later step.
+                a.uncounted_load.set(a.generation.get());
+                a.open(Location::dir(dir()), Nav::New, ViewState::default());
+            },
             move |a| a.at(&dir()),
         )
         .during_load();
@@ -2409,8 +2413,9 @@ impl App {
         );
         // Shown by a tab switch, This PC must get its own watch and the folder shown before must lose its: a change
         // there would reload This PC for nothing, and This PC's own changes would go unseen (4.5).
+        // A refresh the folder's watch asked for (the delete above) may still reload This PC once: it is waited out.
         s.add("(a tab for This PC, shown by switching to it)", |a| a.new_tab(Location::ThisPc, true), |a| {
-            a.at_pc() && a.tabs() == 2 && a.active() == 1
+            a.at_pc() && !a.refresh_queued.get() && a.tabs() == 2 && a.active() == 1
         });
         s.add(
             "switching to a This PC tab drops the other tab's watch: a change in that folder reloads nothing (4.5)",

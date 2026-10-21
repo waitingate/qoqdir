@@ -229,6 +229,7 @@ pub struct App {
     pub generation: Cell<u32>,
     pub loads_done: Cell<u32>,   // folder reads that reported back (self-test)
     pub loads_wasted: Cell<u32>, // ...of which a newer load had replaced, yet they read the whole folder (self-test)
+    pub uncounted_load: Cell<u32>, // a read the self-test leaves stuck on a network timeout: in neither count
     use_settings: bool,
     ini: Vec<u16>, // settings file
     pub st: RefCell<State>,
@@ -533,6 +534,7 @@ impl App {
                 generation: Cell::new(0),
                 loads_done: Cell::new(0),
                 loads_wasted: Cell::new(0),
+                uncounted_load: Cell::new(0),
                 use_settings,
                 ini,
                 st: RefCell::new(State {
@@ -1566,11 +1568,15 @@ impl App {
     }
 
     fn on_loaded(&self, listing: Listing, generation: u32) {
-        self.loads_done.set(self.loads_done.get() + 1);
+        let counted = generation != self.uncounted_load.get();
+        if counted {
+            self.loads_done.set(self.loads_done.get() + 1);
+        }
         let pending = self.st.borrow_mut().pending.take_if(|p| p.generation == generation);
         let Some(pending) = pending else {
             // Superseded by a newer request.
-            if !listing.error.as_ref().is_some_and(|e| e.code() == ERROR_OPERATION_ABORTED.to_hresult()) {
+            let aborted = listing.error.as_ref().is_some_and(|e| e.code() == ERROR_OPERATION_ABORTED.to_hresult());
+            if counted && !aborted {
                 self.loads_wasted.set(self.loads_wasted.get() + 1);
             }
             return;

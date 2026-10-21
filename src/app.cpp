@@ -869,9 +869,10 @@ void App::open(const std::wstring& path, Nav nav, ViewState view, Origin origin)
 }
 
 void App::onLoaded(Listing&& listing, UINT generation) {
-    ++loadsDone_;
+    bool counted = generation != uncountedLoad_;
+    if (counted) ++loadsDone_;
     if (generation != pending_.generation) {   // superseded (open() sets both together)
-        if (listing.error != ERROR_OPERATION_ABORTED) ++loadsWasted_;
+        if (counted && listing.error != ERROR_OPERATION_ABORTED) ++loadsWasted_;
         return;
     }
     KillTimer(wnd_, kLoadingTimer);

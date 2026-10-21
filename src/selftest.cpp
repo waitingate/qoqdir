@@ -728,7 +728,12 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
             selfTest_->note = L"Enter took " + std::to_wstring(int(keyMs)) + L" ms";
         },
         [=, this] { return keyMs < 500; });
-    add(L"...and opening another folder cancels it", [=, this] { open(dir, Nav::New); },
+    add(L"...and opening another folder cancels it",
+        [=, this] {
+            // The network read reports back after its timeout, during a later step.
+            uncountedLoad_ = generation_;
+            open(dir, Nav::New);
+        },
         [=, this] { return at(dir); }).whileLoading = true;
     add(L"typing a subfolder's name opens it here (not in Explorer)", [=, this] { goTo(L"sub"); },
         [=, this] { return at(path(L"sub")); });
@@ -1598,8 +1603,9 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
         [=, this] { return idle() && !listed(L"aaa late.dat"); });
     // Shown by a tab switch, This PC must get its own watch and the folder shown before must lose its: a change there
     // would reload This PC for nothing, and This PC's own changes would go unseen (4.5).
+    // A refresh the folder's watch asked for (the delete above) may still reload This PC once: it is waited out.
     add(L"(a tab for This PC, shown by switching to it)", [=, this] { newTab(L"", true); },
-        [=, this] { return at(L"") && tabs_.size() == 2 && active_ == 1; });
+        [=, this] { return at(L"") && !refreshQueued_ && tabs_.size() == 2 && active_ == 1; });
     auto unwatched = std::make_shared<int>(0);   // loads done before the change
     add(L"switching to a This PC tab drops the other tab's watch: a change in that folder reloads nothing (4.5)",
         [=, this] { *unwatched = loadsDone_; writeFile(path(L"big\\zz unwatched.dat")); },
