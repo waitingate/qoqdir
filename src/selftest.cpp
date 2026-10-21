@@ -1601,11 +1601,20 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
         [=, this] { return at(path(L"big")) && listed(L"aaa late.dat"); });
     add(L"(remove that file too)", [=, this] { DeleteFileW(path(L"big\\aaa late.dat").c_str()); refresh(); },
         [=, this] { return idle() && !listed(L"aaa late.dat"); });
-    // Shown by a tab switch, This PC must get its own watch and the folder shown before must lose its: a change there
-    // would reload This PC for nothing, and This PC's own changes would go unseen (4.5).
-    // A refresh the folder's watch asked for (the delete above) may still reload This PC once: it is waited out.
-    add(L"(a tab for This PC, shown by switching to it)", [=, this] { newTab(L"", true); },
-        [=, this] { return at(L"") && !refreshQueued_ && tabs_.size() == 2 && active_ == 1; });
+    // Shown by a tab switch, This PC must get its own watch and the folder shown before must lose its, with a refresh
+    // only that watch asked for: a change there would reload This PC for nothing, and This PC's own changes would go
+    // unseen (4.5).
+    auto tabLoads = std::make_shared<int>(0);   // loads done before the step's act
+    add(L"a refresh only the old folder's watch asked for goes with that watch: This PC loads once (4.5)",
+        [=, this] {
+            *tabLoads = loadsDone_;
+            onFolderChanged();   // stands in for a change reported just before the switch
+            newTab(L"", true);
+        },
+        [=, this] {
+            selfTest_->note = std::to_wstring(loadsDone_ - *tabLoads) + L" load(s)";
+            return at(L"") && !refreshQueued_ && loadsDone_ == *tabLoads + 1 && tabs_.size() == 2 && active_ == 1;
+        });
     auto unwatched = std::make_shared<int>(0);   // loads done before the change
     add(L"switching to a This PC tab drops the other tab's watch: a change in that folder reloads nothing (4.5)",
         [=, this] { *unwatched = loadsDone_; writeFile(path(L"big\\zz unwatched.dat")); },
@@ -1617,6 +1626,40 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
     add(L"(remove that file and close the tab)",
         [=, this] { DeleteFileW(path(L"big\\zz unwatched.dat").c_str()); closeTab(1); },
         [=, this] { return at(path(L"big")) && tabs_.size() == 1 && !listed(L"zz unwatched.dat"); });
+    // Any other refresh stays: This PC lists the drives.
+    add(L"a drive that comes while This PC is being read gets This PC read again (4.5)",
+        [=, this] {
+            *tabLoads = loadsDone_;
+            onFolderChanged();   // a change the old watch reported first: the drive's refresh is still kept
+            newTab(L"", true);
+            volumeChange(DBT_DEVICEARRIVAL);   // before it lands
+        },
+        [=, this] {
+            selfTest_->note = std::to_wstring(loadsDone_ - *tabLoads) + L" load(s)";
+            return at(L"") && !refreshQueued_ && loadsDone_ == *tabLoads + 2 && tabs_.size() == 2 && active_ == 1;
+        });
+    add(L"(close that tab)", [=, this] { closeTab(1); }, [=, this] { return at(path(L"big")) && tabs_.size() == 1; });
+    // A switch empties the list, so the list can't say which folder the watch is on: the watch says it.
+    add(L"a tab switch that another move overtakes still moves the watch to the folder shown (4.5)",
+        [=, this] {
+            newTab(path(L"big"), true);   // its read is replaced at once
+            open(L"", Nav::New);
+        },
+        [=, this] { return at(L"") && tabs_.size() == 2 && active_ == 1 && watch_.watches(L""); });
+    add(L"(close that tab too)", [=, this] { closeTab(1); },
+        [=, this] { return at(path(L"big")) && tabs_.size() == 1; });
+    // The old watch also watched the folder above its own, for that folder going: what it saw there still counts.
+    add(L"going up keeps a refresh the old watch asked for: it watched the folder above too (4.5)",
+        [=, this] {
+            *tabLoads = loadsDone_;
+            onFolderChanged();   // stands in for a folder next to big going, which big's watch reports
+            open(dir, Nav::New);
+        },
+        [=, this] {
+            selfTest_->note = std::to_wstring(loadsDone_ - *tabLoads) + L" load(s)";
+            return at(dir) && !refreshQueued_ && loadsDone_ == *tabLoads + 2;
+        });
+    add(L"(back into big)", [=, this] { open(path(L"big"), Nav::New); }, [=, this] { return at(path(L"big")); });
 
     add(L"copies 10,000 selected files to the clipboard",
         [=, this] {

@@ -2411,12 +2411,22 @@ impl App {
             },
             |a| a.idle() && !a.listed("aaa late.dat"),
         );
-        // Shown by a tab switch, This PC must get its own watch and the folder shown before must lose its: a change
-        // there would reload This PC for nothing, and This PC's own changes would go unseen (4.5).
-        // A refresh the folder's watch asked for (the delete above) may still reload This PC once: it is waited out.
-        s.add("(a tab for This PC, shown by switching to it)", |a| a.new_tab(Location::ThisPc, true), |a| {
-            a.at_pc() && !a.refresh_queued.get() && a.tabs() == 2 && a.active() == 1
-        });
+        // Shown by a tab switch, This PC must get its own watch and the folder shown before must lose its, with a
+        // refresh only that watch asked for: a change there would reload This PC for nothing, and This PC's own changes
+        // would go unseen (4.5).
+        s.add(
+            "a refresh only the old folder's watch asked for goes with that watch: This PC loads once (4.5)",
+            |a| {
+                COUNT.set(a.loads_done.get());
+                a.on_folder_changed(); // stands in for a change reported just before the switch
+                a.new_tab(Location::ThisPc, true);
+            },
+            |a| {
+                note(format!("{} load(s)", a.loads_done.get() - COUNT.get()));
+                a.at_pc() && !a.refresh_queued.get() && a.loads_done.get() == COUNT.get() + 1
+                    && a.tabs() == 2 && a.active() == 1
+            },
+        );
         s.add(
             "switching to a This PC tab drops the other tab's watch: a change in that folder reloads nothing (4.5)",
             |a| {
@@ -2436,6 +2446,53 @@ impl App {
                 a.close_tab(1);
             },
             |a| a.at(&p("big")) && a.tabs() == 1 && !a.listed("zz unwatched.dat"),
+        );
+        // Any other refresh stays: This PC lists the drives.
+        s.add(
+            "a drive that comes while This PC is being read gets This PC read again (4.5)",
+            |a| {
+                COUNT.set(a.loads_done.get());
+                a.on_folder_changed(); // a change the old watch reported first: the drive's refresh is still kept
+                a.new_tab(Location::ThisPc, true);
+                volume_change(a, DBT_DEVICEARRIVAL); // before it lands
+            },
+            |a| {
+                note(format!("{} load(s)", a.loads_done.get() - COUNT.get()));
+                a.at_pc() && !a.refresh_queued.get() && a.loads_done.get() == COUNT.get() + 2
+                    && a.tabs() == 2 && a.active() == 1
+            },
+        );
+        s.add("(close that tab)", |a| a.close_tab(1), |a| a.at(&p("big")) && a.tabs() == 1);
+        // A switch empties the list, so the list can't say which folder the watch is on: the watch says it.
+        s.add(
+            "a tab switch that another move overtakes still moves the watch to the folder shown (4.5)",
+            |a| {
+                a.new_tab(Location::dir(p("big")), true); // its read is replaced at once
+                a.open(Location::ThisPc, Nav::New, ViewState::default());
+            },
+            |a| {
+                a.at_pc() && a.tabs() == 2 && a.active() == 1
+                    && a.st.borrow().watch.as_ref().is_some_and(|w| w.watches(&Location::ThisPc))
+            },
+        );
+        s.add("(close that tab too)", |a| a.close_tab(1), |a| a.at(&p("big")) && a.tabs() == 1);
+        // The old watch also watched the folder above its own, for that folder going: what it saw there still counts.
+        s.add(
+            "going up keeps a refresh the old watch asked for: it watched the folder above too (4.5)",
+            move |a| {
+                COUNT.set(a.loads_done.get());
+                a.on_folder_changed(); // stands in for a folder next to big going, which big's watch reports
+                a.open(Location::dir(dir()), Nav::New, ViewState::default());
+            },
+            move |a| {
+                note(format!("{} load(s)", a.loads_done.get() - COUNT.get()));
+                a.at(&dir()) && !a.refresh_queued.get() && a.loads_done.get() == COUNT.get() + 2
+            },
+        );
+        s.add(
+            "(back into big)",
+            |a| a.open(Location::dir(p("big")), Nav::New, ViewState::default()),
+            |a| a.at(&p("big")),
         );
 
         s.add(

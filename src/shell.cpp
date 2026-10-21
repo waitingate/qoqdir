@@ -562,6 +562,7 @@ FolderWatch::FolderWatch(HWND owner, UINT msg, const std::wstring& dir) {
     if (!dir.empty())
         ids_[1] = watch(owner, msg, parentPath(dir),
                         SHCNE_RMDIR | SHCNE_RENAMEFOLDER | SHCNE_DRIVEREMOVED | SHCNE_MEDIAREMOVED);
+    if (ids_[0]) dir_ = dir;
 }
 
 FolderWatch::~FolderWatch() {
@@ -571,10 +572,12 @@ FolderWatch::~FolderWatch() {
 
 FolderWatch::FolderWatch(FolderWatch&& o) noexcept {
     std::swap(ids_, o.ids_);
+    std::swap(dir_, o.dir_);
 }
 
 FolderWatch& FolderWatch::operator=(FolderWatch&& o) noexcept {
     std::swap(ids_, o.ids_);
+    std::swap(dir_, o.dir_);
     return *this;
 }
 

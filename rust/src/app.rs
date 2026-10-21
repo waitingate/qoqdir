@@ -225,6 +225,7 @@ pub struct App {
     pub dragging: Cell<bool>,   // moving the tree/list splitter
     dragging_files: Cell<bool>, // a drag started from our own list is in progress
     pub refresh_queued: Cell<bool>,
+    refresh_for_watch: Cell<bool>, // ...and only the folder watch asked for it
     load_message_shown: Cell<bool>, // "Loading..." or "not available": cleared when a folder loads
     pub generation: Cell<u32>,
     pub loads_done: Cell<u32>,   // folder reads that reported back (self-test)
@@ -530,6 +531,7 @@ impl App {
                 dragging: Cell::new(false),
                 dragging_files: Cell::new(false),
                 refresh_queued: Cell::new(false),
+                refresh_for_watch: Cell::new(false),
                 load_message_shown: Cell::new(false),
                 generation: Cell::new(0),
                 loads_done: Cell::new(0),
@@ -847,7 +849,7 @@ impl App {
                 }
                 WM_APP_CHANGED => {
                     acknowledge_change(wp, lp);
-                    self.queue_refresh();
+                    self.on_folder_changed();
                     return LRESULT(0);
                 }
                 WM_APP_BOOKMARKS => {
@@ -1031,11 +1033,19 @@ impl App {
 
     /// At most one refresh per interval; it waits while a rename or a load is in progress (on_timer).
     pub fn queue_refresh(&self) {
+        self.refresh_for_watch.set(false);
         if !self.refresh_queued.replace(true) {
             unsafe {
                 SetTimer(Some(self.wnd), TIMER_REFRESH, 400, None);
             }
         }
+    }
+
+    /// A refresh the folder watch alone asked for is about the folder it watches: it goes with that watch (on_loaded).
+    pub fn on_folder_changed(&self) {
+        let alone = !self.refresh_queued.get() || self.refresh_for_watch.get();
+        self.queue_refresh();
+        self.refresh_for_watch.set(alone);
     }
 
     fn on_timer(&self, id: usize) {
@@ -1658,6 +1668,22 @@ impl App {
 
         let location = listing.location.clone();
         let written = listing.written;
+        // The watch stays while it watches the folder shown: setting one up costs 25-75 ms, and a reload is not a
+        // change. Otherwise the old one goes first, and with it a refresh only it asked for: that was about a folder no
+        // longer shown, unless this one is the folder it was in, which it watched too (4.5).
+        if !self.st.borrow().watch.as_ref().is_some_and(|w| w.watches(&location)) {
+            let above = self.st.borrow().watch.as_ref().is_some_and(|w| w.watches_child_of(&location));
+            let old_watch = self.st.borrow_mut().watch.take();
+            drop(old_watch);
+            if self.refresh_queued.get() && self.refresh_for_watch.get() && !above {
+                unsafe {
+                    let _ = KillTimer(Some(self.wnd), TIMER_REFRESH);
+                }
+                self.refresh_queued.set(false);
+            }
+            let watch = FolderWatch::new(self.wnd, WM_APP_CHANGED, &location);
+            self.st.borrow_mut().watch = Some(watch);
+        }
         // The tree follows the folder shown: its node is read again when the subfolders or shortcuts changed (5.5).
         let tree_names = if reload { self.list.tree_names() } else { Vec::new() };
         self.list.set_listing(listing);
@@ -1681,13 +1707,6 @@ impl App {
             self.list.rename(row);
         }
 
-        // The watch stays while the folder shown stays: setting one up costs 25-75 ms, and a reload is not a change. A
-        // tab switch always sets one: the list was emptied for it, so for This PC "the same folder" would be the empty list.
-        if !same_folder || pending.nav == Nav::Switch {
-            let watch = FolderWatch::new(self.wnd, WM_APP_CHANGED, &location);
-            let old_watch = self.st.borrow_mut().watch.replace(watch);
-            drop(old_watch);
-        }
         // A change during the read, before the watch was there, is missed by both: the folder's own time tells.
         if location.path().is_some_and(|p| folder_written(p) != written) {
             self.queue_refresh();

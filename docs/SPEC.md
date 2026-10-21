@@ -155,9 +155,10 @@ These describe what the user sees. Each must hold in every situation.
 - Changes made by other programs (files created, deleted, renamed, changed) show
   up by themselves within about half a second, keeping the selection, focus and
   scroll position. A burst of changes causes one refresh, not hundreds, and the
-  watch stays while the folder shown stays. A change made while the folder was
-  still being read is caught too: the folder's own modified time is compared
-  once the watch is in place.
+  watch stays while the folder shown stays. When another folder is shown, a
+  refresh that only the old one's changes asked for is dropped, unless the old
+  one is in it. A change made while the folder was still being read is caught
+  too: the folder's own modified time is compared once the watch is in place.
 - If the shown folder itself is deleted or renamed by another program, the tab
   notices and shows the "not available" state (4.3).
 - Plugging in or removing a drive updates the tree and This PC.
@@ -749,7 +750,11 @@ result:
     the status bar says only a folder on this PC takes a drop.
 65. The four toolbar buttons carry the tooltips and accessible names of 5.1.
 66. Shown by a tab switch, This PC gets its own change watch and the folder shown
-    before loses its: a file made in that folder reloads nothing.
+    before loses its, with a refresh only its changes asked for: This PC loads
+    once, and a file made in that folder reloads nothing. A drive that comes
+    while This PC is being read gets it read again, a switch that another move
+    overtakes still moves the watch to the folder shown, and going up keeps a
+    refresh the old watch asked for.
 67. Last, a window thread stuck for 7 s leaves a line in the crash log naming
     where it is (the self-test's crash log is in its own folder).
 

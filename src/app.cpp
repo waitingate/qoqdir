@@ -398,7 +398,7 @@ LRESULT App::onMessage(UINT msg, WPARAM wp, LPARAM lp) {
     }
     case WM_APP_CHANGED:
         acknowledgeChange(wp, lp);
-        queueRefresh();
+        onFolderChanged();
         return 0;
     case WM_APP_BOOKMARKS:   // a shortcut or folder came or went in Bookmarks: a drop on its node, or another program
         acknowledgeChange(wp, lp);
@@ -536,9 +536,17 @@ LRESULT App::onMessage(UINT msg, WPARAM wp, LPARAM lp) {
 
 // At most one refresh per interval; it waits while a rename or a load is in progress (onTimer).
 void App::queueRefresh() {
+    refreshForWatch_ = false;
     if (refreshQueued_) return;
     refreshQueued_ = true;
     SetTimer(wnd_, kRefreshTimer, 400, nullptr);
+}
+
+// A refresh the folder watch alone asked for is about the folder it watches: it goes with that watch (onLoaded).
+void App::onFolderChanged() {
+    bool alone = !refreshQueued_ || refreshForWatch_;
+    queueRefresh();
+    refreshForWatch_ = alone;
 }
 
 void App::onTimer(UINT_PTR id) {
@@ -934,6 +942,18 @@ void App::onLoaded(Listing&& listing, UINT generation) {
 
     t.path = listing.path;
     t.unavailable = false;
+    // The watch stays while it watches the folder shown: setting one up costs 25-75 ms, and a reload is not a change.
+    // Otherwise the old one goes first, and with it a refresh only it asked for: that was about a folder no longer
+    // shown, unless this one is the folder it was in, which it watched too (4.5).
+    if (!watch_.watches(t.path)) {
+        bool above = watch_.watchesChildOf(t.path);
+        watch_ = {};
+        if (refreshQueued_ && refreshForWatch_ && !above) {
+            KillTimer(wnd_, kRefreshTimer);
+            refreshQueued_ = false;
+        }
+        watch_ = FolderWatch(wnd_, WM_APP_CHANGED, t.path);
+    }
     FILETIME written = listing.written;
     // The tree follows the folder shown: its node is read again when the subfolders or shortcuts changed (5.5).
     std::vector<std::wstring> treeNames = reload ? list_.treeNames() : std::vector<std::wstring>{};
@@ -946,9 +966,6 @@ void App::onLoaded(Listing&& listing, UINT generation) {
     if (view.top < 0 || requested) list_.ensureVisible(row);   // ...but what the user just made or renamed shows
     if (view.rename && row >= 0) list_.rename(row);
 
-    // The watch stays while the folder shown stays: setting one up costs 25-75 ms, and a reload is not a change. A tab
-    // switch always sets one: the list was emptied for it, so for This PC "the same folder" would be the empty list.
-    if (!sameFolder || p.nav == Nav::Switch) watch_ = FolderWatch(wnd_, WM_APP_CHANGED, t.path);
     // A change during the read, before the watch was there, is missed by both: the folder's own time tells.
     FILETIME now = folderWritten(t.path);
     if (CompareFileTime(&now, &written) != 0) queueRefresh();

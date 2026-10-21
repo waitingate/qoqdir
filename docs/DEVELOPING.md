@@ -93,10 +93,12 @@ instead of corrupting data, and the crash log says where.
 - The right-click menu is modal, so Qoqdir's own commands in it only act if the
   folder and the selection are the same as when it opened.
 - Live updates: `FolderWatch` posts `WM_APP_CHANGED`, and a burst of changes
-  becomes one refresh after 400 ms, which waits while a rename or a load runs. A
-  second watch on the Bookmarks folder posts `WM_APP_BOOKMARKS`, which re-reads
-  its tree node at once. A drive coming or going re-reads only This PC in the
-  tree.
+  becomes one refresh after 400 ms, which waits while a rename or a load runs.
+  `onLoaded` replaces the watch only when it does not watch the folder shown
+  (`FolderWatch::watches`), and drops a refresh only that watch asked for,
+  except when going up to the folder it was in (`watchesChildOf`). A second
+  watch on the Bookmarks folder posts `WM_APP_BOOKMARKS`, which re-reads its
+  tree node at once. A drive coming or going re-reads only This PC in the tree.
 - The file list is virtual (`LVS_OWNERDATA`): row i is `items_[view_[i]]`, and only
   `FileList::update` changes `view_`, rebuilding it before any ListView call.
   Hidden items are always read; Ctrl+H only shows or hides them.

@@ -68,6 +68,7 @@ private:
     // Messages
     LRESULT onMessage(UINT msg, WPARAM wp, LPARAM lp);
     void queueRefresh();   // one coalesced refresh of the current tab, once no rename or load is in progress
+    void onFolderChanged();   // the folder watch reported a change
     void onTimer(UINT_PTR id);
     void onMiddleClick(HWND from, POINT screenPt);
     LRESULT onNotify(NMHDR* nm);
@@ -170,6 +171,7 @@ private:
     bool dragging_ = false;         // moving the tree/list splitter
     bool draggingFiles_ = false;    // a drag started from our own list is in progress
     bool refreshQueued_ = false;
+    bool refreshForWatch_ = false;   // ...and only the folder watch asked for it
     struct QueuedView {             // kept by refresh() while a load is pending: what a delete, rename or new
         std::wstring dir;           // folder wanted selected. The queued refresh applies it if 'dir' is still shown.
         ViewState view;
