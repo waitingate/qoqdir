@@ -11,6 +11,7 @@
 #include <shellapi.h>
 
 #include <algorithm>
+#include <atomic>
 #include <cstdio>
 #include <functional>
 #include <set>
@@ -1638,30 +1639,54 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
             copyToClipboard(wnd_, list_.dir(), list_.selectedItems(), false);
         },
         [=, this] { return clipboardFiles().size() == 3; }).copies = true;
+    // Another thread holds the clipboard open, as a clipboard manager or a remote desktop can. It waits its turn:
+    // other programs read the clipboard after each copy, and the files copied above come from this window, so it
+    // tries again until it has the clipboard, while the window goes on answering between steps. It opens it with
+    // a window of its own: held with no window, the clipboard also opens for any program that asks with none, and
+    // that program's close frees it.
+    struct ClipboardHolder {
+        std::atomic<HWND> window = nullptr;   // its window, while it holds the clipboard
+        std::atomic<int> tries = 0;
+        HANDLE release = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+        ~ClipboardHolder() { CloseHandle(release); }
+    };
+    auto holder = std::make_shared<ClipboardHolder>();
+    add(L"(another thread takes the clipboard and keeps it open)",
+        [=] {
+            std::thread([holder] {   // its own reference: the thread can outlast the steps
+                // A message-only window: never shown, and destroyed with the thread.
+                HWND w = CreateWindowExW(0, L"STATIC", L"", 0, 0, 0, 0, 0, HWND_MESSAGE, nullptr, nullptr, nullptr);
+                if (!w) return;
+                for (ULONGLONG end = GetTickCount64() + 4000;; Sleep(10)) {
+                    ++holder->tries;
+                    if (OpenClipboard(w)) break;
+                    if (GetTickCount64() > end) return;
+                }
+                holder->window = w;
+                WaitForSingleObject(holder->release, 10000);
+                CloseClipboard();
+                holder->window = nullptr;
+            }).detach();
+        },
+        [=, this] {
+            selfTest_->note = std::to_wstring(holder->tries.load()) + L" try(s)";
+            return holder->window.load() != nullptr;
+        });
     add(L"a Ctrl+C that cannot reach the clipboard says so, not \"copied\" (another program holds it open)",
         [=, this] {
-            // Another thread holds the clipboard open, as a clipboard manager or a remote desktop can.
-            HANDLE held = CreateEventW(nullptr, TRUE, FALSE, nullptr);
-            HANDLE release = CreateEventW(nullptr, TRUE, FALSE, nullptr);
-            std::thread holder([held, release] {
-                bool open = OpenClipboard(nullptr);
-                SetEvent(held);
-                if (open) {
-                    WaitForSingleObject(release, 10000);
-                    CloseClipboard();
-                }
-            });
-            WaitForSingleObject(held, 5000);
             // Selected again and read at once: a refresh in between would replace the files or clear the message.
             showGhosts();
             setMessage(L"");
             SetFocus(list_.hwnd());
-            selfTestKey('C', true);
-            selfTest_->note = L"status: " + statusMessage();
-            SetEvent(release);
-            holder.join();
-            CloseHandle(held);
-            CloseHandle(release);
+            HWND w = holder->window;
+            if (w && GetOpenClipboardWindow() == w) {
+                selfTestKey('C', true);
+                selfTest_->note = L"status: " + statusMessage();
+            } else {
+                selfTest_->note = L"the test's hold was gone before the key press";   // no status: the check fails
+            }
+            SetEvent(holder->release);
+            while (holder->window) Sleep(1);   // free again for the steps after this one
         },
         [=, this] {
             return selfTest_->note.find(L"copied") == std::wstring::npos &&

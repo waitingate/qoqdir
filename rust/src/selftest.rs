@@ -10,7 +10,8 @@ use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
 use crate::shell::file_info;
-use std::sync::OnceLock;
+use std::sync::atomic::{AtomicIsize, AtomicUsize, Ordering};
+use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
 
 use windows::Win32::Foundation::{HGLOBAL, HWND, LPARAM, POINT, POINTL, RECT, WPARAM};
@@ -21,7 +22,7 @@ use windows::Win32::Storage::FileSystem::{
     SetFileAttributesW,
 };
 use windows::Win32::System::Com::IDataObject;
-use windows::Win32::System::DataExchange::{CloseClipboard, GetClipboardData, OpenClipboard};
+use windows::Win32::System::DataExchange::{CloseClipboard, GetClipboardData, GetOpenClipboardWindow, OpenClipboard};
 use windows::Win32::System::Diagnostics::Debug::{GetErrorMode, SEM_FAILCRITICALERRORS};
 use windows::Win32::System::Memory::{GlobalLock, GlobalUnlock};
 use windows::Win32::System::Ole::{DROPEFFECT_COPY, DROPEFFECT_NONE};
@@ -48,6 +49,7 @@ use windows::Win32::UI::Shell::{
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     BM_CLICK, CHILDID_SELF, EnumWindows, FindWindowExW, HTCLIENT, OBJID_CLIENT, GCLP_HBRBACKGROUND, GWLP_USERDATA, GetClassLongPtrW, GetClientRect, GetWindowLongPtrW, GetWindowRect, GetWindowTextLengthW, IsWindowVisible,
+    CreateWindowExW, HWND_MESSAGE, WINDOW_EX_STYLE, WINDOW_STYLE,
     KillTimer, PostMessageW, SW_SHOWMINNOACTIVE, SW_SHOWNOACTIVATE, SetTimer, ShowWindow, WM_CHAR, WM_CLOSE,
     WM_DEVICECHANGE, WM_DPICHANGED, WM_KEYDOWN, WM_LBUTTONDBLCLK, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONUP, WM_MOUSEMOVE, WM_MOUSEWHEEL,
     WM_NCHITTEST, WM_SYSKEYDOWN, WM_TIMER,
@@ -58,7 +60,7 @@ use crate::folder::{Item, Listing, Location, SortKey, exists, is_directory, is_s
 use crate::shell::{
     copy_to_clipboard, data_object_at, item_menu_at, known_folder, paste_into, pidl_from, shortcut_target, type_name,
 };
-use windows::core::Interface;
+use windows::core::{Interface, w};
 
 use crate::util::{focus, from_wide, pcwstr, scale, send, set_text, unscale, wide, window_text};
 
@@ -2451,31 +2453,88 @@ impl App {
             |_| clipboard_files().len() == 3,
         )
         .copies();
+        // Another thread holds the clipboard open, as a clipboard manager or a remote desktop can. It waits its turn:
+        // other programs read the clipboard after each copy, and the files copied above come from this window, so it
+        // tries again until it has the clipboard, while the window goes on answering between steps. It opens it with
+        // a window of its own: held with no window, the clipboard also opens for any program that asks with none, and
+        // that program's close frees it.
+        let window = Arc::new(AtomicIsize::new(0)); // its window, while it holds the clipboard
+        let tries = Arc::new(AtomicUsize::new(0));
+        let release = Rc::new(Cell::new(None::<std::sync::mpsc::Sender<()>>));
         s.add(
-            "a Ctrl+C that cannot reach the clipboard says so, not \"copied\" (another program holds it open)",
-            |a| {
-                // Another thread holds the clipboard open, as a clipboard manager or a remote desktop can.
-                let (held, held_wait) = std::sync::mpsc::channel();
-                let (release, release_wait) = std::sync::mpsc::channel::<()>();
-                let holder = std::thread::spawn(move || {
-                    let open = unsafe { OpenClipboard(None) }.is_ok();
-                    let _ = held.send(());
-                    if open {
+            "(another thread takes the clipboard and keeps it open)",
+            {
+                let (window, tries, release) = (window.clone(), tries.clone(), release.clone());
+                move |_| {
+                    let (tx, release_wait) = std::sync::mpsc::channel::<()>();
+                    release.set(Some(tx));
+                    let (window, tries) = (window.clone(), tries.clone());
+                    std::thread::spawn(move || {
+                        // A message-only window: never shown, and destroyed with the thread.
+                        let Ok(w) = (unsafe {
+                            CreateWindowExW(
+                                WINDOW_EX_STYLE(0),
+                                w!("STATIC"),
+                                w!(""),
+                                WINDOW_STYLE(0),
+                                0,
+                                0,
+                                0,
+                                0,
+                                Some(HWND_MESSAGE),
+                                None,
+                                None,
+                                None,
+                            )
+                        }) else {
+                            return;
+                        };
+                        let end = Instant::now() + Duration::from_secs(4);
+                        loop {
+                            tries.fetch_add(1, Ordering::SeqCst);
+                            if unsafe { OpenClipboard(Some(w)) }.is_ok() {
+                                break;
+                            }
+                            if Instant::now() > end {
+                                return;
+                            }
+                            std::thread::sleep(Duration::from_millis(10));
+                        }
+                        window.store(w.0 as isize, Ordering::SeqCst);
                         let _ = release_wait.recv_timeout(Duration::from_secs(10));
                         unsafe {
                             let _ = CloseClipboard();
                         }
-                    }
-                });
-                let _ = held_wait.recv_timeout(Duration::from_secs(5));
+                        window.store(0, Ordering::SeqCst);
+                    });
+                }
+            },
+            {
+                let (window, tries) = (window.clone(), tries.clone());
+                move |_| {
+                    note(format!("{} try(s)", tries.load(Ordering::SeqCst)));
+                    window.load(Ordering::SeqCst) != 0
+                }
+            },
+        );
+        s.add(
+            "a Ctrl+C that cannot reach the clipboard says so, not \"copied\" (another program holds it open)",
+            move |a| {
                 // Selected again and read at once: a refresh in between would replace the files or clear the message.
                 show_ghosts(a);
                 a.set_message("");
                 focus(a.list.hwnd());
-                a.press(letter(b'C'), CTRL);
-                note(format!("status: {}", a.status_message()));
-                let _ = release.send(());
-                let _ = holder.join();
+                let w = window.load(Ordering::SeqCst);
+                if w != 0 && unsafe { GetOpenClipboardWindow() }.is_ok_and(|h| h.0 as isize == w) {
+                    a.press(letter(b'C'), CTRL);
+                    note(format!("status: {}", a.status_message()));
+                } else {
+                    note("the test's hold was gone before the key press".into()); // no status: the check fails
+                }
+                drop(release.take()); // the holder lets go
+                while window.load(Ordering::SeqCst) != 0 {
+                    std::thread::sleep(Duration::from_millis(1)); // free again for the steps after this one
+                }
             },
             |_| {
                 let status = noted();
