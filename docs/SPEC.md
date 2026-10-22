@@ -276,6 +276,8 @@ readers read the same as the button's name.
   - A path that doesn't work stays selected in the box, so it can be fixed.
 - Folder names autocomplete as you type (Windows' own autocomplete).
 - Esc in the address bar puts the current path back and returns to the list.
+- What is typed there stays while folders load: the address bar changes only
+  when the tab goes to another folder, another tab is shown, or Esc is pressed.
 - Ctrl+Backspace deletes the word before the cursor, in the address bar and the
   filter box.
 

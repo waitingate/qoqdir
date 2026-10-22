@@ -649,6 +649,28 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
             return at(path(L"sub")) && selfTest_->note == L"address bar switched" && !exists(path(L"New folder")) &&
                    !exists(path(L"sub\\New folder"));
         });
+    // The switch showed where the tab is at once: what is typed into the address bar since is the user's (5.3).
+    add(L"(back to the first tab)", [=, this] { switchTab(0); }, [=, this] { return at(dir) && active_ == 0; });
+    add(L"a tab switch whose folder then loads leaves what was typed into the address bar meanwhile (5.3)",
+        [=, this] {
+            switchTab(1);
+            SetWindowTextW(address_, L"typed meanwhile");   // before the tab's folder can have loaded
+        },
+        [=, this] { return at(path(L"sub")) && windowText(address_) == L"typed meanwhile"; });
+    add(L"(back to the first tab)", [=, this] { switchTab(0); }, [=, this] { return at(dir) && active_ == 0; });
+    add(L"...and so does one whose folder turns out not to be available (4.3)",
+        [=, this] {
+            switchTab(1);
+            SetWindowTextW(address_, L"typed meanwhile");
+            Listing failed;   // the switch's read, as a share that is off answers it in the end
+            failed.path = path(L"sub");
+            failed.error = ERROR_BAD_NETPATH;
+            onLoaded(std::move(failed), generation_);
+        },
+        [=, this] {
+            return idle() && tab().unavailable && statusHas(L"not available") &&
+                   windowText(address_) == L"typed meanwhile";
+        });
     add(L"(close that tab)", [=, this] { closeTab(active_); }, oneTabHome);
     add(L"a typed path that fails while a rename box is open leaves the box alone",
         [=, this] {
@@ -837,7 +859,7 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
     add(L"a refresh queued just before a tab became not available waits for F5 (4.3)",
         [=, this] {
             queueRefresh();   // a change in the folder, just before
-            showUnavailable(dir, ERROR_BAD_NETPATH, Nav::Refresh);   // then it became unreachable
+            showUnavailable(dir, ERROR_BAD_NETPATH);   // then it became unreachable
             SendMessageW(wnd_, WM_TIMER, kRefreshTimer, 0);          // and the queued refresh fires
         },
         [=, this] {
@@ -893,7 +915,7 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
         [=, this] {
             // As if this tab's folder had just failed to load (a real failure can take minutes to arrive).
             tab().path = L"\\\\192.0.2.1\\share";
-            showUnavailable(tab().path, ERROR_BAD_NETPATH, Nav::Refresh);
+            showUnavailable(tab().path, ERROR_BAD_NETPATH);
             POINTL cursor = tabPoint(active_);
             Com<IDataObject> data = dataObject(wnd_, path(L"file1.txt"));
             DWORD effect = DROPEFFECT_COPY;

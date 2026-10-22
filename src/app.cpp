@@ -875,7 +875,7 @@ void App::open(const std::wstring& path, Nav nav, ViewState view, Origin origin)
     if (nav == Nav::Switch) {
         // Show the new tab at once; until its folder loads the list has none, so nothing acts on the old one.
         list_.clear();
-        showLocation(nav);
+        showLocation();
         showStatus();
     }
     inBackground([wnd = wnd_, generation, path] {
@@ -927,10 +927,6 @@ void App::onLoaded(Listing&& listing, UINT generation) {
     }
     Tab& t = tab();
 
-    if (listing.error && keptBack) {   // as onLoadFailed, with the address bar left alone as below
-        lateHint_ = nullptr;
-        return showUnavailable(listing.path, listing.error, Nav::Refresh);
-    }
     if (listing.error) return onLoadFailed(listing, p);
     kept_ = {};   // the tab shows a folder: a switch's read kept for a move is of no use any more
     keptListing_.reset();
@@ -1006,11 +1002,14 @@ void App::onLoaded(Listing&& listing, UINT generation) {
     // A change during the read, before the watch was there, is missed by both: the folder's own time tells.
     FILETIME now = folderWritten(t.path);
     if (CompareFileTime(&now, &written) != 0) queueRefresh();
-    // A switch's read kept for a move: the switch showed where the tab is when it began, and the address bar may hold
-    // what the user is fixing since (5.3).
-    showLocation(keptBack ? Nav::Refresh : p.nav);
-    if (moved) setMessage(lateHint_ ? lateHint_ : L"");   // a navigation clears the message, or says its hint
-    else if (keptBack && loadingShown) setMessage(keptSaid_);   // what "Loading..." took the place of
+    // A move shows where the tab is now. A tab switch showed it when it began, and the address bar may hold what the
+    // user typed since (5.3).
+    if (moved) {
+        showLocation();
+        setMessage(lateHint_ ? lateHint_ : L"");   // a navigation clears the message, or says its hint
+    } else if (keptBack && loadingShown) {
+        setMessage(keptSaid_);   // what "Loading..." took the place of
+    }
     lateHint_ = nullptr;
     showStatus();
 }
@@ -1025,9 +1024,9 @@ void App::onIcons(IconBatch&& batch, UINT generation) {
     list_.setIcons(batch);
 }
 
-// The address bar, title, buttons and tabs follow the current tab's folder. A reload changes none of them.
-void App::showLocation(Nav nav) {
-    if (nav == Nav::Refresh) return;
+// The address bar, title, buttons and tabs follow the current tab's folder: shown by a tab switch at once, and by a
+// move once its folder is there. A load that lands or fails otherwise changes none of them.
+void App::showLocation() {
     const Tab& t = tab();
     SetWindowTextW(address_, locationText(t.path).c_str());
     SetWindowTextW(wnd_, displayName(t.path).c_str());   // the folder's name alone, as Explorer: the icon says which app
@@ -1039,10 +1038,9 @@ void App::showLocation(Nav nav) {
 
 // The folder could not be read: decide what to show or do instead.
 void App::onLoadFailed(const Listing& listing, const Pending& p) {
-    Tab& t = tab();
     lateHint_ = nullptr;   // the error is what to say
     if (p.nav == Nav::Refresh || p.nav == Nav::Switch) {
-        showUnavailable(listing.path, listing.error, p.nav);
+        showUnavailable(listing.path, listing.error);
         return;
     }
     // A move that fails or opens a file leaves the tab where it was: its filter comes back, unless retyped.
@@ -1061,11 +1059,13 @@ void App::onLoadFailed(const Listing& listing, const Pending& p) {
         openFile(wnd_, p.origin.shortcut);
     } else if (p.origin.typed && listing.isFile) {   // a file typed in the address bar: open it
         openFile(wnd_, listing.path);
-        SetWindowTextW(address_, locationText(t.path).c_str());
+        // The tab looked up again: while Windows asks about the file, messages run that can add or close tabs.
+        SetWindowTextW(address_, locationText(tab().path).c_str());
     } else {
         // Let the user fix what they typed (5.3), unless they moved on: a dead share fails a minute later.
         if (p.origin.typed && GetFocus() == list_.hwnd()) focusEdit(address_);
         // A history entry whose folder is gone is dropped, so Back/Forward can move past it.
+        Tab& t = tab();
         std::vector<std::wstring>& history = p.nav == Nav::Back ? t.back : t.forward;
         if ((p.nav == Nav::Back || p.nav == Nav::Forward) && !history.empty() &&
             samePath(history.back(), listing.path)) {
@@ -1079,11 +1079,10 @@ void App::onLoadFailed(const Listing& listing, const Pending& p) {
 
 // A tab never changes its folder by itself (a drive may come back): show it empty and say why. The list gets
 // no folder, so nothing asks Windows about it (that can freeze the window for 20-40 s).
-void App::showUnavailable(const std::wstring& path, DWORD error, Nav nav) {
+void App::showUnavailable(const std::wstring& path, DWORD error) {
     list_.clear();
     tab().unavailable = true;
     watch_ = {};
-    showLocation(nav);
     setMessage(L"\"" + locationText(path) + L"\" is not available: " + errorText(error) + L"   (F5 tries again)");
     loadMessageShown_ = true;
     showStatus();

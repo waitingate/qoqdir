@@ -1596,7 +1596,7 @@ impl App {
         if nav == Nav::Switch {
             // Show the new tab at once; until its folder loads the list has none, so nothing acts on the old one.
             self.list.clear();
-            self.show_location(nav);
+            self.show_location();
             self.show_status();
         }
         let wnd = self.wnd.0 as usize; // HWND is just a handle; the thread only posts to it
@@ -1672,11 +1672,6 @@ impl App {
         }
 
         if let Some(error) = &listing.error {
-            if kept_back {
-                // As on_load_failed, with the address bar left alone as below.
-                self.late_hint.set(None);
-                return self.show_unavailable(&listing.location, &error.message(), Nav::Refresh);
-            }
             return self.on_load_failed(&listing, &error.message(), &pending);
         }
         let kept_icons = {
@@ -1785,10 +1780,10 @@ impl App {
         if location.path().is_some_and(|p| folder_written(p) != written) {
             self.queue_refresh();
         }
-        // A switch's read kept for a move: the switch showed where the tab is when it began, and the address bar may
-        // hold what the user is fixing since (5.3).
-        self.show_location(if kept_back { Nav::Refresh } else { pending.nav });
+        // A move shows where the tab is now. A tab switch showed it when it began, and the address bar may hold what
+        // the user typed since (5.3).
         if moved {
+            self.show_location();
             self.set_message(self.late_hint.get().unwrap_or("")); // a navigation clears the message, or says its hint
         } else if kept_back && loading_shown {
             let said = self.kept_said.borrow().clone();
@@ -1808,11 +1803,9 @@ impl App {
         self.list.set_icons(&batch);
     }
 
-    /// The address bar, title, buttons and tabs follow the current tab's folder. A reload changes none of them.
-    fn show_location(&self, nav: Nav) {
-        if nav == Nav::Refresh {
-            return;
-        }
+    /// The address bar, title, buttons and tabs follow the current tab's folder: shown by a tab switch at once, and by
+    /// a move once its folder is there. A load that lands or fails otherwise changes none of them.
+    fn show_location(&self) {
         let location = self.location();
         set_text(self.address, location.text());
         set_text(self.wnd, location.display_name()); // the folder's name alone, as Explorer: the icon says which app
@@ -1829,7 +1822,7 @@ impl App {
     fn on_load_failed(&self, listing: &Listing, error: &str, pending: &Pending) {
         self.late_hint.set(None); // the error is what to say
         if matches!(pending.nav, Nav::Refresh | Nav::Switch) {
-            return self.show_unavailable(&listing.location, error, pending.nav);
+            return self.show_unavailable(&listing.location, error);
         }
         // A move that fails or opens a file leaves the tab where it was: its filter comes back, unless retyped.
         if window_text(self.filter).is_empty() {
@@ -1887,12 +1880,11 @@ impl App {
 
     /// A tab never changes its folder by itself (a drive may come back): show it empty and say why. The
     /// list gets no folder, so nothing asks Windows about it (that can freeze the window for 20-40 s).
-    pub fn show_unavailable(&self, location: &Location, error: &str, nav: Nav) {
+    pub fn show_unavailable(&self, location: &Location, error: &str) {
         self.list.clear();
         self.with_tab(|t| t.unavailable = true);
         let old_watch = self.st.borrow_mut().watch.take();
         drop(old_watch);
-        self.show_location(nav);
         self.set_message(&format!("\"{}\" is not available: {}   (F5 tries again)", location.text().to_string_lossy(), error.trim()));
         self.load_message_shown.set(true);
         self.show_status();

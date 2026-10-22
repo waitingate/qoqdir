@@ -91,7 +91,7 @@ private:
     void onIcons(IconBatch&& batch, UINT generation);   // a folder read's own icons (WM_APP_ICONS)
     struct Pending;
     void onLoadFailed(const Listing& listing, const Pending& p);
-    void showLocation(Nav nav);
+    void showLocation();   // the address bar, title, buttons and tabs, for the current tab's folder
     void goBack();
     void goForward();
     bool goUp();   // false: at This PC, nowhere to go
@@ -101,7 +101,7 @@ private:
     // A folder read is in flight for this window: the newest, or a tab switch's that a move took over (kept_).
     bool loading() const { return pending_.generation != 0 || kept_.generation != 0; }
     void showTab() { open(tab().path, Nav::Switch, tab().view); }   // the current tab's folder into the list
-    void showUnavailable(const std::wstring& path, DWORD error, Nav nav);   // the tab's folder can't be read (4.3)
+    void showUnavailable(const std::wstring& path, DWORD error);   // the tab's folder can't be read (4.3)
     std::vector<std::wstring> tabFolders() const;
     void goToTyped();
     void activate(bool inNewTab);   // Enter / double-click on the selection

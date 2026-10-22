@@ -1143,6 +1143,37 @@ impl App {
                     && !exists(&p("sub\\New folder"))
             },
         );
+        // The switch showed where the tab is at once: what is typed into the address bar since is the user's (5.3).
+        s.add("(back to the first tab)", |a| a.switch_tab(0), move |a| a.at(&dir()) && a.active() == 0);
+        s.add(
+            "a tab switch whose folder then loads leaves what was typed into the address bar meanwhile (5.3)",
+            |a| {
+                a.switch_tab(1);
+                set_text(a.address, "typed meanwhile"); // before the tab's folder can have loaded
+            },
+            |a| a.at(&p("sub")) && text_of(a.address) == "typed meanwhile",
+        );
+        s.add("(back to the first tab)", |a| a.switch_tab(0), move |a| a.at(&dir()) && a.active() == 0);
+        s.add(
+            "...and so does one whose folder turns out not to be available (4.3)",
+            |a| {
+                a.switch_tab(1);
+                set_text(a.address, "typed meanwhile");
+                // The switch's read, as a share that is off answers it in the end.
+                let failed = Listing {
+                    location: Location::dir(p("sub")),
+                    error: Some(ERROR_BAD_NETPATH.to_hresult().into()),
+                    ..Default::default()
+                };
+                a.on_loaded(failed, a.generation.get());
+            },
+            |a| {
+                a.idle()
+                    && a.unavailable()
+                    && a.status_message().contains("not available")
+                    && text_of(a.address) == "typed meanwhile"
+            },
+        );
         s.add("(close that tab)", |a| a.close_tab(a.active()), one_tab_home);
         s.add(
             "a typed path that fails while a rename box is open leaves the box alone",
@@ -1384,7 +1415,8 @@ impl App {
             "a refresh queued just before a tab became not available waits for F5 (4.3)",
             move |a| {
                 a.queue_refresh(); // a change in the folder, just before
-                a.show_unavailable(&Location::dir(dir()), "The network path was not found.", Nav::Refresh); // then it became unreachable
+                // Then it became unreachable.
+                a.show_unavailable(&Location::dir(dir()), "The network path was not found.");
                 send(a.wnd, WM_TIMER, TIMER_REFRESH, 0); // and the queued refresh fires
             },
             |a| a.idle() && a.unavailable() && a.status_message().contains("not available"),
@@ -1492,7 +1524,7 @@ impl App {
                     let active = st.active;
                     st.tabs[active].location = offline.clone();
                 }
-                a.show_unavailable(&offline, "The network path was not found.", Nav::Refresh);
+                a.show_unavailable(&offline, "The network path was not found.");
                 let cursor = a.tab_point(a.active());
                 let data = data_object_at(a.wnd, &Location::dir(p("file1.txt")));
                 focus(a.list.hwnd());
