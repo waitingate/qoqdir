@@ -121,6 +121,19 @@ pub fn unscale(px: i32, dpi: u32) -> i32 {
     mul_div(px, 96, dpi as i32)
 }
 
+/// Where a window opened from one at `from` goes (screen coordinates): `step` down and right, the same size. Where that
+/// would leave the work area `work`, at its top left instead, as Windows' own cascade starts over (5.8).
+pub fn cascade(from: RECT, work: RECT, step: i32) -> RECT {
+    let to =
+        RECT { left: from.left + step, top: from.top + step, right: from.right + step, bottom: from.bottom + step };
+    if to.left < work.left || to.top < work.top || to.right > work.right || to.bottom > work.bottom {
+        let (w, h) = (from.right - from.left, from.bottom - from.top);
+        RECT { left: work.left, top: work.top, right: work.left + w, bottom: work.top + h }
+    } else {
+        to
+    }
+}
+
 /// Owns a shell item ID list.
 pub struct Pidl(pub *mut ITEMIDLIST);
 
@@ -167,5 +180,21 @@ mod tests {
             width = scale(unscale(width, 168), 168);
         }
         assert_eq!(width, 299);
+    }
+
+    #[test]
+    fn cascade_steps_down_and_right() {
+        // A title bar down and right, the same size; back at the work area's top left where it would leave it.
+        let r = |left, top, right, bottom| RECT { left, top, right, bottom };
+        let work = r(0, 0, 1920, 1040);
+        assert_eq!(cascade(r(100, 100, 900, 700), work, 30), r(130, 130, 930, 730));
+        assert_eq!(cascade(r(100, 400, 900, 1010), work, 30), r(130, 430, 930, 1040)); // just fits
+        assert_eq!(cascade(r(100, 420, 900, 1020), work, 30), r(0, 0, 800, 600)); // past the bottom
+        assert_eq!(cascade(r(1500, 100, 1900, 700), work, 30), r(0, 0, 400, 600)); // past the right edge
+        assert_eq!(cascade(r(0, 0, 1920, 1040), work, 30), r(0, 0, 1920, 1040)); // as big as the work area
+        // A monitor left of the main one, with its taskbar at the top: its work area doesn't start at 0.
+        let left = r(-1920, 40, 0, 1080);
+        assert_eq!(cascade(r(-1800, 100, -1000, 700), left, 30), r(-1770, 130, -970, 730));
+        assert_eq!(cascade(r(-1800, 20, -1000, 620), left, 10), r(-1920, 40, -1120, 640)); // above the work area
     }
 }

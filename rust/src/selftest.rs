@@ -5,7 +5,7 @@
 use std::cell::{Cell, RefCell};
 use std::ffi::{OsStr, OsString};
 use std::io::Write;
-use std::os::windows::ffi::OsStrExt;
+use std::os::windows::ffi::{OsStrExt, OsStringExt};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
@@ -14,9 +14,12 @@ use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
 
 use windows::Win32::Foundation::{
-    ERROR_BAD_NETPATH, HGLOBAL, HWND, LPARAM, POINT, POINTL, RECT, WPARAM,
+    ERROR_BAD_NETPATH, HGLOBAL, HLOCAL, HWND, LPARAM, LocalFree, POINT, POINTL, RECT, WPARAM,
 };
-use windows::Win32::Graphics::Gdi::{COLOR_WINDOW, ClientToScreen, GetSysColor, GetSysColorBrush};
+use windows::Win32::Graphics::Gdi::{
+    COLOR_WINDOW, ClientToScreen, GetMonitorInfoW, GetSysColor, GetSysColorBrush, MONITOR_DEFAULTTONEAREST, MONITORINFO,
+    MonitorFromWindow,
+};
 use windows::Win32::Storage::FileSystem::{
     DDD_EXACT_MATCH_ON_REMOVE, DDD_NO_BROADCAST_SYSTEM, DDD_REMOVE_DEFINITION, DefineDosDeviceW, FILE_ATTRIBUTE_ARCHIVE,
     FILE_ATTRIBUTE_HIDDEN, FILE_FLAGS_AND_ATTRIBUTES, GetFileAttributesW, GetLogicalDrives, GetLongPathNameW,
@@ -45,7 +48,8 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
 use windows::Win32::System::Variant::VARIANT;
 use windows::Win32::UI::Accessibility::{AccessibleObjectFromWindow, IAccessible};
 use windows::Win32::UI::Shell::{
-    DROPFILES, FOLDERID_Desktop, SHGFI_DISPLAYNAME, SHGFI_SMALLICON, SHGFI_SYSICONINDEX, StrCmpLogicalW,
+    CommandLineToArgvW, DROPFILES, FOLDERID_Desktop, SHGFI_DISPLAYNAME, SHGFI_SMALLICON, SHGFI_SYSICONINDEX,
+    StrCmpLogicalW,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     BM_CLICK, CHILDID_SELF, EnumWindows, FindWindowExW, HTCLIENT, OBJID_CLIENT, GCLP_HBRBACKGROUND, GWLP_USERDATA, GetClassLongPtrW, GetWindowLongPtrW, GetWindowTextLengthW, IsWindowVisible,
@@ -57,8 +61,8 @@ use windows::Win32::UI::WindowsAndMessaging::{
 
 use crate::app::{App, Key, Nav, TIMER_LOADING, TIMER_REFRESH, ViewState};
 use crate::folder::{
-    Item, Listing, Location, SortKey, exists, folder_written, is_directory, is_shortcut, list_folder, sort_items,
-    system_dir,
+    Item, Listing, Location, SortKey, exists, folder_written, is_directory, is_shortcut, list_folder,
+    parse_command_line, sort_items, system_dir,
 };
 use crate::shell::{
     copy_to_clipboard, data_object_at, file_info, item_menu_at, known_folder, paste_into, pidl_from, shortcut_target,
@@ -206,6 +210,17 @@ fn test_dir() -> PathBuf {
 /// A path in the test folder.
 fn p(name: &str) -> PathBuf {
     test_dir().join(name)
+}
+
+/// A command line's words, as Windows splits them for the program it starts.
+fn command_line_words(line: &OsStr) -> Vec<OsString> {
+    let mut count = 0;
+    unsafe {
+        let words = CommandLineToArgvW(pcwstr(&wide(line)), &mut count);
+        let list = (0..count.max(0) as usize).map(|i| OsString::from_wide((*words.add(i)).as_wide())).collect();
+        let _ = LocalFree(Some(HLOCAL(words.cast())));
+        list
+    }
 }
 
 fn log_path() -> PathBuf {
@@ -2850,6 +2865,26 @@ impl App {
                 !status.contains("copied") && status.contains("clipboard")
             },
         );
+        // 5.8: Open in new window starts this exe on the folder, a title bar down and right of this window. A start
+        // would show a window, which the self-test never does: it checks what would be started.
+        let name = "Open in new window starts Qoqdir on the folder, a title bar down and right of this window (5.8)";
+        s.check(name, move |a| {
+            let w = a.new_window(&dir());
+            let words = command_line_words(&w.command_line);
+            let exe = std::env::current_exe().unwrap_or_default();
+            let started = words.len() == 2 && Location::dir(PathBuf::from(&words[0])).same(&Location::dir(exe)) && {
+                let folders = parse_command_line(&words[1..]).folders;
+                folders.len() == 1 && folders[0].same(&Location::dir(dir()))
+            };
+            let r = window_rect(a.wnd);
+            let mut mi = MONITORINFO { cbSize: size_of::<MONITORINFO>() as u32, ..Default::default() };
+            let _ = unsafe { GetMonitorInfoW(MonitorFromWindow(a.wnd, MONITOR_DEFAULTTONEAREST), &mut mi) };
+            let (dx, dy) = (w.place.left - r.left, w.place.top - r.top);
+            let moved = (dx > 0 && dx == dy) || (w.place.left == mi.rcWork.left && w.place.top == mi.rcWork.top);
+            let same_size =
+                w.place.right - w.place.left == r.right - r.left && w.place.bottom - w.place.top == r.bottom - r.top;
+            started && moved && same_size && !w.maximized
+        });
         // 4.10: a window that answers nothing for 5 s gets a line in the crash log saying where its thread is. Last: a
         // hung window gets a ghost window from Windows meanwhile, which can take the focus from the steps after it.
         // The test's own long steps (making and removing 10,000 files) leave such lines too: a new one must appear.

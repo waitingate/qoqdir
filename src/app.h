@@ -139,6 +139,13 @@ private:
     // A status message once per run (5.3); with 'afterLoad', once the folder being loaded has landed.
     void hint(bool& said, const wchar_t* text, bool afterLoad = false);
     void warn(const std::wstring& text);   // an error: in the status bar, with a beep
+    struct NewWindow {                 // Open in new window (5.8): what is started
+        std::wstring commandLine;      // this exe, on the folder
+        RECT place{};                  // in screen coordinates, as STARTUPINFO takes it
+        bool maximized = false;
+    };
+    NewWindow newWindow(const std::wstring& dir) const;
+    void openInNewWindow(const std::wstring& dir);
     void loadSettings(const CommandLine& cmd);
     void saveSettings();
 

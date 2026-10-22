@@ -23,14 +23,35 @@ public class QoqdirHelp {
   [DllImport("kernel32.dll", CharSet=CharSet.Unicode)] static extern bool CreateProcess(string app, StringBuilder cmd, IntPtr pa, IntPtr ta, bool inherit, uint flags, IntPtr env, string dir, ref STARTUPINFO si, out PROCESS_INFORMATION pi);
   [DllImport("kernel32.dll")] static extern bool CloseHandle(IntPtr h);
   [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
+  [StructLayout(LayoutKind.Sequential)] struct RECT { public int Left, Top, Right, Bottom; }
+  [DllImport("user32.dll")] static extern bool GetWindowRect(IntPtr h, out RECT r);
+  [DllImport("user32.dll")] static extern IntPtr SetThreadDpiAwarenessContext(IntPtr context);
   // Runs a command line. flags 8 (DETACHED_PROCESS): no console, so what starts has no terminal in reach, as from a
   // shortcut. show 4 (SW_SHOWNOACTIVATE): a window that takes no focus, so the checks never pull the keyboard away
   // from whoever is typing (7.2). Returns the process id, 0 when it didn't start.
-  public static int Start(string cmd, uint flags, short show) {
+  public static int Start(string cmd, uint flags, short show) { return Start(cmd, flags, show, 0, 0, 0, 0); }
+  // The same with a place and size for its window (w > 0), as Open in new window gives one (5.8).
+  public static int Start(string cmd, uint flags, short show, int x, int y, int w, int h) {
     var si = new STARTUPINFO(); si.cb = Marshal.SizeOf(si); PROCESS_INFORMATION pi;
     if (show != 0) { si.dwFlags = 1; si.wShowWindow = show; }   // STARTF_USESHOWWINDOW
+    if (w > 0) { si.dwFlags |= 6; si.dwX = x; si.dwY = y; si.dwXSize = w; si.dwYSize = h; }   // _USESIZE, _USEPOSITION
     if (!CreateProcess(null, new StringBuilder(cmd), IntPtr.Zero, IntPtr.Zero, false, flags, IntPtr.Zero, null, ref si, out pi)) return 0;
     CloseHandle(pi.hThread); CloseHandle(pi.hProcess); return pi.dwProcessId;
+  }
+  [DllImport("user32.dll")] static extern uint GetDpiForSystem();
+  // Where a window is, and px pixels at 100% at the screen's scaling, in the screen's own pixels: as a program that
+  // follows the scaling sees them, as Qoqdir does (not scaled down for this one).
+  public static string Place(IntPtr h) {
+    IntPtr old = SetThreadDpiAwarenessContext(new IntPtr(-4));   // DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2
+    RECT r; GetWindowRect(h, out r);
+    SetThreadDpiAwarenessContext(old);
+    return r.Left + "," + r.Top + "," + r.Right + "," + r.Bottom;
+  }
+  public static int Scaled(int px) {
+    IntPtr old = SetThreadDpiAwarenessContext(new IntPtr(-4));
+    uint dpi = GetDpiForSystem();
+    SetThreadDpiAwarenessContext(old);
+    return (int)(px * dpi / 96);
   }
   // A message box's text (its static control, id 0xFFFF), and its title.
   public static string Text(IntPtr box) { var s = new StringBuilder(8192); GetDlgItemText(box, 0xFFFF, s, s.Capacity); return s.ToString(); }
@@ -78,8 +99,8 @@ function CloseBox($p) {   # waits for the process's message box, closes it, and 
   [void](WaitFor { -not (Box $p) } 2000)
   $r
 }
-function StartQuiet([string]$exe, [string[]]$argList) {   # starts an exe with a window that takes no focus
-  $id = [QoqdirHelp]::Start("`"$exe`" $($argList -join ' ')", 0, 4)
+function StartQuiet([string]$exe, [string[]]$argList, [int[]]$place = @(0, 0, 0, 0)) {   # a window that takes no focus
+  $id = [QoqdirHelp]::Start("`"$exe`" $($argList -join ' ')", 0, 4, $place[0], $place[1], $place[2], $place[3])
   $p = if ($id) { Get-Process -Id $id -ErrorAction SilentlyContinue }
   if ($p) { [void]$p.Handle }   # opened while it runs, so that its exit code can be read after it ends
   $p
@@ -144,6 +165,15 @@ Check ($r.Shown -and $r.Code -eq 1 -and $r.Text.StartsWith('Unknown option: -x')
 Set-Content -Path $ini -Value "[Window]`r`nX=2147483000`r`nWidth=1000`r`nHeight=600"
 $r = TitleAfterStart @('--tab=C:\Users\Public') 'Public'
 Check ($r.Title -eq 'Public') "a damaged qoqdir.ini (X=2147483000) falls back to the defaults: '$($r.Title)'"
+# Started with a place and size, as Open in new window starts one (5.8): there, not at the place saved.
+Set-Content -Path $ini -Value "[Window]`r`nX=300`r`nY=200`r`nWidth=600`r`nHeight=400"
+$w = [QoqdirHelp]::Scaled(600); $h = [QoqdirHelp]::Scaled(400)   # over the window's least size (520 by 320)
+$p = StartQuiet $copy '--tab=C:\Users\Public' @(100, 80, $w, $h)
+[void](WaitFor { $p.Refresh(); $p.MainWindowTitle -eq 'Public' } 5000)
+$place = [QoqdirHelp]::Place($p.MainWindowHandle)
+[void]$p.CloseMainWindow(); [void]$p.WaitForExit(5000)
+Check ($place -eq "100,80,$(100 + $w),$(80 + $h)") `
+  "started with a place and size, it opens there, not at the saved place (at $place)"
 
 # A folder it can't write to, as Program Files is for most users: only adding files and folders is denied
 # (to you, by your SID), so it can still start.

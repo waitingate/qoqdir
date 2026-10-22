@@ -192,7 +192,8 @@ What each one is:
 - Unit tests: paths, the command line, sorting, filtering and reading folders.
   The C++ ones (`tests\unit-tests.cpp`) are one `main()` of `CHECK` macros that prints
   `FAIL line N` and keeps going; the Rust ones are at the end of
-  `rust\src\folder.rs`, with one for the size rounding in `rust\src\util.rs`.
+  `rust\src\folder.rs`, with two in `rust\src\util.rs`: the size rounding and
+  where a new window goes.
 - The self-test drives the real program through every scenario in section 7.2 of
   the spec, from inside its own process: its window doesn't take the focus, and
   it never sends keys to other windows. It works in its own folder in `%TEMP%`,

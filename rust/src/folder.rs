@@ -304,6 +304,20 @@ pub fn parse_command_line(args: &[OsString]) -> CommandLine {
     cmd
 }
 
+/// `--tab=` and the folder, for a Qoqdir started on it (Open in new window, 5.8), quoted so that the command-line rules
+/// give it back whole.
+pub fn tab_argument(folder: &Path) -> OsString {
+    // Backslashes before a quote escape it (CommandLineToArgvW and Rust's std read them alike), so the ones the folder
+    // ends in are doubled: "D:\\" comes back as D:\, where "D:\" would end in a quote.
+    let text: Vec<u16> = folder.as_os_str().encode_wide().collect();
+    let slashes = text.iter().rev().take_while(|&&c| c == u16::from(b'\\')).count();
+    let mut arg = OsString::from("--tab=\"");
+    arg.push(folder.as_os_str());
+    arg.push("\\".repeat(slashes));
+    arg.push("\"");
+    arg
+}
+
 // ---------------------------------------------------------------- reading a folder
 
 #[derive(Clone, Debug, Default)]
@@ -889,6 +903,33 @@ mod tests {
         assert!(parse_command_line(&args(&["--tab=C:\\A", "-q"])).error.is_some());
         assert!(parse_command_line(&args(&["-n"])).error.is_some()); // -n no longer exists
         assert!(parse_command_line(&args(&["-tC:\\A"])).error.is_some()); // nor -t without "="
+    }
+
+    #[test]
+    fn tab_argument_comes_back_whole() {
+        use windows::Win32::Foundation::{HLOCAL, LocalFree};
+        use windows::Win32::UI::Shell::CommandLineToArgvW;
+        // The folder a new window gets (5.8) comes back whole through Windows' command-line rules, a root's closing
+        // backslash and a name that looks like an option or a variable included.
+        let folders =
+            ["C:\\My Files", "D:\\", "\\\\nas\\share", "C:\\-h", "C:\\x\\%TEMP%", "C:\\\u{5831}\u{544A}\\new folder"];
+        for folder in folders {
+            let mut line = OsString::from("qoqdir.exe ");
+            line.push(tab_argument(Path::new(folder)));
+            let mut count = 0;
+            let args: Vec<OsString> = unsafe {
+                let words = CommandLineToArgvW(pcwstr(&wide(&line)), &mut count);
+                let args = (1..count.max(0) as usize).map(|i| OsString::from_wide((*words.add(i)).as_wide())).collect();
+                let _ = LocalFree(Some(HLOCAL(words.cast())));
+                args
+            };
+            let c = parse_command_line(&args);
+            assert!(c.error.is_none());
+            assert_eq!(c.folders.iter().map(text).collect::<Vec<_>>(), [folder]);
+        }
+        // The parser would mend "D:\" (a stray closing quote goes, and D: means D:\), but the quoting is right by
+        // itself.
+        assert_eq!(tab_argument(Path::new("D:\\")), "--tab=\"D:\\\\\"");
     }
 
     #[test]

@@ -125,9 +125,10 @@ Explorer would; a closed folder in the tree opens when you hold the drag over
 it. (The tree takes drops on local drives only.)
 
 Right-click on files gives Windows' full context menu, so Send to, Open with and
-the entries of other programs are all there. For what Qoqdir doesn't do,
-thumbnails and searching inside subfolders, right-click the empty space: Open in
-Explorer and Search in Explorer open that folder there.
+the entries of other programs are all there. Right-click the empty space for
+Open in new window, which opens the folder in a second Qoqdir window. For what
+Qoqdir doesn't do, thumbnails and searching inside subfolders, the same menu has
+Open in Explorer and Search in Explorer, which open that folder there.
 
 Qoqdir has no undo of its own: Windows keeps one undo list for all programs. To
 take back a rename, move, copy or delete done in Qoqdir, click the desktop (or an

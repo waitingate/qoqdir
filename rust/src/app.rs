@@ -11,12 +11,13 @@ use std::rc::{Rc, Weak};
 use std::sync::atomic::{AtomicU32, Ordering};
 
 use windows::Win32::Foundation::{
-    COLORREF, ERROR_ALREADY_EXISTS, ERROR_OPERATION_ABORTED, HINSTANCE, HWND, LPARAM, LRESULT, POINT, RECT, SIZE,
-    WPARAM,
+    COLORREF, CloseHandle, ERROR_ALREADY_EXISTS, ERROR_OPERATION_ABORTED, HINSTANCE, HWND, LPARAM, LRESULT, POINT, RECT,
+    SIZE, WPARAM,
 };
 use windows::Win32::Graphics::Gdi::{
-    COLOR_WINDOW, ClientToScreen, CreateFontIndirectW, CreateSolidBrush, InvalidateRect, GetDC, GetSysColor, GetSysColorBrush,
-    GetTextExtentExPointW, GetTextExtentPoint32W, GetTextMetricsW, HBRUSH, HDC, MONITOR_DEFAULTTONULL, MonitorFromRect, PtInRect,
+    COLOR_WINDOW, ClientToScreen, CreateFontIndirectW, CreateSolidBrush, InvalidateRect, GetDC, GetMonitorInfoW,
+    GetSysColor, GetSysColorBrush, GetTextExtentExPointW, GetTextExtentPoint32W, GetTextMetricsW, HBRUSH, HDC,
+    MONITOR_DEFAULTTONEAREST, MONITOR_DEFAULTTONULL, MONITORINFO, MonitorFromRect, MonitorFromWindow, PtInRect,
     ReleaseDC, ScreenToClient, SelectObject, TEXTMETRICW,
 };
 use windows::Win32::Storage::FileSystem::CreateDirectoryW;
@@ -26,7 +27,10 @@ use windows::Win32::System::Com::{CLSCTX_INPROC_SERVER, CoCreateInstance};
 use windows::Win32::System::DataExchange::IsClipboardFormatAvailable;
 use windows::Win32::System::Ole::{CF_HDROP, IDropTarget, RegisterDragDrop, RevokeDragDrop};
 use windows::Win32::System::SystemServices::MK_LBUTTON;
-use windows::Win32::System::Threading::{GetStartupInfoW, STARTF_USESHOWWINDOW, STARTUPINFOW};
+use windows::Win32::System::Threading::{
+    CreateProcessW, GetStartupInfoW, PROCESS_CREATION_FLAGS, PROCESS_INFORMATION, STARTF_USEPOSITION,
+    STARTF_USESHOWWINDOW, STARTF_USESIZE, STARTUPINFOW,
+};
 use windows::Win32::System::WindowsProgramming::{GetPrivateProfileStringW, WritePrivateProfileStringW};
 use windows::Win32::UI::Accessibility::{CLSID_AccPropServices, IAccPropServices, PROPID_ACC_NAME};
 use windows::Win32::UI::Controls::{
@@ -37,7 +41,7 @@ use windows::Win32::UI::Controls::{
     TCM_SETCURSEL, TCM_SETMINTABWIDTH, TCN_SELCHANGE, TOOLTIPS_CLASSW, TTF_IDISHWND, TTF_SUBCLASS, TTM_ADDTOOLW,
     TTS_ALWAYSTIP, TTTOOLINFOW,
 };
-use windows::Win32::UI::HiDpi::{GetDpiForSystem, GetDpiForWindow, SystemParametersInfoForDpi};
+use windows::Win32::UI::HiDpi::{GetDpiForSystem, GetDpiForWindow, GetSystemMetricsForDpi, SystemParametersInfoForDpi};
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     EnableWindow, GetCapture, GetFocus, ReleaseCapture, SetCapture, VIRTUAL_KEY, VK_BACK, VK_CONTROL, VK_DELETE,
     VK_DOWN, VK_ESCAPE, VK_F1, VK_F2, VK_F3, VK_F4, VK_F5, VK_LEFT, VK_MENU, VK_NEXT, VK_PRIOR, VK_RETURN, VK_RIGHT,
@@ -46,11 +50,12 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
 use windows::Win32::UI::Shell::{DefSubclassProc, FOLDERID_Profile, SHACF_FILESYS_DIRS, SHAutoComplete, SetWindowSubclass};
 use windows::Win32::UI::WindowsAndMessaging::{
     AppendMenuW, CHILDID_SELF, CW_USEDEFAULT, CreatePopupMenu, CreateWindowExW, DefWindowProcW, DestroyWindow, GCLP_HBRBACKGROUND,
-    GWLP_USERDATA, GetParent, GetWindowLongPtrW, GetWindowPlacement,
+    GWLP_USERDATA, GetParent, GetWindowLongPtrW, GetWindowPlacement, IsZoomed,
     HMENU, HTCLIENT, IDC_ARROW, IDC_SIZEWE, IsChild, KillTimer, WPF_RESTORETOMAXIMIZED, LoadCursorW, LoadIconW, MB_ICONQUESTION,
     IDCANCEL, IDYES, MB_ICONWARNING, MB_OKCANCEL, MB_YESNOCANCEL, MF_GRAYED, MF_SEPARATOR, MF_STRING, MINMAXINFO, MSG,
     MessageBoxW, MoveWindow,
-    NONCLIENTMETRICSW, OBJID_CLIENT, PostMessageW, PostQuitMessage, RegisterClassExW, SIZE_MINIMIZED, SPI_GETHIGHCONTRAST,
+    NONCLIENTMETRICSW, OBJID_CLIENT, PostMessageW, PostQuitMessage, RegisterClassExW, SIZE_MINIMIZED, SM_CXPADDEDBORDER,
+    SM_CYCAPTION, SM_CYSIZEFRAME, SPI_GETHIGHCONTRAST,
     SHOW_WINDOW_CMD, SPI_GETNONCLIENTMETRICS, SW_SHOWMAXIMIZED, SW_SHOWMINNOACTIVE, SW_SHOWNA, SW_SHOWNOACTIVATE,
     SW_SHOWNORMAL, SWP_NOACTIVATE, SWP_NOZORDER, SetClassLongPtrW,
     SetCursor, SetTimer, SetWindowLongPtrW, SetWindowPlacement, SetWindowPos, ShowWindow, SystemParametersInfoW, TPM_RETURNCMD,
@@ -61,13 +66,13 @@ use windows::Win32::UI::WindowsAndMessaging::{
     WM_SYSCOLORCHANGE, WM_SYSKEYDOWN, WM_TIMER, WNDCLASSEXW, WS_CHILD, WS_CLIPCHILDREN, WS_EX_CLIENTEDGE, WS_OVERLAPPEDWINDOW,
     WS_POPUP, WS_TABSTOP, WS_VISIBLE,
 };
-use windows::core::{PCWSTR, PWSTR, w};
+use windows::core::{HRESULT, PCWSTR, PWSTR, w};
 
 use crate::filelist::FileList;
 use crate::APP_NAME;
 use crate::folder::{
     CommandLine, Listing, Location, SortKey, byte_size, expand_vars, folder_written, is_absolute_path,
-    is_relative_path, is_shortcut, list_folder, normalize, row_after_deleting,
+    is_relative_path, is_shortcut, list_folder, normalize, row_after_deleting, tab_argument,
 };
 use crate::shell::{
     FolderWatch, IconBatch, OwnItem, acknowledge_change, fill_types, has_own_icon, read_own_icons, background_menu, bookmark_folder, copy_to_clipboard, delete_items, drag_out, open_in_explorer,
@@ -76,7 +81,7 @@ use crate::shell::{
 };
 use crate::tree::{FolderTree, TreeBatch};
 use crate::util::{
-    Font, OwnedMenu, client_rect, cursor_pos, focus, from_wide, key_down, mul_div, packed, pcwstr, scale, send,
+    Font, OwnedMenu, cascade, client_rect, cursor_pos, focus, from_wide, key_down, mul_div, packed, pcwstr, scale, send,
     set_text, unscale, wide, window_rect, window_text,
 };
 
@@ -105,6 +110,7 @@ const WM_APP_PRESSTAB: u32 = WM_APP + 10;
 const WM_APP_DRAGTAB: u32 = WM_APP + 11;
 const WM_APP_TREE_ICONS: u32 = WM_APP + 12;
 const WM_APP_BOOKMARKS: u32 = WM_APP + 13;
+const WM_APP_NEWWINDOW: u32 = WM_APP + 14;
 
 pub const TIMER_REFRESH: usize = 1;
 const TIMER_STATUS: usize = 2;
@@ -201,6 +207,13 @@ pub struct Key {
     pub ctrl: bool,
     pub shift: bool,
     pub alt: bool,
+}
+
+/// Open in new window (5.8): what is started.
+pub struct NewWindow {
+    pub command_line: OsString, // this exe, on the folder
+    pub place: RECT,            // in screen coordinates, as STARTUPINFO takes it
+    pub maximized: bool,
 }
 
 pub struct App {
@@ -897,6 +910,12 @@ impl App {
                     }
                     return LRESULT(0);
                 }
+                WM_APP_NEWWINDOW => {
+                    // the new window did not start (open_in_new_window)
+                    let error = windows::core::Error::from_hresult(HRESULT(wp.0 as i32));
+                    self.warn(&format!("Can't open a new window: {}", error.message()));
+                    return LRESULT(0);
+                }
                 WM_APP_TABS_READ => {
                     self.add_saved_tabs(&Box::from_raw(lp.0 as *mut Vec<Location>));
                     return LRESULT(0);
@@ -1202,6 +1221,7 @@ impl App {
                     let own = [
                         OwnItem { text: "Paste\tCtrl+V", enabled: copied, act: &|| paste(false) },
                         OwnItem { text: "Paste shortcut", enabled: copied, act: &|| paste(true) },
+                        OwnItem { text: "Open in new window", enabled: true, act: &|| self.open_in_new_window(&folder) },
                         OwnItem { text: "Open in Explorer", enabled: true, act: &|| open_in_explorer(self.wnd, &folder, false) },
                         OwnItem { text: "Search in Explorer", enabled: true, act: &|| open_in_explorer(self.wnd, &folder, true) },
                     ];
@@ -2321,6 +2341,86 @@ impl App {
         value.filter(|v| (-100_000..=100_000).contains(v)).unwrap_or(fallback)
     }
 
+    /// Open in new window (5.8): the folder in another Qoqdir, a title bar down and right of this window and the same
+    /// size, maximized if this one is. The place goes in its STARTUPINFO, which load_settings there takes over the
+    /// saved one.
+    pub fn new_window(&self, dir: &Path) -> NewWindow {
+        let exe = {
+            let mut buf = [0u16; 32768]; // not MAX_PATH: the app may live in a deep folder
+            let n = unsafe { GetModuleFileNameW(None, &mut buf) } as usize;
+            from_wide(&buf[..n])
+        };
+        let mut command_line = OsString::from("\"");
+        command_line.push(&exe);
+        command_line.push("\" ");
+        command_line.push(tab_argument(dir));
+        let dpi = self.dpi.get();
+        unsafe {
+            let mut mi = MONITORINFO { cbSize: size_of::<MONITORINFO>() as u32, ..Default::default() };
+            let _ = GetMonitorInfoW(MonitorFromWindow(self.wnd, MONITOR_DEFAULTTONEAREST), &mut mi);
+            let maximized = IsZoomed(self.wnd).as_bool();
+            let from = if maximized {
+                // the place it goes back to, which Windows counts from the work area's corner
+                let mut wp = WINDOWPLACEMENT { length: size_of::<WINDOWPLACEMENT>() as u32, ..Default::default() };
+                let _ = GetWindowPlacement(self.wnd, &mut wp);
+                let (dx, dy) = (mi.rcWork.left - mi.rcMonitor.left, mi.rcWork.top - mi.rcMonitor.top);
+                let r = wp.rcNormalPosition;
+                RECT { left: r.left + dx, top: r.top + dy, right: r.right + dx, bottom: r.bottom + dy }
+            } else {
+                window_rect(self.wnd)
+            };
+            let title_bar = GetSystemMetricsForDpi(SM_CYCAPTION, dpi)
+                + GetSystemMetricsForDpi(SM_CYSIZEFRAME, dpi)
+                + GetSystemMetricsForDpi(SM_CXPADDEDBORDER, dpi);
+            NewWindow { command_line, place: cascade(from, mi.rcWork, title_bar), maximized }
+        }
+    }
+
+    fn open_in_new_window(&self, dir: &Path) {
+        let NewWindow { command_line, place, maximized } = self.new_window(dir);
+        let wnd = self.wnd.0 as usize;
+        // On a worker thread: the exe may live on a server, which can be slow to answer.
+        in_background(move || {
+            let show = if maximized { SW_SHOWMAXIMIZED } else { SW_SHOWNORMAL };
+            let si = STARTUPINFOW {
+                cb: size_of::<STARTUPINFOW>() as u32,
+                dwFlags: STARTF_USEPOSITION | STARTF_USESIZE | STARTF_USESHOWWINDOW,
+                dwX: place.left as u32,
+                dwY: place.top as u32,
+                dwXSize: (place.right - place.left) as u32,
+                dwYSize: (place.bottom - place.top) as u32,
+                wShowWindow: show.0 as u16,
+                ..Default::default()
+            };
+            let mut line = wide(&command_line);
+            let mut pi = PROCESS_INFORMATION::default();
+            let started = unsafe {
+                CreateProcessW(
+                    PCWSTR::null(),
+                    Some(PWSTR(line.as_mut_ptr())),
+                    None,
+                    None,
+                    false,
+                    PROCESS_CREATION_FLAGS(0),
+                    None,
+                    PCWSTR::null(),
+                    &si,
+                    &mut pi,
+                )
+            };
+            match started {
+                Ok(()) => unsafe {
+                    let _ = CloseHandle(pi.hThread);
+                    let _ = CloseHandle(pi.hProcess);
+                },
+                Err(e) => {
+                    let code = WPARAM(e.code().0 as usize);
+                    let _ = unsafe { PostMessageW(Some(HWND(wnd as _)), WM_APP_NEWWINDOW, code, LPARAM(0)) };
+                }
+            }
+        });
+    }
+
     fn load_settings(&self, cmd: &CommandLine) {
         let dpi = self.dpi.get();
         self.tree_width.set(self.number("TreeWidth", 220));
@@ -2345,9 +2445,35 @@ impl App {
         }
 
         let quiet = !self.use_settings || Self::started_quiet(); // a self-test never steals the focus either
+        // Started with a place and size, as Open in new window starts one (5.8): there, maximized if asked, when that
+        // is on a monitor. Any other start takes the saved place.
+        let mut si = STARTUPINFOW { cb: size_of::<STARTUPINFOW>() as u32, ..Default::default() };
+        unsafe { GetStartupInfoW(&mut si) };
+        // Summed as u32s, which wrap: nonsense from the program that started this one can't trip the overflow check.
+        let given = RECT {
+            left: si.dwX as i32,
+            top: si.dwY as i32,
+            right: si.dwX.wrapping_add(si.dwXSize) as i32,
+            bottom: si.dwY.wrapping_add(si.dwYSize) as i32,
+        };
+        let placed = si.dwFlags.contains(STARTF_USEPOSITION | STARTF_USESIZE)
+            && !unsafe { MonitorFromRect(&given, MONITOR_DEFAULTTONULL) }.is_invalid();
         let (w, h) = (self.number("Width", 0), self.number("Height", 0));
         unsafe {
-            if w > 0 && h > 0 {
+            if placed {
+                let (cx, cy) = (si.dwXSize as i32, si.dwYSize as i32);
+                let _ = SetWindowPos(self.wnd, None, given.left, given.top, cx, cy, SWP_NOZORDER | SWP_NOACTIVATE);
+                let maximized =
+                    si.dwFlags.contains(STARTF_USESHOWWINDOW) && i32::from(si.wShowWindow) == SW_SHOWMAXIMIZED.0;
+                let show = if quiet {
+                    SW_SHOWNOACTIVATE
+                } else if maximized {
+                    SW_SHOWMAXIMIZED
+                } else {
+                    SW_SHOWNORMAL
+                };
+                let _ = ShowWindow(self.wnd, show);
+            } else if w > 0 && h > 0 {
                 let (x, y) = (self.number("X", 0), self.number("Y", 0));
                 let show = if quiet {
                     SW_SHOWNOACTIVATE

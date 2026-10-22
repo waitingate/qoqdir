@@ -196,6 +196,38 @@ int main(int argc, char** argv) {
         CHECK(!parseCommandLine({L"-tC:\\A"}).error.empty());          // nor -t without "="
     }
 
+    // tabArgument: the folder a new window gets (5.8) comes back whole through Windows' command-line rules, a root's
+    // closing backslash and a name that looks like an option or a variable included.
+    for (const wchar_t* folder : {L"C:\\My Files", L"D:\\", L"\\\\nas\\share", L"C:\\-h", L"C:\\x\\%TEMP%",
+                                  L"C:\\\u5831\u544A\\new folder"}) {
+        std::wstring line = L"qoqdir.exe " + tabArgument(folder);
+        int count = 0;
+        LPWSTR* words = CommandLineToArgvW(line.c_str(), &count);
+        std::vector<std::wstring> args;
+        if (words) args.assign(words + 1, words + count);
+        LocalFree(words);
+        CommandLine c = parseCommandLine(args);
+        CHECK(c.error.empty() && c.folders.size() == 1);
+        CHECK_EQ(c.folders.empty() ? L"" : c.folders[0], folder);
+    }
+    // The parser would mend "D:\" (a stray closing quote goes, and D: means D:\), but the quoting is right by itself.
+    CHECK_EQ(tabArgument(L"D:\\"), L"--tab=\"D:\\\\\"");
+
+    // cascade: a title bar down and right, the same size; back at the work area's top left where it would leave it.
+    {
+        auto same = [](const RECT& a, const RECT& b) { return EqualRect(&a, &b) != 0; };
+        RECT work{0, 0, 1920, 1040};
+        CHECK(same(cascade({100, 100, 900, 700}, work, 30), {130, 130, 930, 730}));
+        CHECK(same(cascade({100, 400, 900, 1010}, work, 30), {130, 430, 930, 1040}));   // just fits
+        CHECK(same(cascade({100, 420, 900, 1020}, work, 30), {0, 0, 800, 600}));        // past the bottom
+        CHECK(same(cascade({1500, 100, 1900, 700}, work, 30), {0, 0, 400, 600}));       // past the right edge
+        CHECK(same(cascade({0, 0, 1920, 1040}, work, 30), {0, 0, 1920, 1040}));         // as big as the work area
+        // A monitor left of the main one, with its taskbar at the top: its work area doesn't start at 0.
+        RECT left{-1920, 40, 0, 1080};
+        CHECK(same(cascade({-1800, 100, -1000, 700}, left, 30), {-1770, 130, -970, 730}));
+        CHECK(same(cascade({-1800, 20, -1000, 620}, left, 10), {-1920, 40, -1120, 640}));   // above the work area
+    }
+
     // samePath / extensionOf
     CHECK(samePath(L"C:\\Users", L"c:\\USERS"));
     CHECK(!samePath(L"C:\\Users", L"C:\\User"));

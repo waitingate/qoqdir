@@ -1952,6 +1952,31 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
             return selfTest_->note.find(L"copied") == std::wstring::npos &&
                    selfTest_->note.find(L"clipboard") != std::wstring::npos;
         });
+    // 5.8: Open in new window starts this exe on the folder, a title bar down and right of this window. A start would
+    // show a window, which the self-test never does: it checks what would be started.
+    add(L"Open in new window starts Qoqdir on the folder, a title bar down and right of this window (5.8)", nullptr,
+        [=, this] {
+            NewWindow w = newWindow(dir);
+            int argc = 0;
+            LPWSTR* argv = CommandLineToArgvW(w.commandLine.c_str(), &argc);
+            std::vector<std::wstring> args;
+            if (argv) args.assign(argv, argv + argc);
+            LocalFree(argv);
+            std::wstring exe(32768, L'\0');
+            exe.resize(GetModuleFileNameW(nullptr, exe.data(), DWORD(exe.size())));
+            bool started = args.size() == 2 && samePath(args[0], exe) &&
+                           parseCommandLine({args[1]}).folders == std::vector<std::wstring>{dir};
+            RECT r{};
+            GetWindowRect(wnd_, &r);
+            MONITORINFO mi{};
+            mi.cbSize = sizeof mi;
+            GetMonitorInfoW(MonitorFromWindow(wnd_, MONITOR_DEFAULTTONEAREST), &mi);
+            int dx = w.place.left - r.left, dy = w.place.top - r.top;
+            bool moved = (dx > 0 && dx == dy) || (w.place.left == mi.rcWork.left && w.place.top == mi.rcWork.top);
+            bool sameSize = w.place.right - w.place.left == r.right - r.left &&
+                            w.place.bottom - w.place.top == r.bottom - r.top;
+            return started && moved && sameSize && !w.maximized;
+        });
     // 4.10: a window that answers nothing for 5 s gets a line in the crash log saying where its thread is. Last: a
     // hung window gets a ghost window from Windows meanwhile, which can take the focus from the steps after it.
     // The test's own long steps (making and removing 10,000 files) leave such lines too: a new one must appear.

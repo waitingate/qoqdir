@@ -61,3 +61,12 @@ constexpr wchar_t kAppName[] = L"Qoqdir";
 
 inline int scale(int px, UINT dpi) { return MulDiv(px, static_cast<int>(dpi), 96); }
 inline int unscale(int px, UINT dpi) { return MulDiv(px, 96, static_cast<int>(dpi)); }
+
+// Where a window opened from one at `from` goes (screen coordinates): `step` down and right, the same size. Where that
+// would leave the work area `work`, at its top left instead, as Windows' own cascade starts over (5.8).
+inline RECT cascade(const RECT& from, const RECT& work, int step) {
+    RECT to{from.left + step, from.top + step, from.right + step, from.bottom + step};
+    if (to.left < work.left || to.top < work.top || to.right > work.right || to.bottom > work.bottom)
+        to = {work.left, work.top, work.left + (from.right - from.left), work.top + (from.bottom - from.top)};
+    return to;
+}

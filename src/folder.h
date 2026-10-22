@@ -42,6 +42,9 @@ struct CommandLine {
     std::wstring error;                  // a mistake to show with the help
 };
 CommandLine parseCommandLine(const std::vector<std::wstring>& args);
+// "--tab=" and the folder, for a Qoqdir started on it (Open in new window, 5.8), quoted so that the command-line rules
+// give it back whole.
+std::wstring tabArgument(const std::wstring& folder);
 
 // ---------------------------------------------------------------- reading a folder
 

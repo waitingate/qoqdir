@@ -19,7 +19,7 @@ enum : int { ID_BACK = 100, ID_FORWARD, ID_UP, ID_ADDRESS, ID_FILTER, ID_TABS, I
 enum : UINT {
     WM_APP_LOADED = WM_APP + 1, WM_APP_CHANGED, WM_APP_CLOSETAB, WM_APP_RENAME, WM_APP_ICONS, WM_APP_TREE,
     WM_APP_MIDDLECLICK, WM_APP_TABS_SAVED, WM_APP_TABS_READ, WM_APP_PRESSTAB, WM_APP_DRAGTAB, WM_APP_TREE_ICONS,
-    WM_APP_BOOKMARKS
+    WM_APP_BOOKMARKS, WM_APP_NEWWINDOW
 };
 
 constexpr size_t kMaxHistory = 100;
@@ -427,6 +427,9 @@ LRESULT App::onMessage(UINT msg, WPARAM wp, LPARAM lp) {
         if (wp) setMessage(L"Tabs saved in Bookmarks\\Tabs, replacing the earlier set");
         else warn(L"Can't save every tab in Bookmarks\\Tabs");
         return 0;
+    case WM_APP_NEWWINDOW:   // the new window did not start (openInNewWindow)
+        warn(L"Can't open a new window: " + errorText(DWORD(wp)));
+        return 0;
     case WM_APP_TABS_READ: {
         std::unique_ptr<std::vector<std::wstring>> folders(reinterpret_cast<std::vector<std::wstring>*>(lp));
         addSavedTabs(*folders);
@@ -657,6 +660,7 @@ void App::onContextMenu(HWND from, POINT pt) {
                 showMenu(wnd_, backgroundMenu(wnd_, dir).get(), pt, nullptr,
                          {{L"Paste\tCtrl+V", copied, [&] { paste(false); }},
                           {L"Paste shortcut", copied, [&] { paste(true); }},
+                          {L"Open in new window", true, [&] { openInNewWindow(dir); }},
                           {L"Open in Explorer", true, [&] { openInExplorer(wnd_, dir, false); }},
                           {L"Search in Explorer", true, [&] { openInExplorer(wnd_, dir, true); }}});
             }
@@ -1413,6 +1417,54 @@ void App::hint(bool& said, const wchar_t* text, bool afterLoad) {
     else setMessage(text);
 }
 
+// Open in new window (5.8): the folder in another Qoqdir, a title bar down and right of this window and the same size,
+// maximized if this one is. The place goes in its STARTUPINFO, which loadSettings there takes over the saved one.
+App::NewWindow App::newWindow(const std::wstring& dir) const {
+    NewWindow w;
+    std::wstring exe(32768, L'\0');   // not MAX_PATH: the app may live in a deep folder
+    exe.resize(GetModuleFileNameW(nullptr, exe.data(), DWORD(exe.size())));
+    w.commandLine = L"\"" + exe + L"\" " + tabArgument(dir);
+    MONITORINFO mi{};
+    mi.cbSize = sizeof mi;
+    GetMonitorInfoW(MonitorFromWindow(wnd_, MONITOR_DEFAULTTONEAREST), &mi);
+    RECT from{};
+    w.maximized = IsZoomed(wnd_) != 0;
+    if (w.maximized) {   // the place it goes back to, which Windows counts from the work area's corner
+        WINDOWPLACEMENT wp{};
+        wp.length = sizeof wp;
+        GetWindowPlacement(wnd_, &wp);
+        from = wp.rcNormalPosition;
+        OffsetRect(&from, mi.rcWork.left - mi.rcMonitor.left, mi.rcWork.top - mi.rcMonitor.top);
+    } else {
+        GetWindowRect(wnd_, &from);
+    }
+    int titleBar = GetSystemMetricsForDpi(SM_CYCAPTION, dpi_) + GetSystemMetricsForDpi(SM_CYSIZEFRAME, dpi_) +
+                   GetSystemMetricsForDpi(SM_CXPADDEDBORDER, dpi_);
+    w.place = cascade(from, mi.rcWork, titleBar);
+    return w;
+}
+
+void App::openInNewWindow(const std::wstring& dir) {
+    // On a worker thread: the exe may live on a server, which can be slow to answer.
+    inBackground([wnd = wnd_, w = newWindow(dir)]() mutable {
+        STARTUPINFOW si{};
+        si.cb = sizeof si;
+        si.dwFlags = STARTF_USEPOSITION | STARTF_USESIZE | STARTF_USESHOWWINDOW;
+        si.dwX = DWORD(w.place.left);
+        si.dwY = DWORD(w.place.top);
+        si.dwXSize = DWORD(w.place.right - w.place.left);
+        si.dwYSize = DWORD(w.place.bottom - w.place.top);
+        si.wShowWindow = WORD(w.maximized ? SW_SHOWMAXIMIZED : SW_SHOWNORMAL);
+        PROCESS_INFORMATION pi{};
+        if (!CreateProcessW(nullptr, w.commandLine.data(), nullptr, nullptr, FALSE, 0, nullptr, nullptr, &si, &pi)) {
+            PostMessageW(wnd, WM_APP_NEWWINDOW, GetLastError(), 0);
+            return;
+        }
+        CloseHandle(pi.hThread);
+        CloseHandle(pi.hProcess);
+    });
+}
+
 void App::loadSettings(const CommandLine& cmd) {
     // Missing, not a number or far off any screen (a damaged file: x + width must not overflow): the default.
     auto number = [&](const std::wstring& key, int fallback) {
@@ -1438,8 +1490,22 @@ void App::loadSettings(const CommandLine& cmd) {
     active_ = 0;
 
     bool quiet = !useSettings_ || startedQuiet();   // a self-test never steals the focus either
+    // Started with a place and size, as Open in new window starts one (5.8): there, maximized if asked, when that is
+    // on a monitor. Any other start takes the saved place.
+    STARTUPINFOW si{};
+    si.cb = sizeof si;
+    GetStartupInfoW(&si);
+    // Summed as DWORDs, which wrap: nonsense from the program that started this one can't trip the overflow trap.
+    RECT given{LONG(si.dwX), LONG(si.dwY), LONG(si.dwX + si.dwXSize), LONG(si.dwY + si.dwYSize)};
+    bool placed = (si.dwFlags & STARTF_USEPOSITION) && (si.dwFlags & STARTF_USESIZE) &&
+                  MonitorFromRect(&given, MONITOR_DEFAULTTONULL);
     int w = number(L"Width", 0), h = number(L"Height", 0);
-    if (w > 0 && h > 0) {
+    if (placed) {
+        SetWindowPos(wnd_, nullptr, given.left, given.top, int(si.dwXSize), int(si.dwYSize),
+                     SWP_NOZORDER | SWP_NOACTIVATE);
+        bool maximized = (si.dwFlags & STARTF_USESHOWWINDOW) && si.wShowWindow == SW_SHOWMAXIMIZED;
+        ShowWindow(wnd_, quiet ? SW_SHOWNOACTIVATE : maximized ? SW_SHOWMAXIMIZED : SW_SHOWNORMAL);
+    } else if (w > 0 && h > 0) {
         WINDOWPLACEMENT wp{};
         wp.length = sizeof wp;
         int x = number(L"X", 0), y = number(L"Y", 0);

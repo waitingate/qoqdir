@@ -438,7 +438,10 @@ readers read the same as the button's name.
 - Context menus: right-click on items gives Windows' full context menu for the
   selection (Shift+right-click gives the extended menu). Right-click on empty
   space gives Paste and Paste shortcut (greyed when no files were copied; Paste
-  does what Ctrl+V does), Open in Explorer and Search in Explorer (Windows
+  does what Ctrl+V does), Open in new window (the folder in a second Qoqdir
+  window, a title bar down and right of this one and the same size, maximized
+  if this one is; back at the top left of the screen where it would go off
+  it), Open in Explorer and Search in Explorer (Windows
   Search scoped to the folder: both for what Qoqdir leaves to Explorer, 6), then
   the folder's own menu from Windows (New, Properties...). Windows' folder menu has neither of those two, because Explorer
   adds them itself, so Qoqdir adds them too. Like Explorer, Ctrl+C marks the files
@@ -556,7 +559,10 @@ Saved when the window closes and loaded at start:
 
 Nothing else: no tabs and no paths. A saved network path could be unavailable at
 the next start, and a predictable start is better. Missing or broken values fall
-back to the defaults, and a missing or read-only file is never an error.
+back to the defaults, and a missing or read-only file is never an error. A
+window started with a place and size of its own (in its `STARTUPINFO`, as Open
+in new window starts one, 5.8) opens there instead of at the saved place, when
+that is on a monitor.
 
 ## 6. Out of scope
 
@@ -578,7 +584,13 @@ At least these, with concrete examples:
   select the folder you came from).
 - Command line: plain folders, `--tab=` and `-t=` (a name that starts with `-`
   too), duplicates removed (letter case, trailing backslash), `.`, `-h`, `-?`,
-  `--selftest`; unknown options (`-t` without `=` among them) are errors.
+  `--selftest`; unknown options (`-t` without `=` among them) are errors. The
+  `--tab=` a new window gets (5.8) gives its folder back whole through Windows'
+  rules for splitting a command line, `D:\` included.
+- Where a new window goes: a title bar down and right of the old one and the
+  same size, or the top left of the work area where it would leave it (past the
+  right edge, the bottom or the top; on a monitor left of the main one, with
+  its taskbar at the top).
 - Sorting: folders first, natural number order, each column both ways, ties by
   name, Type by the shown type text.
 - Filtering: substring, ignoring case, wildcards (`*.pdf` must not match
@@ -773,7 +785,10 @@ result:
     shows the tab not available at once, and a move that lands after the
     switch's read was shown goes on from that folder. A This PC tab left while
     its list is emptied keeps its selection.
-67. Last, a window thread stuck for 7 s leaves a line in the crash log naming
+67. Open in new window would start this exe on the folder, a title bar down
+    and right of this window, the same size and not maximized. The self-test
+    checks what it would start, without starting it: that would show a window.
+68. Last, a window thread stuck for 7 s leaves a line in the crash log naming
     where it is (the self-test's crash log is in its own folder).
 
 ### 7.3 Command-line checks
@@ -798,6 +813,9 @@ Run on a copy of the exe in a temp folder:
   into one.
 - With a damaged `qoqdir.ini` (a window position far off any screen) it starts
   with the defaults.
+- Started with a place and size (`STARTF_USEPOSITION` and `STARTF_USESIZE`, as
+  Open in new window starts a window), it opens there and not at the place
+  saved in `qoqdir.ini`.
 - From a folder it can't write to (as Program Files is for most users), it runs,
   closes with no error box and exit code 0, and writes nothing there.
 

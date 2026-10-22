@@ -170,6 +170,14 @@ CommandLine parseCommandLine(const std::vector<std::wstring>& args) {
     return cmd;
 }
 
+std::wstring tabArgument(const std::wstring& folder) {
+    // Backslashes before a quote escape it (CommandLineToArgvW and Rust's std read them alike), so the ones the
+    // folder ends in are doubled: "D:\\" comes back as D:\, where "D:\" would end in a quote.
+    std::wstring arg = L"--tab=\"" + folder;
+    for (size_t i = folder.size(); i > 0 && folder[i - 1] == L'\\'; --i) arg += L'\\';
+    return arg + L'"';
+}
+
 // ---------------------------------------------------------------- reading a folder
 
 std::vector<std::wstring> driveRoots() {

@@ -121,6 +121,11 @@ instead of corrupting data, and the crash log says where.
   method's word arrives as several characters at once.
 - `qoqdir.ini` is saved on close and at shutdown. A saved position on a monitor
   that is gone falls back to the default.
+- Open in new window starts the exe again with `--tab=` (`tabArgument`) and
+  puts the new window's place and size in its `STARTUPINFO`, which
+  `loadSettings` there takes over the saved place. `newWindow` works out what
+  to start, so the self-test can check it without opening a window;
+  `openInNewWindow` starts it on a worker thread, as the exe may be on a server.
 - `ShellProcessRef` keeps the process alive after the window closes until
   background copies and Properties windows are done. `OleFlushClipboard` keeps
   copied files pasteable after Qoqdir exits.
