@@ -405,9 +405,9 @@ LRESULT App::onMessage(UINT msg, WPARAM wp, LPARAM lp) {
         acknowledgeChange(wp, lp);
         tree_.refreshFolder(tree_.bookmarks());
         return 0;
-    case WM_APP_ICONS: {   // the shown folder's own icons
+    case WM_APP_ICONS: {
         std::unique_ptr<IconBatch> batch(reinterpret_cast<IconBatch*>(lp));
-        list_.setIcons(*batch);
+        onIcons(std::move(*batch), UINT(wp));
         return 0;
     }
     case WM_APP_TREE_ICONS: {   // bookmark shortcuts get their own icons the same way
@@ -865,6 +865,7 @@ void App::open(const std::wstring& path, Nav nav, ViewState view, Origin origin)
     } else if (!move || kept_.tabId != tab().id) {
         kept_ = {};
         keptListing_.reset();
+        keptIcons_.reset();
     }
     g_keptLoad = kept_.generation;
     UINT generation = ++generation_;
@@ -886,7 +887,8 @@ void App::open(const std::wstring& path, Nav nav, ViewState view, Origin origin)
             if (hasOwnIcon(it)) own.push_back(it.name);
         post(wnd, WM_APP_LOADED, generation, std::move(result));
         // Then the icons that need a disk (or network) lookup, so they never hold up the list.
-        if (!own.empty() && !replaced()) post(wnd, WM_APP_ICONS, 0, std::make_unique<IconBatch>(readOwnIcons(path, own)));
+        if (!own.empty() && !replaced())
+            post(wnd, WM_APP_ICONS, generation, std::make_unique<IconBatch>(readOwnIcons(path, own)));
     });
 }
 
@@ -932,6 +934,7 @@ void App::onLoaded(Listing&& listing, UINT generation) {
     if (listing.error) return onLoadFailed(listing, p);
     kept_ = {};   // the tab shows a folder: a switch's read kept for a move is of no use any more
     keptListing_.reset();
+    std::optional<IconBatch> keptIcons = std::exchange(keptIcons_, std::nullopt);
     g_keptLoad = 0;
 
     std::wstring old = t.path;
@@ -991,6 +994,7 @@ void App::onLoaded(Listing&& listing, UINT generation) {
     // The tree follows the folder shown: its node is read again when the subfolders or shortcuts changed (5.5).
     std::vector<std::wstring> treeNames = reload ? list_.treeNames() : std::vector<std::wstring>{};
     list_.setListing(std::move(listing));
+    if (keptBack && keptIcons) list_.setIcons(*keptIcons);   // the switch's read: its own icons that came before it
     if (reload && treeNames != list_.treeNames()) tree_.refreshFolder(t.path);
     int row = list_.select(view.select, view.focus);
     if (row < 0 && !requested && view.focusRow >= 0 && list_.count() > 0)   // the focused item is gone (4.5):
@@ -1009,6 +1013,16 @@ void App::onLoaded(Listing&& listing, UINT generation) {
     else if (keptBack && loadingShown) setMessage(keptSaid_);   // what "Loading..." took the place of
     lateHint_ = nullptr;
     showStatus();
+}
+
+// The own icons of a folder read (a .exe, a .lnk), read after its listing. Those of a tab switch's read a move took
+// over wait with it until it is shown (kept_).
+void App::onIcons(IconBatch&& batch, UINT generation) {
+    if (kept_.generation && generation == kept_.generation) {
+        keptIcons_ = std::move(batch);
+        return;
+    }
+    list_.setIcons(batch);
 }
 
 // The address bar, title, buttons and tabs follow the current tab's folder. A reload changes none of them.

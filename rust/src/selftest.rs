@@ -62,7 +62,8 @@ use crate::folder::{
     Item, Listing, Location, SortKey, exists, folder_written, is_directory, is_shortcut, list_folder, sort_items,
 };
 use crate::shell::{
-    copy_to_clipboard, data_object_at, item_menu_at, known_folder, paste_into, pidl_from, shortcut_target, type_name,
+    IconBatch, copy_to_clipboard, data_object_at, folder_icon, item_menu_at, known_folder, paste_into, pidl_from,
+    shortcut_target, type_name,
 };
 use windows::core::{Interface, w};
 
@@ -2745,6 +2746,38 @@ impl App {
                 a.refresh(ViewState::default());
             },
             |a| a.idle() && a.list.shows(&Location::dir(p("sub"))),
+        );
+        s.add("(close that tab)", |a| a.close_tab(1), |a| a.at(&p("big")) && a.tabs() == 1);
+        // The own icons of a switch's read come after its listing: they wait with it. On big, whose own read sends
+        // none.
+        s.add("(a second tab on big)", |a| a.new_tab(Location::dir(p("big")), true), |a| {
+            a.at(&p("big")) && a.tabs() == 2 && a.active() == 1
+        });
+        s.add("(the first tab, a sixth time)", |a| a.switch_tab(0), |a| a.at(&p("big")) && a.active() == 0);
+        s.add(
+            "a switch's read back before the move fails keeps the own icons read after it (4.2)",
+            |a| {
+                overtake(a, "missing six");
+                let program = Item { name: OsString::from("tool.exe"), icon: -1, ..Default::default() };
+                let found = Listing {
+                    location: Location::dir(p("big")),
+                    written: folder_written(&p("big")),
+                    items: vec![program],
+                    ..Default::default()
+                };
+                a.on_loaded(found, STUCK_READ); // held: the move is still out
+                // Then the program's own icon, read after the listing: the folder icon stands in for it.
+                let icons = vec![(OsString::from("tool.exe"), folder_icon())];
+                a.on_icons(IconBatch { dir: Location::dir(p("big")), icons }, STUCK_READ);
+            },
+            |a| {
+                if !a.idle() || !a.list.shows(&Location::dir(p("big"))) || a.list.count() != 1 {
+                    return false;
+                }
+                let mut item = LVITEMW { mask: LVIF_IMAGE, ..Default::default() }; // row 0: the program
+                send(a.list.hwnd(), LVM_GETITEMW, 0, &mut item as *mut _ as isize);
+                item.iImage == folder_icon()
+            },
         );
         s.add("(close that tab)", |a| a.close_tab(1), |a| a.at(&p("big")) && a.tabs() == 1);
 

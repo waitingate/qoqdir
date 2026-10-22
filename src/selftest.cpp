@@ -1833,6 +1833,32 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
         }).whileLoading = true;
     add(L"(F5 shows it again)", [=, this] { refresh(); }, [=, this] { return idle() && list_.shows(path(L"sub")); });
     add(L"(close that tab)", [=, this] { closeTab(1); }, [=, this] { return at(path(L"big")) && tabs_.size() == 1; });
+    // The own icons of a switch's read come after its listing: they wait with it. On big, whose own read sends none.
+    add(L"(a second tab on big)", [=, this] { newTab(path(L"big"), true); },
+        [=, this] { return at(path(L"big")) && tabs_.size() == 2 && active_ == 1; });
+    add(L"(the first tab, a sixth time)", [=, this] { switchTab(0); },
+        [=, this] { return at(path(L"big")) && active_ == 0; });
+    add(L"a switch's read back before the move fails keeps the own icons read after it (4.2)",
+        [=, this] {
+            overtake(L"missing six");
+            Item program;
+            program.name = L"tool.exe";
+            Listing found;
+            found.path = path(L"big");
+            found.written = folderWritten(found.path);
+            found.items.push_back(program);
+            onLoaded(std::move(found), kStuckRead);   // held: the move is still out
+            // Then the program's own icon, read after the listing: the folder icon stands in for it.
+            onIcons({path(L"big"), {{L"tool.exe", folderIcon()}}}, kStuckRead);
+        },
+        [=, this] {
+            if (!idle() || !list_.shows(path(L"big")) || list_.count() != 1) return false;
+            LVITEMW item{};
+            item.mask = LVIF_IMAGE;   // row 0: the program
+            ListView_GetItem(list_.hwnd(), &item);
+            return item.iImage == folderIcon();
+        });
+    add(L"(close that tab)", [=, this] { closeTab(1); }, [=, this] { return at(path(L"big")) && tabs_.size() == 1; });
 
     add(L"copies 10,000 selected files to the clipboard",
         [=, this] {

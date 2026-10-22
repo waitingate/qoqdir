@@ -183,6 +183,7 @@ pub struct State {
     // finds, as the switch would have (4.2). Until then it counts as loading (App::kept_read).
     kept: Option<Pending>,
     kept_listing: Option<Listing>, // what that read found, if it came back while the move still loaded
+    kept_icons: Option<IconBatch>, // ...and its own icons, if they came before it was shown
     // What a delete, rename or new folder asked to select while a load was pending, and in which folder.
     pub queued_view: Option<(Location, ViewState)>,
     rename: Option<(PathBuf, OsString)>, // done after the edit box has closed
@@ -556,6 +557,7 @@ impl App {
                     pending: None,
                     kept: None,
                     kept_listing: None,
+                    kept_icons: None,
                     queued_view: None,
                     rename: None,
                     watch: None,
@@ -872,8 +874,7 @@ impl App {
                     return LRESULT(0);
                 }
                 WM_APP_ICONS => {
-                    // The shown folder's own icons.
-                    self.list.set_icons(&Box::from_raw(lp.0 as *mut IconBatch));
+                    self.on_icons(*Box::from_raw(lp.0 as *mut IconBatch), wp.0 as u32);
                     return LRESULT(0);
                 }
                 WM_APP_TREE_ICONS => {
@@ -1576,6 +1577,7 @@ impl App {
             } else if !moving || !st.kept.as_ref().is_some_and(|k| k.tab_id == tab_id) {
                 st.kept = None;
                 st.kept_listing = None;
+                st.kept_icons = None;
                 self.kept_read.set(0);
             }
         }
@@ -1610,7 +1612,7 @@ impl App {
             post(wnd, WM_APP_LOADED, generation as usize, Box::new(listing));
             // Then the icons that need a disk (or network) lookup, so they never hold up the list.
             if !own.is_empty() && !replaced() {
-                post(wnd, WM_APP_ICONS, 0, Box::new(read_own_icons(&location, own)));
+                post(wnd, WM_APP_ICONS, generation as usize, Box::new(read_own_icons(&location, own)));
             }
         });
     }
@@ -1677,12 +1679,13 @@ impl App {
             }
             return self.on_load_failed(&listing, &error.message(), &pending);
         }
-        {
+        let kept_icons = {
             // The tab shows a folder: a switch's read kept for a move is of no use any more.
             let mut st = self.st.borrow_mut();
             st.kept = None;
             st.kept_listing = None;
-        }
+            st.kept_icons.take()
+        };
         self.kept_read.set(0);
         KEPT_LOAD.store(0, Ordering::SeqCst);
 
@@ -1755,6 +1758,9 @@ impl App {
         // The tree follows the folder shown: its node is read again when the subfolders or shortcuts changed (5.5).
         let tree_names = if reload { self.list.tree_names() } else { Vec::new() };
         self.list.set_listing(listing);
+        if let Some(icons) = kept_icons.filter(|_| kept_back) {
+            self.list.set_icons(&icons); // the switch's read: its own icons that came before it
+        }
         if reload && tree_names != self.list.tree_names() {
             self.tree.refresh_folder(&location);
         }
@@ -1790,6 +1796,16 @@ impl App {
         }
         self.late_hint.set(None);
         self.show_status();
+    }
+
+    /// The own icons of a folder read (a .exe, a .lnk), read after its listing. Those of a tab switch's read a move
+    /// took over wait with it until it is shown (State::kept).
+    pub fn on_icons(&self, batch: IconBatch, generation: u32) {
+        if self.kept_read.get() != 0 && generation == self.kept_read.get() {
+            self.st.borrow_mut().kept_icons = Some(batch);
+            return;
+        }
+        self.list.set_icons(&batch);
     }
 
     /// The address bar, title, buttons and tabs follow the current tab's folder. A reload changes none of them.

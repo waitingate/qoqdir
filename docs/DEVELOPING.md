@@ -92,9 +92,9 @@ instead of corrupting data, and the crash log says where.
   dead history entry; a typed path that is a file gets opened. A move that takes
   over from a tab switch keeps the switch's read going (`kept_`, which
   `loading()` counts): if the move fails or opens a file, `onLoaded` applies
-  what that read finds as the switch, held in `keptListing_` if it came back
-  first. A cleared list (`FileList::clear`) shows no folder: compare with
-  `shows()`, not `dir()`.
+  what that read finds as the switch, held in `keptListing_` and `keptIcons_`
+  if it came back first. A cleared list (`FileList::clear`) shows no folder:
+  compare with `shows()`, not `dir()`.
 - The right-click menu is modal, so Qoqdir's own commands in it only act if the
   folder and the selection are the same as when it opened.
 - Live updates: `FolderWatch` posts `WM_APP_CHANGED`, and a burst of changes

@@ -119,11 +119,11 @@ These describe what the user sees. Each must hold in every situation.
 - A tab's folder, history and title change only once its new folder has loaded.
   A failed or slow load never leaves a tab half updated. A move that takes over
   from a tab switch lets the switch's own read go on: if the move fails, the
-  tab shows what that read finds, as the switch would have, with the move's
-  error, and its folder is not read a second time. Until then the tab is
-  loading and an automatic refresh waits. A message shown meanwhile stays, so
-  does what the address bar holds (5.3), and a read that comes back with an
-  error shows the tab not available.
+  tab shows what that read finds, own icons included, as the switch would
+  have, with the move's error, and its folder is not read a second time. Until
+  then the tab is loading and an automatic refresh waits. A message shown
+  meanwhile stays, so does what the address bar holds (5.3), and a read that
+  comes back with an error shows the tab not available.
 - Refreshes never pile up: refreshing while the folder is still loading starts
   nothing new, so holding F5 on a slow network folder starts one load.
 - An automatic refresh (the folder changed on disk) never cancels a navigation or
@@ -762,12 +762,12 @@ result:
     overtakes still moves the watch to the folder shown, going up keeps a
     refresh the old watch asked for, and a switch that a failed move overtakes
     still shows its tab's folder as the switch would have, with the error, from
-    the switch's own read: one back before the move fails waits for it, and
-    while one is still out the tab waits too, with a refresh asked for
-    meanwhile reading nothing; a message shown meanwhile stays, the address bar
-    is left alone, and a read that comes back with an error shows the tab not
-    available at once. A This PC tab left while its list is emptied keeps its
-    selection.
+    the switch's own read: one back before the move fails waits for it, with
+    the own icons read after it, and while one is still out the tab waits too,
+    with a refresh asked for meanwhile reading nothing; a message shown
+    meanwhile stays, the address bar is left alone, and a read that comes back
+    with an error shows the tab not available at once. A This PC tab left while
+    its list is emptied keeps its selection.
 67. Last, a window thread stuck for 7 s leaves a line in the crash log naming
     where it is (the self-test's crash log is in its own folder).
 

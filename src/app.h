@@ -88,6 +88,7 @@ private:
     // Navigation
     void open(const std::wstring& path, Nav nav, ViewState view = {}, Origin origin = {});
     void onLoaded(Listing&& listing, UINT generation);
+    void onIcons(IconBatch&& batch, UINT generation);   // a folder read's own icons (WM_APP_ICONS)
     struct Pending;
     void onLoadFailed(const Listing& listing, const Pending& p);
     void showLocation(Nav nav);
@@ -197,6 +198,7 @@ private:
     // finds, as the switch would have (4.2). Until then it counts as loading.
     Pending kept_;
     std::unique_ptr<Listing> keptListing_;   // what that read found, if it came back while the move still loaded
+    std::optional<IconBatch> keptIcons_;     // ...and its own icons, if they came before it was shown
     std::wstring keptSaid_;   // what the failed move said, or what "Loading..." covered since: back with the folder
     UINT generation_ = 0;
     int loadsDone_ = 0;     // folder reads that reported back (self-test)
