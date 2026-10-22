@@ -30,6 +30,7 @@ struct App::SelfTest {
     size_t index = 0;
     bool started = false, busy = false;
     ULONGLONG startTick = 0;
+    ULONGLONG heldTick = 0;   // since when only a folder load still out has held the next step back
     std::wstring dir, logPath, note;
     int failures = 0;
 };
@@ -1738,6 +1739,7 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
     // (4.2). A read still out is stood in for by its number, so the test needs no network.
     constexpr UINT kStuckRead = 0xFFFFFFFF;   // no real read gets this number
     auto reads = std::make_shared<UINT>(0);
+    auto saidAgain = std::make_shared<bool>(false);   // the move's error, back in the status bar with the folder
     // To the second tab, and at once on to a folder that is not there, while the switch's read is still out.
     auto overtake = [=, this](const wchar_t* missing) {
         switchTab(1);
@@ -1752,9 +1754,14 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
         onLoaded(std::move(found), kStuckRead);
     };
     auto moveDone = [this] { return !pending_.generation; };   // the move failed: only the switch's read is out
+    // The first tab, which the steps switch away from and back to, shows the test folder: quick to read each time.
+    backHome(L"(the first tab on the test folder)");
+    auto firstTab = [&] {
+        add(L"(back to the first tab)", [=, this] { switchTab(0); }, [=, this] { return at(dir) && active_ == 0; });
+    };
     add(L"(a second tab on sub)", [=, this] { newTab(path(L"sub"), true); },
         [=, this] { return at(path(L"sub")) && tabs_.size() == 2 && active_ == 1; });
-    add(L"(the first tab again)", [=, this] { switchTab(0); }, [=, this] { return at(path(L"big")) && active_ == 0; });
+    firstTab();
     add(L"a failed move after a tab switch reads the tab's folder no second time: the switch's read is shown (4.2)",
         [=, this] {
             *reads = generation_;
@@ -1766,8 +1773,7 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
             return idle() && active_ == 1 && list_.shows(path(L"sub")) && statusHas(L"missing zero") &&
                    generation_ == *reads + 2;
         });
-    add(L"(the first tab, after that)", [=, this] { switchTab(0); },
-        [=, this] { return at(path(L"big")) && active_ == 0; });
+    firstTab();
     add(L"a switch's read that is back while the move is still out shows the tab's folder at once (4.2)",
         [=, this] {
             *reads = generation_;
@@ -1779,8 +1785,7 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
             return selfTest_->note == L"shown at once" && idle() && active_ == 1 && list_.shows(path(L"sub")) &&
                    statusHas(L"missing one") && generation_ == *reads + 2;
         });
-    add(L"(the first tab, once more)", [=, this] { switchTab(0); },
-        [=, this] { return at(path(L"big")) && active_ == 0; });
+    firstTab();
     add(L"a failed move while the switch's read is still out leaves the tab waiting for it, reading no more (4.2)",
         [=, this] {
             *reads = generation_;
@@ -1806,15 +1811,15 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
         [=, this] {
             SetWindowTextW(address_, L"missing tw");   // as if the user were fixing what they typed (5.3)
             readBack(0);
+            *saidAgain = statusHas(L"missing two");   // now: a slow refresh's "Loading..." may take its place
         },
         [=, this] {
             selfTest_->note = std::to_wstring(generation_ - *reads) + L" read(s)";
-            return idle() && list_.shows(path(L"sub")) && !refreshQueued_ && generation_ == *reads + 1 &&
-                   statusHas(L"missing two") && windowText(address_) == L"missing tw";
+            return *saidAgain && idle() && list_.shows(path(L"sub")) && !refreshQueued_ && generation_ == *reads + 1 &&
+                   windowText(address_) == L"missing tw";
         }).whileLoading = true;
     // What the status bar says after the error stays: "Loading..." gives back what it took the place of.
-    add(L"(the first tab, a third time)", [=, this] { switchTab(0); },
-        [=, this] { return at(path(L"big")) && active_ == 0; });
+    firstTab();
     add(L"(a failed move overtakes the switch while its read is still out)", [=, this] { overtake(L"missing three"); },
         [=, this] { return loading() && moveDone() && statusHas(L"Loading"); });
     add(L"a message shown while the tab waits for its switch's read stays once the folder is back (4.2)",
@@ -1824,8 +1829,7 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
         },
         [=, this] { return idle() && list_.shows(path(L"sub")) && statusHas(L"a newer message"); })
         .whileLoading = true;
-    add(L"(the first tab, a fourth time)", [=, this] { switchTab(0); },
-        [=, this] { return at(path(L"big")) && active_ == 0; });
+    firstTab();
     add(L"(a failed move overtakes the switch while its read is still out, again)",
         [=, this] { overtake(L"missing four"); }, [=, this] { return loading() && moveDone(); });
     add(L"...and a message \"Loading...\" took the place of while it waited comes back with the folder (4.2)",
@@ -1837,8 +1841,7 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
         [=, this] { return idle() && list_.shows(path(L"sub")) && statusHas(L"a newer message"); })
         .whileLoading = true;
     // A read that comes back with an error has its answer: the folder is not available (4.3), no second read.
-    add(L"(the first tab, a fifth time)", [=, this] { switchTab(0); },
-        [=, this] { return at(path(L"big")) && active_ == 0; });
+    firstTab();
     add(L"(a failed move overtakes the switch while its read is still out, once more)",
         [=, this] { overtake(L"missing five"); }, [=, this] { return loading() && moveDone(); });
     add(L"...and if that read comes back with an error, the tab is not available at once (4.3)",
@@ -1854,8 +1857,7 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
         }).whileLoading = true;
     add(L"(F5 shows it again)", [=, this] { refresh(); }, [=, this] { return idle() && list_.shows(path(L"sub")); });
     // A move that lands after the switch's read was shown goes on from the tab's folder, as from any other.
-    add(L"(the first tab, a sixth time)", [=, this] { switchTab(0); },
-        [=, this] { return at(path(L"big")) && active_ == 0; });
+    firstTab();
     add(L"a move that lands after the switch's read was shown goes on from the tab's folder (4.2)",
         [=, this] {
             switchTab(1);
@@ -1867,7 +1869,8 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
             const std::vector<std::wstring>& back = tab().back;
             return at(path(L"big")) && active_ == 1 && !back.empty() && samePath(back.back(), path(L"sub"));
         });
-    add(L"(close that tab)", [=, this] { closeTab(1); }, [=, this] { return at(path(L"big")) && tabs_.size() == 1; });
+    add(L"(close that tab)", [=, this] { closeTab(1); }, oneTabHome);
+    add(L"(back into big)", [=, this] { open(path(L"big"), Nav::New); }, [=, this] { return at(path(L"big")); });
 
     add(L"copies 10,000 selected files to the clipboard",
         [=, this] {
@@ -1992,7 +1995,16 @@ void App::selfTestTick() {
     if (t.index < t.steps.size()) {
         SelfTest::Step& s = t.steps[t.index];
         if (!t.started) {
-            if (loading() && !s.whileLoading) return;   // let the previous load finish first
+            if (loading() && !s.whileLoading) {   // let the previous load finish first
+                // A load that never ends would hold back every step after it: after a minute the run fails instead.
+                if (!t.heldTick) t.heldTick = GetTickCount64();
+                if (GetTickCount64() - t.heldTick < 60000) return;
+                ++t.failures;
+                selfTestLog(L"FAIL  " + s.name + L"   (not started: a folder load never ended)\n");
+                t.index = t.steps.size();
+                return;
+            }
+            t.heldTick = 0;
             t.started = true;
             t.note.clear();
             t.busy = true;

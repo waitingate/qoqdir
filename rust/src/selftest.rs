@@ -125,6 +125,7 @@ struct SelfTest {
     steps: Vec<Step>,
     index: usize,
     started: Option<Instant>, // set once the step's act has run
+    held: Option<Instant>,    // since when only a folder load still out has held the next step back
     busy: bool,
     failures: usize,
 }
@@ -2633,10 +2634,15 @@ impl App {
         fn move_done(a: &App) -> bool {
             a.st.borrow().pending.is_none()
         }
+        // The first tab, which the steps switch away from and back to, shows the test folder: quick to read each time.
+        fn first_tab(s: &mut Steps) {
+            s.add("(back to the first tab)", |a| a.switch_tab(0), |a| a.at(&test_dir()) && a.active() == 0);
+        }
+        s.home("(the first tab on the test folder)");
         s.add("(a second tab on sub)", |a| a.new_tab(Location::dir(p("sub")), true), |a| {
             a.at(&p("sub")) && a.tabs() == 2 && a.active() == 1
         });
-        s.add("(the first tab again)", |a| a.switch_tab(0), |a| a.at(&p("big")) && a.active() == 0);
+        first_tab(&mut s);
         s.add(
             "a failed move after a tab switch reads the tab's folder no second time: the switch's read is shown (4.2)",
             |a| {
@@ -2653,7 +2659,7 @@ impl App {
                     && a.generation.get() == COUNT.get() + 2
             },
         );
-        s.add("(the first tab, after that)", |a| a.switch_tab(0), |a| a.at(&p("big")) && a.active() == 0);
+        first_tab(&mut s);
         s.add(
             "a switch's read that is back while the move is still out shows the tab's folder at once (4.2)",
             |a| {
@@ -2672,7 +2678,7 @@ impl App {
                     && a.generation.get() == COUNT.get() + 2
             },
         );
-        s.add("(the first tab, once more)", |a| a.switch_tab(0), |a| a.at(&p("big")) && a.active() == 0);
+        first_tab(&mut s);
         s.add(
             "a failed move while the switch's read is still out leaves the tab waiting for it, reading no more (4.2)",
             |a| {
@@ -2709,20 +2715,22 @@ impl App {
             |a| {
                 set_text(a.address, "missing tw"); // as if the user were fixing what they typed (5.3)
                 read_back(a, None);
+                // Now: a slow refresh's "Loading..." may take its place.
+                FLAG.set(a.status_message().contains("missing two"));
             },
             |a| {
                 note(format!("{} read(s)", a.generation.get() - COUNT.get()));
-                a.idle()
+                FLAG.get()
+                    && a.idle()
                     && a.list.shows(&Location::dir(p("sub")))
                     && !a.refresh_queued.get()
                     && a.generation.get() == COUNT.get() + 1
-                    && a.status_message().contains("missing two")
                     && text_of(a.address) == "missing tw"
             },
         )
         .during_load();
         // What the status bar says after the error stays: "Loading..." gives back what it took the place of.
-        s.add("(the first tab, a third time)", |a| a.switch_tab(0), |a| a.at(&p("big")) && a.active() == 0);
+        first_tab(&mut s);
         s.add(
             "(a failed move overtakes the switch while its read is still out)",
             |a| overtake(a, "missing three"),
@@ -2737,7 +2745,7 @@ impl App {
             |a| a.idle() && a.list.shows(&Location::dir(p("sub"))) && a.status_message().contains("a newer message"),
         )
         .during_load();
-        s.add("(the first tab, a fourth time)", |a| a.switch_tab(0), |a| a.at(&p("big")) && a.active() == 0);
+        first_tab(&mut s);
         s.add(
             "(a failed move overtakes the switch while its read is still out, again)",
             |a| overtake(a, "missing four"),
@@ -2754,7 +2762,7 @@ impl App {
         )
         .during_load();
         // A read that comes back with an error has its answer: the folder is not available (4.3), no second read.
-        s.add("(the first tab, a fifth time)", |a| a.switch_tab(0), |a| a.at(&p("big")) && a.active() == 0);
+        first_tab(&mut s);
         s.add(
             "(a failed move overtakes the switch while its read is still out, once more)",
             |a| overtake(a, "missing five"),
@@ -2786,7 +2794,7 @@ impl App {
             |a| a.idle() && a.list.shows(&Location::dir(p("sub"))),
         );
         // A move that lands after the switch's read was shown goes on from the tab's folder, as from any other.
-        s.add("(the first tab, a sixth time)", |a| a.switch_tab(0), |a| a.at(&p("big")) && a.active() == 0);
+        first_tab(&mut s);
         s.add(
             "a move that lands after the switch's read was shown goes on from the tab's folder (4.2)",
             |a| {
@@ -2803,7 +2811,12 @@ impl App {
                 a.at(&p("big")) && a.active() == 1 && came_from_sub
             },
         );
-        s.add("(close that tab)", |a| a.close_tab(1), |a| a.at(&p("big")) && a.tabs() == 1);
+        s.add("(close that tab)", |a| a.close_tab(1), one_tab_home);
+        s.add(
+            "(back into big)",
+            |a| a.open(Location::dir(p("big")), Nav::New, ViewState::default()),
+            |a| a.at(&p("big")),
+        );
 
         s.add(
             "copies 10,000 selected files to the clipboard",
@@ -2930,7 +2943,7 @@ impl App {
         )
         .wait(15000);
 
-        RUN.set(Some(SelfTest { steps: s.0, index: 0, started: None, busy: false, failures: 0 }));
+        RUN.set(Some(SelfTest { steps: s.0, index: 0, started: None, held: None, busy: false, failures: 0 }));
         self.quiet.set(true); // the steps trigger errors on purpose: no beeps
         // Its own timer callback, so the app's code doesn't mention the self-test (the exe you use has none).
         unsafe {
@@ -2941,6 +2954,7 @@ impl App {
     fn self_test_tick(&self) {
         enum Next {
             Wait,
+            Held, // a folder load still out holds the next step back
             Act(Option<Act>),
             Check(Check, u128, Option<Act>), // the act again, for a step that copies
             Finish,
@@ -2954,7 +2968,7 @@ impl App {
                 Next::Finish
             } else if t.started.is_none() {
                 let step = &t.steps[t.index];
-                if self.is_loading() && !step.while_loading { Next::Wait } else { Next::Act(step.act.clone()) }
+                if self.is_loading() && !step.while_loading { Next::Held } else { Next::Act(step.act.clone()) }
             } else {
                 let s = &t.steps[t.index];
                 Next::Check(s.done.clone(), s.timeout_ms, if s.copies { s.act.clone() } else { None })
@@ -2963,9 +2977,23 @@ impl App {
         let Some(next) = next else { return };
         match next {
             Next::Wait => {}
+            Next::Held => {
+                // A load that never ends would hold back every step after it: after a minute the run fails instead.
+                let held = with_test(|t| *t.held.get_or_insert_with(Instant::now));
+                if held.elapsed() >= Duration::from_secs(60) {
+                    let name = with_test(|t| {
+                        t.failures += 1;
+                        let name = t.steps[t.index].name;
+                        t.index = t.steps.len();
+                        name
+                    });
+                    log(&format!("FAIL  {name}   (not started: a folder load never ended)\n"));
+                }
+            }
             Next::Act(act) => {
                 note(String::new());
                 with_test(|t| {
+                    t.held = None;
                     t.started = Some(Instant::now());
                     t.busy = true;
                 });

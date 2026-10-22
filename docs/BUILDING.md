@@ -194,8 +194,10 @@ What each one is:
   it never sends keys to other windows. It works in its own folder in `%TEMP%`,
   never touches your `qoqdir.ini` or Bookmarks, replaces the clipboard and leaves
   one small file in the Recycle Bin. Each step has a timeout, and a failure
-  doesn't stop the run: the log (`%TEMP%\qoqdir-selftest.log`, for Rust
-  `%TEMP%\qoqdir-rs-selftest.log`) gets an `ok` or `FAIL` line as each step ends.
+  doesn't stop the run, unless a folder load never ends: a step waits a minute
+  at most for one to finish, then the run stops there with a `FAIL`. The log
+  (`%TEMP%\qoqdir-selftest.log`, for Rust `%TEMP%\qoqdir-rs-selftest.log`) gets
+  an `ok` or `FAIL` line as each step ends.
   There is no way to run one step alone.
 - `tests\exe-checks.ps1` checks the exe that ships: one file under 1 MB that
   imports only DLLs Windows protects (spec 3). It needs MinGW's `objdump` on
