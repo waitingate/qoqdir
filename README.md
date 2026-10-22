@@ -2,8 +2,8 @@
 
 A small, fast file explorer for Windows 10/11 with tabs, a folder tree and a
 detail list. It is meant to be started from Windows Terminal. One portable exe,
-written in C++ and plain Win32: no runtime, no installer, and no network code (no
-updates, no telemetry).
+written in C++ and plain Win32 (there is a Rust version too): no runtime, no
+installer, and no network code (no updates, no telemetry).
 
 ![The Qoqdir window: tabs, a folder tree with bookmarks, and the file list](docs/screenshot.png)
 
@@ -13,9 +13,12 @@ Get `qoqdir-<version>.zip` from the [Releases](../../releases) page and unzip it
 into a folder you can write to: settings and Bookmarks are saved next to the exe,
 so not in Program Files. Then run `qoqdir.exe`. It needs Windows 10 or 11, x64.
 
+Beside it, `qoqdir-rust-<version>.zip` holds the same program written in Rust:
+the same window, keys and files, passing the same tests. Either one will do.
+
 The exe isn't signed, so the first start may show "Windows protected your PC":
-choose More info, then Run anyway. Each release lists the zip's SHA-256, which
-`Get-FileHash qoqdir-<version>.zip` should match.
+choose More info, then Run anyway. Each release lists the SHA-256 of both zips,
+which `Get-FileHash` on the zip you got should match.
 
 ## Command line
 
@@ -175,7 +178,7 @@ Notes. `%LOCALAPPDATA%` is `C:\Users\<you>\AppData\Local`. The compiler can go
 in any folder whose path has no spaces, such as `C:\mingw64`; then write that
 folder's `bin` in the PATH line instead. `docs/BUILDING.md` has the tests,
 `scripts\build.ps1`, which builds and checks both versions, and the release
-steps. GitHub Actions builds the C++ version on every push
+steps. GitHub Actions builds and checks both versions on every push
 (`.github/workflows/build.yml`).
 
 ### The Rust version
@@ -204,13 +207,15 @@ script that sets Rust's PATH in each new terminal.
 - `tests/` the unit tests and the three check scripts (the exe, the command
   line, the self-test with its popup watch)
 - `scripts/` `build.ps1` builds and checks both versions, `release.ps1` makes a
-  release (both find MinGW through `find-mingw.ps1`), `make-icon.ps1` draws the
-  icon
+  release of both (both scripts find the tools through `find-tools.ps1`),
+  `make-icon.ps1` draws the icon
 - `docs/` `BUILDING.md` (tools, building, testing, releases), `DEVELOPING.md`
   (notes for working on the code) and `SPEC.md` (what Qoqdir must do and
   how it must behave)
 
 ## License
 
-MIT, see `LICENSE`. The exe also contains parts of MinGW-w64's runtime, under the
-licenses in `THIRD-PARTY-NOTICES.txt`.
+MIT, see `LICENSE`. Each exe also contains parts of MinGW-w64's runtime, and the
+Rust one also Rust's standard library and Microsoft's windows crates. Their
+licenses are in each zip's `THIRD-PARTY-NOTICES.txt` (here, in the top folder
+and in `rust/`).

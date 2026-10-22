@@ -1,16 +1,17 @@
-# Checks an exe that ships (spec 3): one file under 1 MB, and no DLL it imports can be planted beside it. Windows
-# protects its KnownDLLs, comctl32 through the manifest, ntdll (always loaded first) and the API sets (api-ms-win-*,
-# which it resolves itself); any other import it might look for next to the exe first (docs\DEVELOPING.md). So for
-# each other one, a stand-in of that name goes beside a copy of the exe, which must still start: Windows then used
-# its own. Needs MinGW's objdump on the PATH. Used by scripts\build.ps1 -Test, scripts\release.ps1 and the build on
-# GitHub, so the rule lives here once.
+# Checks an exe that ships (spec 3): one file under 1 MB, no path in it that names the user's folder, and no DLL it
+# imports can be planted beside it. Windows protects its KnownDLLs, comctl32 through the manifest, ntdll (always
+# loaded first) and the API sets (api-ms-win-*, which it resolves itself); any other import it might look for next to
+# the exe first (docs\DEVELOPING.md). So for each other one, a stand-in of that name goes beside a copy of the exe,
+# which must still start: Windows then used its own. Needs MinGW's objdump on the PATH. Used by scripts\build.ps1
+# -Test, scripts\release.ps1 and the build on GitHub, so the rules live here once.
 #
 #   powershell -File tests\exe-checks.ps1 -Exe build\qoqdir.exe
 #   powershell -File tests\exe-checks.ps1 -Exe rust\target\release\qoqdir.exe
 param([Parameter(Mandatory)][string]$Exe)
 
 $protected = '^(KERNEL32|USER32|GDI32|ole32|OLEAUT32|SHELL32|SHLWAPI|COMCTL32|combase|ntdll|api-ms-win-[a-z0-9-]+)\.dll$'
-$size = (Get-Item $Exe).Length
+$file = Get-Item $Exe
+$size = $file.Length
 $imports = @(objdump -p $Exe | Select-String 'DLL Name: (\S+)' | ForEach-Object { $_.Matches[0].Groups[1].Value })
 $others = @($imports | Where-Object { $_ -notmatch $protected } | Sort-Object -Unique)
 $failures = 0
@@ -45,6 +46,17 @@ function StartsWithStandIn([string]$dll) {
 }
 
 Check ($size -lt 1MB) "the exe is one file under 1 MB ($size bytes)"
+# A path under the user's folder holds the user's name, and the exe goes out to anyone. The builds name the compiler's
+# and cargo's folders by short names instead (docs\BUILDING.md, section 2). Its 8-bit strings and its UTF-16 ones (at
+# either byte offset), with either kind of slash.
+$bytes = [IO.File]::ReadAllBytes($file.FullName)
+$texts = [Text.Encoding]::UTF8.GetString($bytes), [Text.Encoding]::Unicode.GetString($bytes),
+  [Text.Encoding]::Unicode.GetString($bytes, 1, $bytes.Length - 1)
+$userDirs = $env:USERPROFILE, ($env:USERPROFILE -replace '\\', '/')
+$named = @(foreach ($t in $texts) {
+  $userDirs | Where-Object { $t.IndexOf($_, [StringComparison]::OrdinalIgnoreCase) -ge 0 }
+})
+Check ($named.Count -eq 0) 'no path in it names the user folder (%USERPROFILE%)'
 Check ($imports.Count -gt 0) "objdump lists its imports ($($imports.Count); none means MinGW is not on the PATH)"
 $taken = @($others | Where-Object { -not (StartsWithStandIn $_) })   # imports Windows took from beside the exe
 $what = 'it imports only DLLs Windows protects'

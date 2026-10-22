@@ -2,7 +2,7 @@
 
 Qoqdir written in Rust with Microsoft's `windows` crate. Since 5 October 2026 it
 has the same features as the C++ version, which is the main one, and the same
-self-test steps.
+self-test steps. Each release ships it too, as `qoqdir-rust-<version>.zip`.
 
 From this folder, with Rust and the MinGW `bin` folder (its `windres` builds the
 exe's manifest, icon and version block from `../res/qoqdir.rc`, as for the C++

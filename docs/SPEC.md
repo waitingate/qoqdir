@@ -84,10 +84,10 @@ Qoqdir was first built twice, in C++ and in Rust, with the same features and tes
   in a resource file.
 - Two versions double every change and every test run, and the second version
   found only that one bug; the tests and code reviews found the rest. Both are
-  still kept and level, but only the C++ one ships. Each must stop loudly on such
-  mistakes: Rust does that by itself (with `overflow-checks` on for release
-  builds); C++ needs GCC's library checks (`_GLIBCXX_ASSERTIONS`) and its signed
-  overflow trap.
+  still kept and level, and both ship, each in a zip of its own. Each must stop
+  loudly on such mistakes: Rust does that by itself (with `overflow-checks` on
+  for release builds); C++ needs GCC's library checks (`_GLIBCXX_ASSERTIONS`)
+  and its signed overflow trap.
 
 ## 4. Behavior rules
 

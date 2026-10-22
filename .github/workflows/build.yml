@@ -1,7 +1,6 @@
-# Builds qoqdir.exe and qoqdir-test.exe on a Windows runner and runs the unit tests, the self-test
-# (qoqdir-test.exe, with the popup watch) and the command-line checks (qoqdir.exe, what users get).
-# The exe and the logs are kept as artifacts. A step that fails here but passes on a PC probably hit
-# something the runner lacks.
+# Builds both versions on a Windows runner and runs every check with scripts\build.ps1 -Test, as on a PC: the unit
+# tests, the exe checks, clippy, the command-line checks and both self-tests with the popup watch. Both exes and the
+# logs are kept as artifacts. A check that fails here but passes on a PC probably hit something the runner lacks.
 name: build
 
 on:
@@ -15,7 +14,7 @@ permissions:
 jobs:
   windows:
     runs-on: windows-latest
-    timeout-minutes: 30
+    timeout-minutes: 60
 
     steps:
       - uses: actions/checkout@v7
@@ -29,42 +28,32 @@ jobs:
           update: true
           install: mingw-w64-ucrt-x86_64-gcc mingw-w64-ucrt-x86_64-cmake mingw-w64-ucrt-x86_64-ninja
 
-      - name: Build
-        shell: msys2 {0}
+      # Rust for the GNU target, which links with that GCC, as it does with winlibs' on a PC.
+      - name: Set up Rust
+        shell: pwsh
         run: |
-          g++ --version | head -1
-          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
-          cmake --build build
+          rustup toolchain install stable-x86_64-pc-windows-gnu --profile minimal --component clippy
+          rustup default stable-x86_64-pc-windows-gnu
 
-      # One exe, statically linked, under 1 MB, importing only DLLs Windows protects: the rule is in the script,
-      # shared with scripts\build.ps1 -Test and scripts\release.ps1. As there, MinGW's bin goes first on the PATH for
-      # its objdump: here MSYS2's, ahead of the other MinGW copies on the runner.
-      - name: Check the exe is portable
+      # MSYS2's bin goes first on the PATH, ahead of the other MinGW copies on the runner, so the script takes its GCC,
+      # windres and objdump. Cargo is on the PATH already.
+      - name: Build and check both versions
         shell: pwsh
         run: |
           $env:PATH = "${{ steps.msys2.outputs.msys2-location }}\ucrt64\bin;$env:PATH"
-          powershell -NoProfile -ExecutionPolicy Bypass -File tests\exe-checks.ps1 -Exe build\qoqdir.exe
-
-      - name: Unit tests
-        shell: msys2 {0}
-        run: ctest --test-dir build -R unit_tests --output-on-failure
-
-      # The self-test, with every new window from any process listed (spec 7.4).
-      - name: Self-test with popup watch
-        shell: pwsh
-        run: powershell -NoProfile -File tests\watch-windows.ps1 -Exe build\qoqdir-test.exe
-
-      - name: Command-line checks
-        shell: pwsh
-        run: powershell -NoProfile -File tests\cli-checks.ps1 -Exe build\qoqdir.exe
+          g++ --version | Select-Object -First 1
+          rustc --version
+          powershell -NoProfile -ExecutionPolicy Bypass -File scripts\build.ps1 -Test
 
       - name: Collect logs
         if: always()
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force logs | Out-Null
-          # The self-test's own crash log lives in its folder, which stays behind only when a step crashed or hung.
-          foreach ($f in 'qoqdir-selftest.log', 'qoqdir-crash.log', 'qoqdir-selftest\qoqdir-crash.log') {
+          # A self-test's own crash log lives in its folder, which stays behind only when a step crashed or hung.
+          $logs = 'qoqdir-selftest.log', 'qoqdir-rs-selftest.log', 'qoqdir-crash.log',
+            'qoqdir-selftest\qoqdir-crash.log', 'qoqdir-rs-selftest\qoqdir-crash.log'
+          foreach ($f in $logs) {
             $p = Join-Path $env:TEMP $f
             if (Test-Path $p) { Copy-Item $p (Join-Path 'logs' ($f -replace '\\', '-')) }
           }
@@ -76,5 +65,6 @@ jobs:
           name: qoqdir
           path: |
             build/qoqdir.exe
+            rust/target/release/qoqdir.exe
             logs/
           if-no-files-found: warn

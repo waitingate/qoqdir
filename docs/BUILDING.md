@@ -1,9 +1,9 @@
 # Building Qoqdir
 
-Qoqdir is one program in two versions: C++ in `src/`, the one that ships, and
-Rust in `rust/`. Both build on Windows 10 or 11 (x64) with tools that live in
-their own folders: nothing is installed system-wide and no Visual Studio is
-needed.
+Qoqdir is one program in two versions, C++ in `src/` and Rust in `rust/`, and
+each release ships both. They build on Windows 10 or 11 (x64) with tools that
+live in their own folders: nothing is installed system-wide and no Visual Studio
+is needed.
 
 In short, once the tools are set up (section 1):
 
@@ -14,10 +14,10 @@ powershell -File scripts\build.ps1 -Test    # and run every check
 
 | File | What it is |
 |---|---|
-| `build\qoqdir.exe` | the program, what users get |
+| `build\qoqdir.exe` | the C++ version, what users get |
 | `build\qoqdir-test.exe` | the same compiled program plus the self-test (`--selftest`) |
 | `build\unit_tests.exe` | the C++ unit tests |
-| `rust\target\release\qoqdir.exe` | the Rust version |
+| `rust\target\release\qoqdir.exe` | the Rust version, what users of its zip get |
 | `rust\target\selftest\release\qoqdir.exe` | the Rust version with the self-test |
 
 ## 1. Tools
@@ -47,7 +47,7 @@ g++ --version
 ```
 
 `scripts\build.ps1` and `scripts\release.ps1` do step 3 themselves, through
-`scripts\find-mingw.ps1`: when g++ isn't on the PATH they look in
+`scripts\find-tools.ps1`: when g++ isn't on the PATH they look in
 `%LOCALAPPDATA%\Programs\mingw64`, then in `C:\mingw64`.
 
 Any other folder works if its path has no spaces, which MinGW's tools dislike.
@@ -82,8 +82,9 @@ admin rights, and nothing else on the system changes.
    ```
 
 3. In each new terminal: `. $env:LOCALAPPDATA\Programs\rust\rust-env.ps1`.
-   `scripts\build.ps1` does this itself: when cargo isn't on the PATH it looks
-   there, then in `C:\rust`.
+   `scripts\build.ps1` and `scripts\release.ps1` do this themselves, through
+   `scripts\find-tools.ps1`: when cargo isn't on the PATH they look there, then
+   in `C:\rust`.
 
 The code needs Rust 1.91 or newer (`rust-version` in `Cargo.toml`, which clippy
 checks the code against). `rustup update` updates Rust; deleting the folder
@@ -161,9 +162,11 @@ The self-test build gets its own folder, so it never replaces your exe.
 The crates' panic messages name their source files, which live under the
 Rust folder's `cargo\registry`: on a per-user install that path holds your
 user name. The `RUSTFLAGS` line in `rust-env.ps1` (section 1) maps that folder
-to `cargo`, so the exe holds only `cargo\...`; `scripts\build.ps1` sets the
-same flag when it isn't set. Cargo rebuilds every crate when the flags change,
-so keep it set for builds by hand too.
+to `cargo`, so the exe holds only `cargo\...`; `scripts\find-tools.ps1` sets the
+same flag for the build scripts when `RUSTFLAGS` isn't set. Cargo rebuilds every
+crate when the flags change, so keep it set for builds by hand too.
+`tests\exe-checks.ps1` fails an exe, of either version, that still holds a path
+into your user folder.
 
 ## 3. Test
 
@@ -201,7 +204,8 @@ What each one is:
   an `ok` or `FAIL` line as each step ends.
   There is no way to run one step alone.
 - `tests\exe-checks.ps1` checks an exe that ships, of either version: one file
-  under 1 MB, and no DLL it imports can be replaced by a file beside it (spec
+  under 1 MB, no path in it into your user folder (which would give away your
+  user name), and no DLL it imports can be replaced by a file beside it (spec
   3). Windows protects most of them; for any other, such as the
   `bcryptprimitives.dll` that Rust's standard library imports, a stand-in goes
   beside a copy of the exe, which must still start. It needs MinGW's `objdump`
@@ -224,6 +228,7 @@ cargo test
 cargo clippy --all-targets -- -D warnings
 cargo clippy --all-targets --features selftest --target-dir target\selftest -- -D warnings
 cd ..
+powershell -File tests\exe-checks.ps1 -Exe rust\target\release\qoqdir.exe
 powershell -File tests\cli-checks.ps1 -Exe rust\target\release\qoqdir.exe
 powershell -File tests\watch-windows.ps1 -Exe rust\target\selftest\release\qoqdir.exe -Log $env:TEMP\qoqdir-rs-selftest.log
 ```
@@ -275,32 +280,35 @@ the new icon in.
 
 ## 5. Release
 
-Only the C++ version ships. Raise the version in `src\version.h` (both lines)
-and in `rust\Cargo.toml`, commit, then:
+Each release ships both versions, each in a zip of its own. Raise the version in
+`src\version.h` (both lines) and in `rust\Cargo.toml`, commit, then:
 
 ```powershell
 powershell -File scripts\release.ps1
 ```
 
 It stops if the three versions disagree (both lines of `version.h`, and
-`Cargo.toml`), builds that commit in a clean copy, runs the unit tests, the exe
-checks and the command-line checks on the exe that ships and the self-test on
-`qoqdir-test.exe`, and leaves in `release\`:
+`Cargo.toml`) and builds that commit in a clean copy, the Rust version from the
+crates in `Cargo.lock`. For each version it runs the unit tests, the exe checks
+and the command-line checks on the exe that ships, and the self-test (for C++ on
+`qoqdir-test.exe`). It takes about ten minutes and leaves in `release\`:
 
-- `qoqdir-<version>.zip` to publish (the exe, README, LICENSE and the
-  third-party notices); it prints the zip's SHA-256 for the release notes.
-- `qoqdir-<version>-debug.exe` to keep: the same exe with its symbols, which turns
-  the offsets in a crash log from that version into source lines
+- `qoqdir-<version>.zip` and `qoqdir-rust-<version>.zip` to publish: the exe,
+  README, LICENSE and the third-party notices. The Rust zip also holds
+  `rust-std-notices.html`, the notices of Rust's standard library, from the Rust
+  that built it. It prints each zip's SHA-256 for the release notes.
+- `qoqdir-<version>-debug.exe` and `qoqdir-rust-<version>-debug.exe` to keep:
+  the same exes with their symbols, which turn the offsets in a crash log from
+  that version into source lines
   (`addr2line -e qoqdir-<version>-debug.exe 0x140000000+offset`).
 
 ## 6. The build on GitHub
 
-`.github\workflows\build.yml` runs on every push and pull request. It builds the
-C++ version with MSYS2's GCC on a Windows runner (a warning fails it there too,
-`-Werror` being in `CMakeLists.txt`), then runs the same checks as
-`scripts\build.ps1 -Test` for that version: the unit tests, `tests\exe-checks.ps1`,
-the self-test with the popup watch and the command-line checks. The exe and the
-logs are kept with the run. The Rust version isn't built there.
+`.github\workflows\build.yml` runs on every push and pull request. On a Windows
+runner it sets up MSYS2's GCC and Rust for the GNU target, then runs
+`scripts\build.ps1 -Test`, so both versions are built and checked there as on a
+PC (a warning fails the C++ build there too, `-Werror` being in
+`CMakeLists.txt`). Both exes and the logs are kept with the run.
 
 ## 7. When something goes wrong
 
@@ -308,6 +316,9 @@ logs are kept with the run. The Rust version isn't built there.
   section 1.
 - The Rust build stops with `windres not found`: the compiler's `bin` is not on
   the PATH (`scripts\build.ps1` adds it, section 1).
+- `tests\exe-checks.ps1` finds a path into your user folder: in the Rust exe,
+  `RUSTFLAGS` was set without the flag from `rust-env.ps1` (section 1); in the
+  C++ exe, a build without CMake left out `-ffile-prefix-map` (section 2).
 - The Rust build fails in `dlltool` (it did on the first build machine): point
   cargo at MinGW's, with the full path of `dlltool.exe` in your `mingw64\bin`,
   in `cargo\config.toml` inside the Rust folder:

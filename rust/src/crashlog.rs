@@ -1,6 +1,7 @@
 //! Spec 4.10: an internal bug stops the program and %TEMP%\qoqdir-crash.log says why. Hooks: panics (the panic
 //! hook), CPU faults (`on_crash`) and a window that stops answering (`watch_for_hangs`). A fault's line is built in
-//! a stack buffer and written with Win32 calls (the heap may be what broke); addresses are exe offsets (ASLR).
+//! a stack buffer and written with Win32 calls (the heap may be what broke). Addresses are exe offsets (ASLR); to name
+//! one, use the debug copy release.ps1 keeps: addr2line -e qoqdir-rust-<version>-debug.exe 0x140000000+offset
 
 use std::fmt;
 use std::io::Write;
