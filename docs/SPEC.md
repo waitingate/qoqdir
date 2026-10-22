@@ -115,15 +115,17 @@ These describe what the user sees. Each must hold in every situation.
 
 ### 4.2 The newest request wins
 - A new navigation (another folder, Back, another tab) replaces any load still
-  running. When the old result arrives, it is ignored.
+  running, and the old result is ignored when it arrives. The one exception is
+  a tab switch's own read when a move takes over from it (below).
 - A tab's folder, history and title change only once its new folder has loaded.
   A failed or slow load never leaves a tab half updated. A move that takes over
-  from a tab switch lets the switch's own read go on: if the move fails, the
-  tab shows what that read finds, own icons included, as the switch would
-  have, with the move's error, and its folder is not read a second time. Until
-  then the tab is loading and an automatic refresh waits. A message shown
-  meanwhile stays, so does what the address bar holds (5.3), and a read that
-  comes back with an error shows the tab not available.
+  from a tab switch lets the switch's own read go on: the tab shows what that
+  read finds, own icons included, as soon as it is back, as the switch would
+  have, and the move then goes on from that folder. If the move fails first,
+  the tab is loading until the read is back, with the move's error, and an
+  automatic refresh waits; its folder is not read a second time. A message
+  shown meanwhile stays, so does what the address bar holds (5.3), and a read
+  that comes back with an error shows the tab not available.
 - Refreshes never pile up: refreshing while the folder is still loading starts
   nothing new, so holding F5 on a slow network folder starts one load.
 - An automatic refresh (the folder changed on disk) never cancels a navigation or
@@ -764,11 +766,12 @@ result:
     overtakes still moves the watch to the folder shown, going up keeps a
     refresh the old watch asked for, and a switch that a failed move overtakes
     still shows its tab's folder as the switch would have, with the error, from
-    the switch's own read: one back before the move fails waits for it, with
-    the own icons read after it, and while one is still out the tab waits too,
-    with a refresh asked for meanwhile reading nothing; a message shown
-    meanwhile stays, the address bar is left alone, and a read that comes back
-    with an error shows the tab not available at once. A This PC tab left while
+    the switch's own read: one back while the move is still out shows at once,
+    and while one is still out after the move failed the tab waits, with a
+    refresh asked for meanwhile reading nothing; a message shown meanwhile
+    stays, the address bar is left alone, a read that comes back with an error
+    shows the tab not available at once, and a move that lands after the
+    switch's read was shown goes on from that folder. A This PC tab left while
     its list is emptied keeps its selection.
 67. Last, a window thread stuck for 7 s leaves a line in the crash log naming
     where it is (the self-test's crash log is in its own folder).

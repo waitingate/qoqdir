@@ -62,8 +62,7 @@ use crate::folder::{
     Item, Listing, Location, SortKey, exists, folder_written, is_directory, is_shortcut, list_folder, sort_items,
 };
 use crate::shell::{
-    IconBatch, copy_to_clipboard, data_object_at, folder_icon, item_menu_at, known_folder, paste_into, pidl_from,
-    shortcut_target, type_name,
+    copy_to_clipboard, data_object_at, item_menu_at, known_folder, paste_into, pidl_from, shortcut_target, type_name,
 };
 use windows::core::{Interface, w};
 
@@ -2499,7 +2498,7 @@ impl App {
         s.add(
             "a tab switch that another move overtakes still moves the watch to the folder shown (4.5)",
             |a| {
-                a.new_tab(Location::dir(p("big")), true); // its read is replaced at once
+                a.new_tab(Location::dir(p("big")), true); // the move below overtakes its read
                 a.open(Location::ThisPc, Nav::New, ViewState::default());
             },
             |a| {
@@ -2530,7 +2529,7 @@ impl App {
         s.add(
             "a tab switch overtaken by a move that fails still shows the tab's folder, and why the move failed (4.2)",
             |a| {
-                a.new_tab(Location::dir(p("sub")), true); // its read is replaced at once
+                a.new_tab(Location::dir(p("sub")), true); // the move below overtakes its read
                 a.open(Location::dir(p("no such folder")), Nav::New, ViewState::default());
             },
             |a| {
@@ -2598,7 +2597,7 @@ impl App {
         s.add(
             "a This PC tab left while its list is emptied keeps its selection (4.6)",
             |a| {
-                a.list.clear(); // as while its folder is read again
+                a.list.clear(); // as while a tab switch's read is out
                 a.switch_tab(0);
                 a.switch_tab(1);
             },
@@ -2606,14 +2605,19 @@ impl App {
         );
         s.add("(close that tab too)", |a| a.close_tab(1), |a| a.at(&p("big")) && a.tabs() == 1);
         // On a share that is off, a read of the tab's folder waits 20-40 s. A move that overtakes a tab switch lets the
-        // switch's read go on, so a move that fails shows what it finds: the folder is not read a second time (4.2). A
-        // read still out is stood in for by its number, so the test needs no network.
+        // switch's read go on, and the tab shows what it finds as soon as it is back: the folder is not read a second
+        // time (4.2). A read still out is stood in for by its number, so the test needs no network.
         const STUCK_READ: u32 = u32::MAX; // no real read gets this number
         // To the second tab, and at once on to a folder that is not there, while the switch's read is still out.
         fn overtake(a: &App, missing: &str) {
             a.switch_tab(1);
             a.open(Location::dir(p(missing)), Nav::New, ViewState::default());
-            a.kept_read.set(STUCK_READ); // the real read comes back as one replaced, and is dropped
+            stuck(a);
+        }
+        fn stuck(a: &App) {
+            if let Some(kept) = a.st.borrow_mut().kept.as_mut() {
+                kept.generation = STUCK_READ; // the real read comes back as one replaced, and is dropped
+            }
         }
         fn read_back(a: &App, error: Option<windows::core::Error>) {
             // The stuck read comes back: sub, or the error it ran into.
@@ -2625,9 +2629,9 @@ impl App {
             };
             a.on_loaded(found, STUCK_READ);
         }
-        // The move has failed: what it said waits to come back with the folder.
-        fn kept_says(a: &App, text: &str) -> bool {
-            a.kept_said.borrow().contains(text)
+        // The move failed: only the switch's read is out.
+        fn move_done(a: &App) -> bool {
+            a.st.borrow().pending.is_none()
         }
         s.add("(a second tab on sub)", |a| a.new_tab(Location::dir(p("sub")), true), |a| {
             a.at(&p("sub")) && a.tabs() == 2 && a.active() == 1
@@ -2651,15 +2655,17 @@ impl App {
         );
         s.add("(the first tab, after that)", |a| a.switch_tab(0), |a| a.at(&p("big")) && a.active() == 0);
         s.add(
-            "a switch's read that is back before the move fails waits for it, then shows (4.2)",
+            "a switch's read that is back while the move is still out shows the tab's folder at once (4.2)",
             |a| {
                 COUNT.set(a.generation.get());
                 overtake(a, "missing one");
-                read_back(a, None); // the move is still out
+                read_back(a, None);
+                let at_once = a.list.shows(&Location::dir(p("sub"))) && a.is_loading();
+                note(if at_once { "shown at once" } else { "held back" }.into());
             },
             |a| {
-                note(format!("{} read(s)", a.generation.get() - COUNT.get()));
-                a.idle()
+                noted() == "shown at once"
+                    && a.idle()
                     && a.active() == 1
                     && a.list.shows(&Location::dir(p("sub")))
                     && a.status_message().contains("missing one")
@@ -2676,7 +2682,7 @@ impl App {
             |a| {
                 note(format!("{} read(s)", a.generation.get() - COUNT.get()));
                 a.is_loading()
-                    && kept_says(a, "missing two")
+                    && move_done(a)
                     && a.status_message().contains("Loading")
                     && !a.list.shows(&Location::dir(p("sub")))
                     && a.generation.get() == COUNT.get() + 2
@@ -2720,7 +2726,7 @@ impl App {
         s.add(
             "(a failed move overtakes the switch while its read is still out)",
             |a| overtake(a, "missing three"),
-            |a| a.is_loading() && kept_says(a, "missing three") && a.status_message().contains("Loading"),
+            |a| a.is_loading() && move_done(a) && a.status_message().contains("Loading"),
         );
         s.add(
             "a message shown while the tab waits for its switch's read stays once the folder is back (4.2)",
@@ -2735,7 +2741,7 @@ impl App {
         s.add(
             "(a failed move overtakes the switch while its read is still out, again)",
             |a| overtake(a, "missing four"),
-            |a| a.is_loading() && kept_says(a, "missing four"),
+            |a| a.is_loading() && move_done(a),
         );
         s.add(
             "...and a message \"Loading...\" took the place of while it waited comes back with the folder (4.2)",
@@ -2752,7 +2758,7 @@ impl App {
         s.add(
             "(a failed move overtakes the switch while its read is still out, once more)",
             |a| overtake(a, "missing five"),
-            |a| a.is_loading() && kept_says(a, "missing five"),
+            |a| a.is_loading() && move_done(a),
         );
         s.add(
             "...and if that read comes back with an error, the tab is not available at once (4.3)",
@@ -2766,7 +2772,7 @@ impl App {
                 note(format!("{} read(s)", a.generation.get() - COUNT.get()));
                 !a.is_loading()
                     && a.generation.get() == COUNT.get()
-                    && a.st.borrow().tabs[a.active()].unavailable
+                    && a.unavailable()
                     && a.status_message().contains("is not available")
                     && text_of(a.address) == "missing fiv"
             },
@@ -2779,36 +2785,22 @@ impl App {
             },
             |a| a.idle() && a.list.shows(&Location::dir(p("sub"))),
         );
-        s.add("(close that tab)", |a| a.close_tab(1), |a| a.at(&p("big")) && a.tabs() == 1);
-        // The own icons of a switch's read come after its listing: they wait with it. On big, whose own read sends
-        // none.
-        s.add("(a second tab on big)", |a| a.new_tab(Location::dir(p("big")), true), |a| {
-            a.at(&p("big")) && a.tabs() == 2 && a.active() == 1
-        });
+        // A move that lands after the switch's read was shown goes on from the tab's folder, as from any other.
         s.add("(the first tab, a sixth time)", |a| a.switch_tab(0), |a| a.at(&p("big")) && a.active() == 0);
         s.add(
-            "a switch's read back before the move fails keeps the own icons read after it (4.2)",
+            "a move that lands after the switch's read was shown goes on from the tab's folder (4.2)",
             |a| {
-                overtake(a, "missing six");
-                let program = Item { name: OsString::from("tool.exe"), icon: -1, ..Default::default() };
-                let found = Listing {
-                    location: Location::dir(p("big")),
-                    written: folder_written(&p("big")),
-                    items: vec![program],
-                    ..Default::default()
-                };
-                a.on_loaded(found, STUCK_READ); // held: the move is still out
-                // Then the program's own icon, read after the listing: the folder icon stands in for it.
-                let icons = vec![(OsString::from("tool.exe"), folder_icon())];
-                a.on_icons(IconBatch { dir: Location::dir(p("big")), icons }, STUCK_READ);
+                a.switch_tab(1);
+                a.open(Location::dir(p("big")), Nav::New, ViewState::default());
+                stuck(a);
+                read_back(a, None); // the move is still out
             },
             |a| {
-                if !a.idle() || !a.list.shows(&Location::dir(p("big"))) || a.list.count() != 1 {
-                    return false;
-                }
-                let mut item = LVITEMW { mask: LVIF_IMAGE, ..Default::default() }; // row 0: the program
-                send(a.list.hwnd(), LVM_GETITEMW, 0, &mut item as *mut _ as isize);
-                item.iImage == folder_icon()
+                let came_from_sub = {
+                    let st = a.st.borrow();
+                    st.tabs[st.active].back.last().is_some_and(|l| l.same(&Location::dir(p("sub"))))
+                };
+                a.at(&p("big")) && a.active() == 1 && came_from_sub
             },
         );
         s.add("(close that tab)", |a| a.close_tab(1), |a| a.at(&p("big")) && a.tabs() == 1);

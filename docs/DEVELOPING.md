@@ -79,7 +79,8 @@ instead of corrupting data, and the crash log says where.
   `FolderTree::fill()` asks Windows nothing that can block: even Desktop and
   Documents come from a worker, since one of them can live on a dead server.
 - The newest request wins. `open()` bumps `generation_` and older results are
-  dropped; a replaced folder read stops within 256 entries. A tab's path, history
+  dropped (all but a tab switch's read a move took over, `kept_`, below); a
+  replaced folder read stops within 256 entries. A tab's path, history
   and title change only in `onLoaded`. `refresh()` does nothing while a load is
   pending (so holding F5 starts one load); what it was asked to select is kept in
   `queuedView_` for the refresh that follows.
@@ -92,9 +93,10 @@ instead of corrupting data, and the crash log says where.
   that is off (that can freeze for 20 to 40 s). A failed Back or Forward drops the
   dead history entry; a typed path that is a file gets opened. A move that takes
   over from a tab switch keeps the switch's read going (`kept_`, which
-  `loading()` counts): if the move fails or opens a file, `onLoaded` applies
-  what that read finds as the switch, held in `keptListing_` and `keptIcons_`
-  if it came back first. A cleared list (`FileList::clear`) shows no folder:
+  `loading()` counts): `onLoaded` applies what it finds as the switch as soon as
+  it is back, while the move still loads or after it failed. The worker decides
+  about own icons before it posts the listing, since a read shown from `kept_`
+  looks replaced afterwards. A cleared list (`FileList::clear`) shows no folder:
   compare with `shows()`, not `dir()`.
 - The right-click menu is modal, so Qoqdir's own commands in it only act if the
   folder and the selection are the same as when it opened.

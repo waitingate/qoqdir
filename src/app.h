@@ -88,7 +88,6 @@ private:
     // Navigation
     void open(const std::wstring& path, Nav nav, ViewState view = {}, Origin origin = {});
     void onLoaded(Listing&& listing, UINT generation);
-    void onIcons(IconBatch&& batch, UINT generation);   // a folder read's own icons (WM_APP_ICONS)
     struct Pending;
     void onLoadFailed(const Listing& listing, const Pending& p);
     void showLocation();   // the address bar, title, buttons and tabs, for the current tab's folder
@@ -179,7 +178,7 @@ private:
         std::wstring dir;           // folder wanted selected. The queued refresh applies it if 'dir' is still shown.
         ViewState view;
     } queuedView_;
-    bool loadMessageShown_ = false; // the status bar says "Loading..." or "not available": cleared when a folder loads
+    bool loadMessageShown_ = false; // the status bar says "Loading..." or "not available" (setMessage clears it)
     const wchar_t* lateHint_ = nullptr;   // a hint for when the folder being loaded lands (a navigation clears messages)
 
     std::vector<Tab> tabs_;
@@ -194,12 +193,10 @@ private:
         Origin origin;
         std::wstring filter;        // the filter box before this load cleared it: a failed one puts it back
     } pending_;
-    // A tab switch a move took over: its read goes on, so that if the move comes to nothing the tab shows what it
-    // finds, as the switch would have (4.2). Until then it counts as loading.
+    // A tab switch a move took over: its read goes on, and the tab shows what it finds as soon as it is back, as the
+    // switch would have (4.2). Until then it counts as loading.
     Pending kept_;
-    std::unique_ptr<Listing> keptListing_;   // what that read found, if it came back while the move still loaded
-    std::optional<IconBatch> keptIcons_;     // ...and its own icons, if they came before it was shown
-    std::wstring keptSaid_;   // what the failed move said, or what "Loading..." covered since: back with the folder
+    std::wstring keptSaid_;   // what "Loading..." covered while the tab waited for that read: back with the folder
     UINT generation_ = 0;
     int loadsDone_ = 0;     // folder reads that reported back (self-test)
     int loadsWasted_ = 0;   // ...of which a newer load had replaced, yet they read the whole folder (self-test)

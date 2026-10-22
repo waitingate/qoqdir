@@ -405,9 +405,9 @@ LRESULT App::onMessage(UINT msg, WPARAM wp, LPARAM lp) {
         acknowledgeChange(wp, lp);
         tree_.refreshFolder(tree_.bookmarks());
         return 0;
-    case WM_APP_ICONS: {
+    case WM_APP_ICONS: {   // the shown folder's own icons
         std::unique_ptr<IconBatch> batch(reinterpret_cast<IconBatch*>(lp));
-        onIcons(std::move(*batch), UINT(wp));
+        list_.setIcons(*batch);
         return 0;
     }
     case WM_APP_TREE_ICONS: {   // bookmark shortcuts get their own icons the same way
@@ -861,11 +861,9 @@ void App::open(const std::wstring& path, Nav nav, ViewState view, Origin origin)
     // on that tab; anything else makes it of no use. Set before the newest load is, so that read never stops.
     bool move = nav == Nav::New || nav == Nav::Back || nav == Nav::Forward;
     if (move && pending_.generation && pending_.nav == Nav::Switch && pending_.tabId == tab().id) {
-        kept_ = pending_;
-    } else if (!move || kept_.tabId != tab().id) {
+        kept_ = std::move(pending_);
+    } else if (!move) {
         kept_ = {};
-        keptListing_.reset();
-        keptIcons_.reset();
     }
     g_keptLoad = kept_.generation;
     UINT generation = ++generation_;
@@ -885,38 +883,30 @@ void App::open(const std::wstring& path, Nav nav, ViewState view, Origin origin)
         std::vector<std::wstring> own;
         for (const Item& it : result->items)
             if (hasOwnIcon(it)) own.push_back(it.name);
+        // Asked before the listing goes: once it is shown, a switch's read a move took over looks replaced (kept_).
+        bool icons = !own.empty() && !replaced();
         post(wnd, WM_APP_LOADED, generation, std::move(result));
         // Then the icons that need a disk (or network) lookup, so they never hold up the list.
-        if (!own.empty() && !replaced())
-            post(wnd, WM_APP_ICONS, generation, std::make_unique<IconBatch>(readOwnIcons(path, own)));
+        if (icons) post(wnd, WM_APP_ICONS, 0, std::make_unique<IconBatch>(readOwnIcons(path, own)));
     });
 }
 
 void App::onLoaded(Listing&& listing, UINT generation) {
-    // The read of a tab switch a move took over (kept_): held while the move still loads, and shown as the switch's
-    // own once the move came to nothing (onLoadFailed hands it back).
+    // A tab switch's read that a move took over (kept_) shows the tab's folder, as the switch would have, as soon as
+    // it is back: while the move still loads, which then goes on from that folder, or after it came to nothing (4.2).
     bool keptBack = kept_.generation && generation == kept_.generation;
-    if (keptBack && pending_.generation) {
-        keptListing_ = std::make_unique<Listing>(std::move(listing));
-        return;
-    }
-    if (keptBack) {
-        pending_ = std::exchange(kept_, {});
-        g_keptLoad = 0;
-    }
     bool counted = generation != uncountedLoad_;
     if (counted) ++loadsDone_;
-    if (generation != pending_.generation) {   // superseded (open() sets both together)
+    if (!keptBack && generation != pending_.generation) {   // superseded (open() sets both together)
         if (counted && listing.error != ERROR_OPERATION_ABORTED) ++loadsWasted_;
         return;
     }
-    KillTimer(wnd_, kLoadingTimer);
-    bool loadingShown = loadMessageShown_;   // the status bar still says "Loading...": nothing newer was said
-    if (loadMessageShown_) {   // any load, not only navigation, may have shown one
-        setMessage(L"");
-        loadMessageShown_ = false;
-    }
-    Pending p = std::exchange(pending_, {});
+    bool moving = keptBack && pending_.generation;   // the move is still out: "Loading..." and its hint are its own
+    if (!moving) KillTimer(wnd_, kLoadingTimer);
+    bool loadingShown = !moving && loadMessageShown_;   // "Loading..." took the place of what was said
+    if (loadingShown) setMessage(L"");   // any load, not only navigation, may have shown one
+    Pending p = std::exchange(keptBack ? kept_ : pending_, {});
+    if (keptBack) g_keptLoad = 0;
     if (tab().id != p.tabId) return;
     if (p.nav == Nav::Refresh && list_.renaming()) {
         // 4.2: never apply a refresh under an open rename box (Enter would rename whatever row moved there).
@@ -929,8 +919,6 @@ void App::onLoaded(Listing&& listing, UINT generation) {
 
     if (listing.error) return onLoadFailed(listing, p);
     kept_ = {};   // the tab shows a folder: a switch's read kept for a move is of no use any more
-    keptListing_.reset();
-    std::optional<IconBatch> keptIcons = std::exchange(keptIcons_, std::nullopt);
     g_keptLoad = 0;
 
     std::wstring old = t.path;
@@ -990,7 +978,6 @@ void App::onLoaded(Listing&& listing, UINT generation) {
     // The tree follows the folder shown: its node is read again when the subfolders or shortcuts changed (5.5).
     std::vector<std::wstring> treeNames = reload ? list_.treeNames() : std::vector<std::wstring>{};
     list_.setListing(std::move(listing));
-    if (keptBack && keptIcons) list_.setIcons(*keptIcons);   // the switch's read: its own icons that came before it
     if (reload && treeNames != list_.treeNames()) tree_.refreshFolder(t.path);
     int row = list_.select(view.select, view.focus);
     if (row < 0 && !requested && view.focusRow >= 0 && list_.count() > 0)   // the focused item is gone (4.5):
@@ -1010,18 +997,8 @@ void App::onLoaded(Listing&& listing, UINT generation) {
     } else if (keptBack && loadingShown) {
         setMessage(keptSaid_);   // what "Loading..." took the place of
     }
-    lateHint_ = nullptr;
+    if (!moving) lateHint_ = nullptr;   // a hint for the move still out waits for it
     showStatus();
-}
-
-// The own icons of a folder read (a .exe, a .lnk), read after its listing. Those of a tab switch's read a move took
-// over wait with it until it is shown (kept_).
-void App::onIcons(IconBatch&& batch, UINT generation) {
-    if (kept_.generation && generation == kept_.generation) {
-        keptIcons_ = std::move(batch);
-        return;
-    }
-    list_.setIcons(batch);
 }
 
 // The address bar, title, buttons and tabs follow the current tab's folder: shown by a tab switch at once, and by a
@@ -1045,15 +1022,8 @@ void App::onLoadFailed(const Listing& listing, const Pending& p) {
     }
     // A move that fails or opens a file leaves the tab where it was: its filter comes back, unless retyped.
     if (GetWindowTextLengthW(filter_) == 0) SetWindowTextW(filter_, p.filter.c_str());
-    bool opensFile = listing.isFile && (!p.origin.shortcut.empty() || p.origin.typed);
-    std::wstring said = opensFile ? std::wstring() : displayName(listing.path) + L": " + errorText(listing.error);
-    // A tab switch this move took over reads on: the tab shows what it finds, as the switch would have (onLoaded,
-    // 4.2). Done before a file opens, as Windows may keep a prompt about it up for a while.
-    if (kept_.generation) {
-        keptSaid_ = said;
-        if (keptListing_) post(wnd_, WM_APP_LOADED, kept_.generation, std::move(keptListing_));
-        else SetTimer(wnd_, kLoadingTimer, 250, nullptr);   // "Loading..." if it is slow (4.1)
-    }
+    // A tab switch this move took over reads on: the tab waits for what it finds (onLoaded, 4.2).
+    if (kept_.generation) SetTimer(wnd_, kLoadingTimer, 250, nullptr);   // "Loading..." if it is slow (4.1)
     if (!p.origin.shortcut.empty() && listing.isFile) {
         // A shortcut that leads to a file: Windows opens it (never an unreachable one: that would hang, then fail).
         openFile(wnd_, p.origin.shortcut);
@@ -1073,7 +1043,7 @@ void App::onLoadFailed(const Listing& listing, const Pending& p) {
             EnableWindow(back_, !t.back.empty());
             EnableWindow(forward_, !t.forward.empty());
         }
-        warn(said);
+        warn(displayName(listing.path) + L": " + errorText(listing.error));
     }
 }
 
