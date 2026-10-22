@@ -73,7 +73,7 @@ use crate::shell::{
 };
 use crate::tree::{FolderTree, TreeBatch};
 use crate::util::{
-    Font, OwnedMenu, focus, from_wide, key_down, pcwstr, scale, send, set_text, unscale, wide, window_text,
+    Font, OwnedMenu, focus, from_wide, key_down, mul_div, pcwstr, scale, send, set_text, unscale, wide, window_text,
 };
 
 const ID_BACK: i32 = 100;
@@ -797,7 +797,7 @@ impl App {
                 WM_DPICHANGED => {
                     let new_dpi = hiword(wp.0);
                     let widths: Vec<i32> =
-                        self.list.column_widths().iter().map(|&cw| (cw as i64 * new_dpi as i64 / dpi as i64) as i32).collect();
+                        self.list.column_widths().iter().map(|&cw| mul_div(cw, new_dpi as i32, dpi as i32)).collect();
                     self.dpi.set(new_dpi);
                     self.apply_font();
                     self.list.set_column_widths(&widths);

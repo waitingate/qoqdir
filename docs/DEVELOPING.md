@@ -62,7 +62,8 @@ The same parts, file for file, written with Microsoft's `windows` crate:
 - `src/app.rs`: main window, tabs, navigation, keys, settings
 - `src/selftest.rs`: the self-test (only in a build with the `selftest` feature)
 - `src/main.rs`, `src/crashlog.rs`: as in C++
-- `src/util.rs`: UTF-16 strings, and owners that free Windows resources
+- `src/util.rs`: UTF-16 strings, DPI scaling (Windows' `MulDiv`, as in C++),
+  and owners that free Windows resources
 - `build.rs`, `icon.rc`: embed the manifest, and `../res/qoqdir.ico` through
   `windres`
 

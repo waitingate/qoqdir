@@ -67,7 +67,7 @@ use crate::shell::{
 };
 use windows::core::{Interface, w};
 
-use crate::util::{focus, from_wide, pcwstr, scale, send, set_text, unscale, wide, window_text};
+use crate::util::{focus, from_wide, mul_div, pcwstr, scale, send, set_text, unscale, wide, window_text};
 
 type Act = Rc<dyn Fn(&App)>;
 type Check = Rc<dyn Fn(&App) -> bool>;
@@ -1088,7 +1088,7 @@ impl App {
                 let dpi = dpi0 * 4 / 3;
                 a.dpi.get() == dpi
                     && a.row_height.get() > row0
-                    && a.list.column_widths()[0] == (col0 as i64 * dpi as i64 / dpi0 as i64) as i32
+                    && a.list.column_widths()[0] == mul_div(col0, dpi as i32, dpi0 as i32)
                     && tab_width(a) == scale(150, dpi)
             },
         );

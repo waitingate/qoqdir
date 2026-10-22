@@ -6,6 +6,7 @@ use std::os::windows::ffi::{OsStrExt, OsStringExt};
 use windows::Win32::Foundation::{HWND, LPARAM, WPARAM};
 use windows::Win32::Graphics::Gdi::{DeleteObject, HFONT};
 use windows::Win32::System::Com::CoTaskMemFree;
+use windows::Win32::System::WindowsProgramming::MulDiv;
 use windows::Win32::UI::Input::KeyboardAndMouse::{GetKeyState, SetFocus, VIRTUAL_KEY};
 use windows::Win32::UI::Shell::Common::ITEMIDLIST;
 use windows::Win32::UI::WindowsAndMessaging::{
@@ -74,12 +75,17 @@ pub fn key_down(vk: VIRTUAL_KEY) -> bool {
     unsafe { GetKeyState(vk.0 as i32) < 0 }
 }
 
+/// a * b / c, rounded to the nearest whole number: Windows' MulDiv, which the C++ version's sizes go through.
+pub fn mul_div(a: i32, b: i32, c: i32) -> i32 {
+    unsafe { MulDiv(a, b, c) }
+}
+
 pub fn scale(px: i32, dpi: u32) -> i32 {
-    (px as i64 * dpi as i64 / 96) as i32
+    mul_div(px, dpi as i32, 96)
 }
 
 pub fn unscale(px: i32, dpi: u32) -> i32 {
-    (px as i64 * 96 / dpi as i64) as i32
+    mul_div(px, 96, dpi as i32)
 }
 
 /// Owns a shell item ID list.
@@ -110,5 +116,23 @@ impl Drop for Font {
         unsafe {
             let _ = DeleteObject(self.0.into());
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn scale_rounds_as_the_cpp_version() {
+        assert_eq!(scale(10, 120), 13); // 12.5 at 125%: a half goes up
+        assert_eq!(scale(150, 168), 263); // 262.5 at 175%
+        assert_eq!(unscale(299, 168), 171); // 170.86
+        // A width saved and read back at 175% loses a pixel once at most, not a little more each time.
+        let mut width = 300;
+        for _ in 0..5 {
+            width = scale(unscale(width, 168), 168);
+        }
+        assert_eq!(width, 299);
     }
 }
