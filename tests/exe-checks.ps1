@@ -1,20 +1,53 @@
-# Checks the exe that ships (spec 3): one file under 1 MB that imports only DLLs Windows protects (its KnownDLLs,
-# comctl32 through the manifest, the CRT's API sets). Any other import, Windows would look for next to the exe
-# first (docs\DEVELOPING.md). Needs MinGW's objdump on the PATH. Used by scripts\build.ps1 -Test, scripts\release.ps1
-# and the build on GitHub, so the rule lives here once.
+# Checks an exe that ships (spec 3): one file under 1 MB, and no DLL it imports can be planted beside it. Windows
+# protects its KnownDLLs, comctl32 through the manifest, ntdll (always loaded first) and the API sets (api-ms-win-*,
+# which it resolves itself); any other import it might look for next to the exe first (docs\DEVELOPING.md). So for
+# each other one, a stand-in of that name goes beside a copy of the exe, which must still start: Windows then used
+# its own. Needs MinGW's objdump on the PATH. Used by scripts\build.ps1 -Test, scripts\release.ps1 and the build on
+# GitHub, so the rule lives here once.
 #
 #   powershell -File tests\exe-checks.ps1 -Exe build\qoqdir.exe
+#   powershell -File tests\exe-checks.ps1 -Exe rust\target\release\qoqdir.exe
 param([Parameter(Mandatory)][string]$Exe)
 
-$allowed = '^(KERNEL32|USER32|GDI32|ole32|OLEAUT32|SHELL32|SHLWAPI|COMCTL32|api-ms-win-crt-[a-z0-9-]+)\.dll$'
+$protected = '^(KERNEL32|USER32|GDI32|ole32|OLEAUT32|SHELL32|SHLWAPI|COMCTL32|combase|ntdll|api-ms-win-[a-z0-9-]+)\.dll$'
 $size = (Get-Item $Exe).Length
 $imports = @(objdump -p $Exe | Select-String 'DLL Name: (\S+)' | ForEach-Object { $_.Matches[0].Groups[1].Value })
-$strangers = @($imports | Where-Object { $_ -notmatch $allowed })
+$others = @($imports | Where-Object { $_ -notmatch $protected } | Sort-Object -Unique)
 $failures = 0
 function Check([bool]$ok, [string]$what) {
   if ($ok) { "ok    $what" } else { "FAIL  $what"; $script:failures++ }
 }
+
+# A copy of the exe with another Windows DLL beside it under the import's name: that one has none of the functions
+# the exe asks for, so if Windows took it the copy could not start. --help into a pipe prints and exits: no window.
+Add-Type -Namespace ExeChecks -Name Errors -MemberDefinition '[DllImport("kernel32.dll")] public static extern uint SetErrorMode(uint mode);'
+[void][ExeChecks.Errors]::SetErrorMode(0x8003)   # a copy that can't start says so in its exit code, not in a box
+function StartsWithStandIn([string]$dll) {
+  $dir = Join-Path $env:TEMP 'qoqdir-exe-checks'
+  if (Test-Path $dir) { Remove-Item -LiteralPath $dir -Recurse -Force }
+  New-Item -ItemType Directory $dir | Out-Null
+  $copy = Join-Path $dir (Split-Path $Exe -Leaf)
+  Copy-Item $Exe $copy
+  $standIn = if ($dll -ieq 'version.dll') { 'wtsapi32.dll' } else { 'version.dll' }
+  Copy-Item (Join-Path $env:SystemRoot "System32\$standIn") (Join-Path $dir $dll)
+  $si = New-Object Diagnostics.ProcessStartInfo $copy, '--help'
+  $si.UseShellExecute = $false; $si.RedirectStandardOutput = $true; $si.CreateNoWindow = $true
+  $p = [Diagnostics.Process]::Start($si)
+  [void]$p.StandardOutput.ReadToEnd()
+  $exited = $p.WaitForExit(10000)
+  if (-not $exited) { $p.Kill() }
+  $started = $exited -and $p.ExitCode -eq 0
+  for ($i = 0; $i -lt 20 -and (Test-Path $dir); $i++) {   # a virus scanner may hold the new copy a moment
+    Remove-Item -LiteralPath $dir -Recurse -Force -ErrorAction SilentlyContinue
+    if (Test-Path $dir) { Start-Sleep -Milliseconds 100 }
+  }
+  $started
+}
+
 Check ($size -lt 1MB) "the exe is one file under 1 MB ($size bytes)"
 Check ($imports.Count -gt 0) "objdump lists its imports ($($imports.Count); none means MinGW is not on the PATH)"
-Check ($strangers.Count -eq 0) "it imports only DLLs Windows protects$(if ($strangers) { ': not ' + ($strangers -join ', ') })"
+$taken = @($others | Where-Object { -not (StartsWithStandIn $_) })   # imports Windows took from beside the exe
+$what = 'it imports only DLLs Windows protects'
+if ($others) { $what += ", and $($others -join ', '), which Windows takes from System32 even with one beside the exe" }
+Check ($taken.Count -eq 0) "$what$(if ($taken) { ': not ' + ($taken -join ', ') })"
 if ($failures) { "$failures check(s) failed"; exit 1 } else { 'all checks passed' }

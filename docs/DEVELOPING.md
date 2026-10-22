@@ -64,8 +64,8 @@ The same parts, file for file, written with Microsoft's `windows` crate:
 - `src/main.rs`, `src/crashlog.rs`: as in C++
 - `src/util.rs`: UTF-16 strings, DPI scaling (Windows' `MulDiv`, as in C++),
   and owners that free Windows resources
-- `build.rs`, `icon.rc`: embed the manifest, and `../res/qoqdir.ico` through
-  `windres`
+- `build.rs`: builds `../res/qoqdir.rc` with `windres`, so the exe gets the C++
+  version's manifest, icon and version block
 
 Shared state is never borrowed across a call into Windows, because Windows can
 call straight back into the app. A mistake there stops the app (`panic = "abort"`)
@@ -139,7 +139,10 @@ instead of corrupting data, and the crash log says where.
   with exit code 3. `_GLIBCXX_ASSERTIONS` and the signed overflow trap stay on.
 - Link only DLLs that Windows protects (its KnownDLLs list, or comctl32 through
   the manifest). Windows looks for any other imported DLL next to the exe first:
-  load it at run time from System32, as `setTheme` does with uxtheme.dll.
+  load it at run time from System32, as `setTheme` does with uxtheme.dll. The
+  one exception is the `bcryptprimitives.dll` that Rust's standard library
+  imports: Windows has its own loaded before the exe's imports, which
+  `tests\exe-checks.ps1` proves with a stand-in beside a copy of the exe.
 - "Qoqdir" in titles and messages, lowercase `qoqdir` in file names.
 - Git stores every file with LF line endings, whatever the PC's own setting
   (`.gitattributes`); Git for Windows shows them with CRLF in the working folder.

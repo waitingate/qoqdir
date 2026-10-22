@@ -52,8 +52,9 @@ g++ --version
 
 Any other folder works if its path has no spaces, which MinGW's tools dislike.
 With a space in your user name, use `C:\mingw64`: any user may create a folder
-at the root of `C:`. The compiler's `windres` also puts the icon into the Rust
-exe. MSYS2's UCRT64 GCC works too (the build on GitHub uses it).
+at the root of `C:`. The Rust build needs the compiler's `windres` too: it
+builds the Rust exe's manifest, icon and version block from the same
+`res\qoqdir.rc`. MSYS2's UCRT64 GCC works too (the build on GitHub uses it).
 
 ### Rust, for the Rust version
 
@@ -174,7 +175,7 @@ powershell -File scripts\build.ps1 -Test
 
 After building, it runs these in order and stops at the first failure:
 
-1. the unit tests of both versions;
+1. the unit tests and the exe checks of both versions;
 2. clippy on both Rust builds, which must report nothing;
 3. the command-line checks on both exes;
 4. the self-test of each version, one after the other, with the popup watch;
@@ -199,9 +200,12 @@ What each one is:
   (`%TEMP%\qoqdir-selftest.log`, for Rust `%TEMP%\qoqdir-rs-selftest.log`) gets
   an `ok` or `FAIL` line as each step ends.
   There is no way to run one step alone.
-- `tests\exe-checks.ps1` checks the exe that ships: one file under 1 MB that
-  imports only DLLs Windows protects (spec 3). It needs MinGW's `objdump` on
-  the PATH.
+- `tests\exe-checks.ps1` checks an exe that ships, of either version: one file
+  under 1 MB, and no DLL it imports can be replaced by a file beside it (spec
+  3). Windows protects most of them; for any other, such as the
+  `bcryptprimitives.dll` that Rust's standard library imports, a stand-in goes
+  beside a copy of the exe, which must still start. It needs MinGW's `objdump`
+  on the PATH.
 - `tests\cli-checks.ps1` starts a copy of an exe in a temp folder (so your
   settings stay untouched) with several command lines, a damaged `qoqdir.ini` and
   a folder it can't write to.
@@ -302,8 +306,8 @@ logs are kept with the run. The Rust version isn't built there.
 
 - "running scripts is disabled on this system": see PowerShell scripts in
   section 1.
-- Cargo says `windres not found: the exe gets no icon`: the compiler's `bin` is
-  not on the PATH (`scripts\build.ps1` adds it, section 1).
+- The Rust build stops with `windres not found`: the compiler's `bin` is not on
+  the PATH (`scripts\build.ps1` adds it, section 1).
 - The Rust build fails in `dlltool` (it did on the first build machine): point
   cargo at MinGW's, with the full path of `dlltool.exe` in your `mingw64\bin`,
   in `cargo\config.toml` inside the Rust folder:

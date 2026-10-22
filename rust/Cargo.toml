@@ -49,9 +49,6 @@ windows-core = "0.62.2"
 #   cargo build --release --features selftest --target-dir target\selftest
 selftest = []
 
-[build-dependencies]
-embed-manifest = "1.5.1"
-
 [profile.release]
 opt-level = 3
 lto = true

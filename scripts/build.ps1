@@ -33,8 +33,11 @@ Step 'Rust build with the self-test' { cargo build --release @rust @selftest }
 if (-not $Test) { return }
 
 Step 'C++ unit tests' { build\unit_tests.exe }
-Step 'exe checks' { powershell -NoProfile -ExecutionPolicy Bypass -File tests\exe-checks.ps1 -Exe build\qoqdir.exe }
+Step 'exe checks, C++' { powershell -NoProfile -ExecutionPolicy Bypass -File tests\exe-checks.ps1 -Exe build\qoqdir.exe }
 Step 'Rust unit tests' { cargo test @rust }
+Step 'exe checks, Rust' {
+    powershell -NoProfile -ExecutionPolicy Bypass -File tests\exe-checks.ps1 -Exe rust\target\release\qoqdir.exe
+}
 Step 'clippy' { cargo clippy --all-targets @rust '--' -D warnings }
 Step 'clippy with the self-test' { cargo clippy --all-targets @rust @selftest '--' -D warnings }
 Step 'command-line checks, C++' { powershell -NoProfile -ExecutionPolicy Bypass -File tests\cli-checks.ps1 -Exe build\qoqdir.exe }
