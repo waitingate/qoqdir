@@ -78,7 +78,7 @@ admin rights, and nothing else on the system changes.
    $env:RUSTUP_HOME = Join-Path $PSScriptRoot 'rustup'
    $env:CARGO_HOME  = Join-Path $PSScriptRoot 'cargo'
    $env:PATH = (Join-Path $PSScriptRoot 'cargo\bin') + ';' + $env:PATH
-   $env:RUSTFLAGS = "--remap-path-prefix=$env:CARGO_HOME=cargo"
+   $env:CARGO_ENCODED_RUSTFLAGS = "--remap-path-prefix=$env:CARGO_HOME=cargo"
    ```
 
 3. In each new terminal: `. $env:LOCALAPPDATA\Programs\rust\rust-env.ps1`.
@@ -150,7 +150,8 @@ doesn't.
 
 ### The Rust version by hand
 
-From `rust\`, with the compiler's `bin` on the PATH for the icon (section 1):
+From `rust\`, with the compiler's `bin` on the PATH for `windres`, which builds
+the exe's manifest, icon and version block (section 1):
 
 ```powershell
 cargo build --release                                                    # target\release\qoqdir.exe
@@ -161,10 +162,12 @@ The self-test build gets its own folder, so it never replaces your exe.
 
 The crates' panic messages name their source files, which live under the
 Rust folder's `cargo\registry`: on a per-user install that path holds your
-user name. The `RUSTFLAGS` line in `rust-env.ps1` (section 1) maps that folder
-to `cargo`, so the exe holds only `cargo\...`; `scripts\find-tools.ps1` sets the
-same flag for the build scripts when `RUSTFLAGS` isn't set. Cargo rebuilds every
-crate when the flags change, so keep it set for builds by hand too.
+user name. The `CARGO_ENCODED_RUSTFLAGS` line in `rust-env.ps1` (section 1)
+maps that folder to `cargo`, so the exe holds only `cargo\...`;
+`scripts\find-tools.ps1` sets the same flag for the build scripts when neither
+it nor `RUSTFLAGS` is set. Cargo takes `CARGO_ENCODED_RUSTFLAGS` whole, where it
+would split `RUSTFLAGS` at a space in a folder's name. It rebuilds every crate
+when the flags change, so keep them set for builds by hand too.
 `tests\exe-checks.ps1` fails an exe, of either version, that still holds a path
 into your user folder.
 
@@ -182,8 +185,8 @@ After building, it runs these in order and stops at the first failure:
 2. clippy on both Rust builds, which must report nothing;
 3. the command-line checks on both exes;
 4. the self-test of each version, one after the other, with the popup watch;
-5. a comparison of the two self-test logs: both versions must have taken the
-   same steps with the same results.
+5. a comparison of the two self-test logs (`tests\compare-selftests.ps1`): both
+   versions must have taken the same steps with the same results.
 
 It takes about ten minutes, most of it the two self-tests.
 
@@ -232,6 +235,7 @@ cd ..
 powershell -File tests\exe-checks.ps1 -Exe rust\target\release\qoqdir.exe
 powershell -File tests\cli-checks.ps1 -Exe rust\target\release\qoqdir.exe
 powershell -File tests\watch-windows.ps1 -Exe rust\target\selftest\release\qoqdir.exe -Log $env:TEMP\qoqdir-rs-selftest.log
+powershell -File tests\compare-selftests.ps1
 ```
 
 (`ctest --test-dir build --output-on-failure` runs the C++ unit tests and
@@ -292,7 +296,8 @@ It stops if the three versions disagree (both lines of `version.h`, and
 `Cargo.toml`) and builds that commit in a clean copy, the Rust version from the
 crates in `Cargo.lock`. For each version it runs the unit tests, the exe checks
 and the command-line checks on the exe that ships, and the self-test (for C++ on
-`qoqdir-test.exe`). It takes about ten minutes and leaves in `release\`:
+`qoqdir-test.exe`), then compares the two self-test logs. It takes about ten
+minutes and leaves in `release\`:
 
 - `qoqdir-<version>.zip` and `qoqdir-rust-<version>.zip` to publish: the exe,
   README, LICENSE and the third-party notices. The Rust zip also holds
@@ -318,8 +323,9 @@ PC (a warning fails the C++ build there too, `-Werror` being in
 - The Rust build stops with `windres not found`: the compiler's `bin` is not on
   the PATH (`scripts\build.ps1` adds it, section 1).
 - `tests\exe-checks.ps1` finds a path into your user folder: in the Rust exe,
-  `RUSTFLAGS` was set without the flag from `rust-env.ps1` (section 1); in the
-  C++ exe, a build without CMake left out `-ffile-prefix-map` (section 2).
+  `RUSTFLAGS` or `CARGO_ENCODED_RUSTFLAGS` was set without the flag from
+  `rust-env.ps1` (section 1); in the C++ exe, a build without CMake left out
+  `-ffile-prefix-map` (section 2).
 - The Rust build fails in `dlltool` (it did on the first build machine): point
   cargo at MinGW's, with the full path of `dlltool.exe` in your `mingw64\bin`,
   in `cargo\config.toml` inside the Rust folder:

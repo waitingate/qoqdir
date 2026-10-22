@@ -225,6 +225,9 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
     auto backHome = [&](const wchar_t* name) {   // a step that opens the test folder again
         add(name, [=, this] { open(dir, Nav::New); }, [=, this] { return at(dir); });
     };
+    auto firstTab = [&] {   // a step back to the first tab, on the test folder
+        add(L"(back to the first tab)", [=, this] { switchTab(0); }, [=, this] { return at(dir) && active_ == 0; });
+    };
     auto oneTabHome = [=, this] { return tabs_.size() == 1 && at(dir); };   // back to the test folder's own tab
     static double t0 = 0, keyMs = 0;   // keyMs: how long a key press kept the window busy
     static int rows = 0;               // list rows before a refresh that must wait
@@ -651,14 +654,14 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
                    !exists(path(L"sub\\New folder"));
         });
     // The switch showed where the tab is at once: what is typed into the address bar since is the user's (5.3).
-    add(L"(back to the first tab)", [=, this] { switchTab(0); }, [=, this] { return at(dir) && active_ == 0; });
+    firstTab();
     add(L"a tab switch whose folder then loads leaves what was typed into the address bar meanwhile (5.3)",
         [=, this] {
             switchTab(1);
             SetWindowTextW(address_, L"typed meanwhile");   // before the tab's folder can have loaded
         },
         [=, this] { return at(path(L"sub")) && windowText(address_) == L"typed meanwhile"; });
-    add(L"(back to the first tab)", [=, this] { switchTab(0); }, [=, this] { return at(dir) && active_ == 0; });
+    firstTab();
     add(L"...and so does one whose folder turns out not to be available (4.3)",
         [=, this] {
             switchTab(1);
@@ -673,6 +676,15 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
                    windowText(address_) == L"typed meanwhile";
         });
     add(L"(close that tab)", [=, this] { closeTab(active_); }, oneTabHome);
+    add(L"...and so does a move to the folder shown, while the user types there (5.3)",
+        [=, this] {
+            open(dir, Nav::New);   // as a click on the tree's selected folder: it is read again
+            SetFocus(address_);
+            SetWindowTextW(address_, L"typed meanwhile");
+        },
+        [=, this] { return at(dir) && windowText(address_) == L"typed meanwhile"; });
+    add(L"(Esc puts the path back and returns to the list)", [=, this] { selfTestKey(VK_ESCAPE); },
+        [=, this] { return windowText(address_) == locationText(tab().path) && GetFocus() == list_.hwnd(); });
     add(L"a typed path that fails while a rename box is open leaves the box alone",
         [=, this] {
             // The failure lands after the rename box opens (a dead share fails a minute later).
@@ -1740,25 +1752,25 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
     constexpr UINT kStuckRead = 0xFFFFFFFF;   // no real read gets this number
     auto reads = std::make_shared<UINT>(0);
     auto saidAgain = std::make_shared<bool>(false);   // the move's error, back in the status bar with the folder
-    // To the second tab, and at once on to a folder that is not there, while the switch's read is still out.
-    auto overtake = [=, this](const wchar_t* missing) {
+    // To the second tab, and at once on to another folder (most often one that is not there), while the switch's read
+    // is still out.
+    auto overtake = [=, this](const wchar_t* to) {
         switchTab(1);
-        open(path(missing), Nav::New);
-        kept_.generation = kStuckRead;   // the real read comes back as one replaced, and is dropped
+        open(path(to), Nav::New);
+        // The real read comes back as one replaced, and is dropped.
+        if (kept_.generation) kept_.generation = kStuckRead;
     };
-    auto readBack = [=, this](DWORD error) {   // the stuck read comes back: sub, or the error it ran into
+    // The stuck read comes back: sub, or the error it ran into; `changed`: sub changed while it was read.
+    auto readBack = [=, this](DWORD error, bool changed = false) {
         Listing found;
         found.path = path(L"sub");
-        found.written = folderWritten(found.path);
+        found.written = changed ? FILETIME{} : folderWritten(found.path);
         found.error = error;
         onLoaded(std::move(found), kStuckRead);
     };
     auto moveDone = [this] { return !pending_.generation; };   // the move failed: only the switch's read is out
     // The first tab, which the steps switch away from and back to, shows the test folder: quick to read each time.
     backHome(L"(the first tab on the test folder)");
-    auto firstTab = [&] {
-        add(L"(back to the first tab)", [=, this] { switchTab(0); }, [=, this] { return at(dir) && active_ == 0; });
-    };
     add(L"(a second tab on sub)", [=, this] { newTab(path(L"sub"), true); },
         [=, this] { return at(path(L"sub")) && tabs_.size() == 2 && active_ == 1; });
     firstTab();
@@ -1860,16 +1872,41 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
     firstTab();
     add(L"a move that lands after the switch's read was shown goes on from the tab's folder (4.2)",
         [=, this] {
-            switchTab(1);
-            open(path(L"big"), Nav::New);
-            kept_.generation = kStuckRead;
+            overtake(L"big");
             readBack(0);   // the move is still out
         },
         [=, this] {
             const std::vector<std::wstring>& back = tab().back;
             return at(path(L"big")) && active_ == 1 && !back.empty() && samePath(back.back(), path(L"sub"));
         });
+    // A change the switch's read saw is about the tab's folder, as one the watch sees: the move's folder is not read
+    // again for it (4.5).
+    firstTab();
+    add(L"...and a change seen by the switch's read is not read again in the move's folder (4.5)",
+        [=, this] {
+            *reads = generation_;
+            overtake(L"big");
+            readBack(0, true);
+        },
+        [=, this] { return at(path(L"big")) && active_ == 1 && !refreshQueued_ && generation_ == *reads + 2; });
+    // The move's own hint, said once it lands (5.3), is still to come when the switch's read fails before it.
+    firstTab();
+    add(L"a hint of the move waits for it when the switch's read fails first (5.3)",
+        [=, this] {
+            overtake(L"sub");
+            lateHint_ = L"the move's own hint";
+            readBack(ERROR_BAD_NETPATH);   // the move is still out
+        },
+        [=, this] { return at(path(L"sub")) && active_ == 1 && statusHas(L"the move's own hint"); });
     add(L"(close that tab)", [=, this] { closeTab(1); }, oneTabHome);
+    // A refresh a move replaced goes with the move: if the move fails, the refresh is asked for again (4.5).
+    add(L"a refresh that a failed move replaced is asked for again (4.5)",
+        [=, this] {
+            *reads = generation_;
+            refresh();
+            open(path(L"missing six"), Nav::New);
+        },
+        [=, this] { return idle() && !refreshQueued_ && generation_ == *reads + 3; });
     add(L"(back into big)", [=, this] { open(path(L"big"), Nav::New); }, [=, this] { return at(path(L"big")); });
 
     add(L"copies 10,000 selected files to the clipboard",
@@ -1957,14 +1994,8 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
     add(L"Open in new window starts Qoqdir on the folder, a title bar down and right of this window (5.8)", nullptr,
         [=, this] {
             NewWindow w = newWindow(dir);
-            int argc = 0;
-            LPWSTR* argv = CommandLineToArgvW(w.commandLine.c_str(), &argc);
-            std::vector<std::wstring> args;
-            if (argv) args.assign(argv, argv + argc);
-            LocalFree(argv);
-            std::wstring exe(32768, L'\0');
-            exe.resize(GetModuleFileNameW(nullptr, exe.data(), DWORD(exe.size())));
-            bool started = args.size() == 2 && samePath(args[0], exe) &&
+            std::vector<std::wstring> args = commandLineWords(w.commandLine);
+            bool started = args.size() == 2 && samePath(args[0], exePath()) && samePath(w.exe, exePath()) &&
                            parseCommandLine({args[1]}).folders == std::vector<std::wstring>{dir};
             RECT r{};
             GetWindowRect(wnd_, &r);

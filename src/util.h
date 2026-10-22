@@ -59,6 +59,12 @@ using Font = std::unique_ptr<std::remove_pointer_t<HFONT>, FontDeleter>;
 // The app's name: window title, settings file, logs. (The exe name is set in CMakeLists.txt.)
 constexpr wchar_t kAppName[] = L"Qoqdir";
 
+inline std::wstring exePath() {
+    std::wstring exe(32768, L'\0');   // not MAX_PATH: the app may live in a deep folder
+    exe.resize(GetModuleFileNameW(nullptr, exe.data(), DWORD(exe.size())));
+    return exe;
+}
+
 inline int scale(int px, UINT dpi) { return MulDiv(px, static_cast<int>(dpi), 96); }
 inline int unscale(int px, UINT dpi) { return MulDiv(px, 96, static_cast<int>(dpi)); }
 

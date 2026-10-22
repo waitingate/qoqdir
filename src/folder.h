@@ -45,6 +45,7 @@ CommandLine parseCommandLine(const std::vector<std::wstring>& args);
 // "--tab=" and the folder, for a Qoqdir started on it (Open in new window, 5.8), quoted so that the command-line rules
 // give it back whole.
 std::wstring tabArgument(const std::wstring& folder);
+std::vector<std::wstring> commandLineWords(const std::wstring& line);   // as Windows splits it (CommandLineToArgvW)
 
 // ---------------------------------------------------------------- reading a folder
 

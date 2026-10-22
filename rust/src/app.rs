@@ -22,7 +22,6 @@ use windows::Win32::Graphics::Gdi::{
 };
 use windows::Win32::Storage::FileSystem::CreateDirectoryW;
 use windows::Win32::System::Diagnostics::Debug::MessageBeep;
-use windows::Win32::System::LibraryLoader::GetModuleFileNameW;
 use windows::Win32::System::Com::{CLSCTX_INPROC_SERVER, CoCreateInstance};
 use windows::Win32::System::DataExchange::IsClipboardFormatAvailable;
 use windows::Win32::System::Ole::{CF_HDROP, IDropTarget, RegisterDragDrop, RevokeDragDrop};
@@ -182,6 +181,7 @@ pub struct Pending {
     tab_id: u32,
     origin: Origin,
     filter: OsString, // the filter box before this load cleared it: a failed one puts it back
+    refresh_lost: bool, // a move that replaced a refresh of its tab's folder: a failed one asks again (4.5)
 }
 
 pub struct State {
@@ -211,9 +211,21 @@ pub struct Key {
 
 /// Open in new window (5.8): what is started.
 pub struct NewWindow {
-    pub command_line: OsString, // this exe, on the folder
+    pub exe: PathBuf,
+    pub command_line: OsString, // the exe again, on the folder
     pub place: RECT,            // in screen coordinates, as STARTUPINFO takes it
     pub maximized: bool,
+}
+
+/// What the program that started this one asked of its window (App::start_ask).
+struct StartAsk {
+    quiet: bool, // no focus
+    maximized: bool,
+    placed: bool, // a place and size on a monitor
+    x: i32,
+    y: i32,
+    width: i32,
+    height: i32,
 }
 
 pub struct App {
@@ -262,7 +274,7 @@ pub struct App {
     pub quiet: Cell<bool>, // no beeps (set by the self-test, which triggers errors on purpose)
     hinted_filter: Cell<bool>, // the two things Explorer users don't expect, said once (5.3)
     hinted_up: Cell<bool>,
-    late_hint: Cell<Option<&'static str>>, // a hint for when the folder being loaded lands (a navigation clears messages)
+    pub late_hint: Cell<Option<&'static str>>, // a hint for when the folder being loaded lands (a navigation clears messages)
     gray: HBRUSH,          // the window's soft gray: lives as long as the process
 }
 
@@ -432,16 +444,25 @@ impl App {
                 ..Default::default()
             };
             RegisterClassExW(&class);
+            // A window asked to go somewhere is made there, at that monitor's scaling: moved there from the default
+            // place on a monitor of other scaling, Windows would scale it again on the way (WM_DPICHANGED) and change
+            // its size.
+            let ask = Self::start_ask();
             let sys_dpi = GetDpiForSystem();
+            let (x, y, width, height) = if ask.placed {
+                (ask.x, ask.y, ask.width, ask.height)
+            } else {
+                (CW_USEDEFAULT, CW_USEDEFAULT, scale(1100, sys_dpi), scale(700, sys_dpi))
+            };
             let wnd = CreateWindowExW(
                 WINDOW_EX_STYLE(0),
                 pcwstr(&name),
                 pcwstr(&name),
                 WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN,
-                CW_USEDEFAULT,
-                CW_USEDEFAULT,
-                scale(1100, sys_dpi),
-                scale(700, sys_dpi),
+                x,
+                y,
+                width,
+                height,
                 None,
                 None,
                 Some(instance),
@@ -508,11 +529,7 @@ impl App {
                     let _ = names.SetHwndPropStr(h, OBJID_CLIENT.0 as u32, CHILDID_SELF, PROPID_ACC_NAME, pcwstr(&text));
                 }
             }
-            let exe = {
-                let mut buf = [0u16; 32768];
-                let n = GetModuleFileNameW(None, &mut buf) as usize;
-                PathBuf::from(from_wide(&buf[..n]))
-            };
+            let exe = std::env::current_exe().unwrap_or_default();
             // Bookmarks are shortcuts in a folder next to the exe (in a self-test: in the test folder).
             let bookmarks = match (use_settings, cmd.folders.first().and_then(|f| f.path())) {
                 (false, Some(test_dir)) => test_dir.join("Bookmarks"),
@@ -627,10 +644,10 @@ impl App {
             app.apply_colors(high_contrast_on());
             app.apply_font();
             app.tree.fill();
-            app.load_settings(&cmd);
+            app.load_settings(&cmd, &ask);
             app.layout();
             app.show_tab();
-            if !Self::started_quiet() {
+            if !ask.quiet {
                 app.focus_list(); // giving a control the focus activates the window, which a quiet start may not
             }
             crate::crashlog::watch_for_hangs(wnd);
@@ -675,13 +692,31 @@ impl App {
         self.open(location, Nav::Switch, view);
     }
 
-    /// Whether the program was started with a request for no focus: a script's STARTF_USESHOWWINDOW with
-    /// SW_SHOWNOACTIVATE, as the command-line checks use (5.10). The window then opens behind whatever has the focus.
-    fn started_quiet() -> bool {
+    /// What the program that started this one asked of its window, in STARTUPINFO: no focus, as a script's
+    /// SW_SHOWNOACTIVATE asks (the command-line checks use it, 5.10: the window then opens behind whatever has the
+    /// focus), and a place and size, as Open in new window gives (5.8), taken only when that is on a monitor.
+    fn start_ask() -> StartAsk {
         let mut si = STARTUPINFOW { cb: size_of::<STARTUPINFOW>() as u32, ..Default::default() };
         unsafe { GetStartupInfoW(&mut si) };
-        let asked = SHOW_WINDOW_CMD(si.wShowWindow as i32);
-        si.dwFlags.contains(STARTF_USESHOWWINDOW) && [SW_SHOWNOACTIVATE, SW_SHOWMINNOACTIVE, SW_SHOWNA].contains(&asked)
+        let shown = si.dwFlags.contains(STARTF_USESHOWWINDOW);
+        let asked = SHOW_WINDOW_CMD(i32::from(si.wShowWindow));
+        // Summed as u32s, which wrap: nonsense from the program that started this one can't trip the overflow check.
+        let place = RECT {
+            left: si.dwX as i32,
+            top: si.dwY as i32,
+            right: si.dwX.wrapping_add(si.dwXSize) as i32,
+            bottom: si.dwY.wrapping_add(si.dwYSize) as i32,
+        };
+        StartAsk {
+            quiet: shown && [SW_SHOWNOACTIVATE, SW_SHOWMINNOACTIVE, SW_SHOWNA].contains(&asked),
+            maximized: shown && asked == SW_SHOWMAXIMIZED,
+            placed: si.dwFlags.contains(STARTF_USEPOSITION | STARTF_USESIZE)
+                && !unsafe { MonitorFromRect(&place, MONITOR_DEFAULTTONULL) }.is_invalid(),
+            x: si.dwX as i32,
+            y: si.dwY as i32,
+            width: si.dwXSize as i32,
+            height: si.dwYSize as i32,
+        }
     }
 
     /// A folder read is in flight for this window: the newest, or a tab switch's that a move took over (State::kept).
@@ -1578,6 +1613,10 @@ impl App {
             let mut st = self.st.borrow_mut();
             let tab_id = st.tabs[st.active].id;
             let switching = st.pending.as_ref().is_some_and(|p| p.nav == Nav::Switch && p.tab_id == tab_id);
+            // A refresh of the tab's folder that a move replaces goes with it: if the move fails, it is asked for again
+            // (4.5).
+            let refresh_lost = moving
+                && st.pending.as_ref().is_some_and(|p| p.tab_id == tab_id && (p.nav == Nav::Refresh || p.refresh_lost));
             if moving && switching {
                 st.kept = st.pending.take();
             } else if !moving {
@@ -1585,7 +1624,7 @@ impl App {
             }
             KEPT_LOAD.store(st.kept.as_ref().map_or(0, |k| k.generation), Ordering::SeqCst);
             NEWEST_LOAD.store(generation, Ordering::SeqCst);
-            st.pending = Some(Pending { generation, nav, view, tab_id, origin, filter });
+            st.pending = Some(Pending { generation, nav, view, tab_id, origin, filter, refresh_lost });
         }
         unsafe {
             SetTimer(Some(self.wnd), TIMER_LOADING, 250, None); // say "Loading..." only if it is slow
@@ -1648,10 +1687,12 @@ impl App {
             unsafe {
                 let _ = KillTimer(Some(self.wnd), TIMER_LOADING);
             }
-        }
-        let loading_shown = !moving && self.load_message_shown.get(); // "Loading..." took the place of what was said
-        if loading_shown {
-            self.set_message(""); // any load, not only navigation, may have shown it
+            // Any load, not only navigation, may have said "Loading...". What it took the place of comes back for a
+            // tab that waited for its switch's read after a failed move (4.2); otherwise it goes.
+            if self.load_message_shown.get() {
+                let said = if kept_back { self.kept_said.borrow().clone() } else { String::new() };
+                self.set_message(&said);
+            }
         }
         if self.with_tab(|t| t.id) != pending.tab_id {
             return;
@@ -1764,18 +1805,19 @@ impl App {
             self.list.rename(row);
         }
 
-        // A change during the read, before the watch was there, is missed by both: the folder's own time tells.
+        // A change during the read, before the watch was there, is missed by both: the folder's own time tells. That
+        // refresh is about this folder, as the watch's would be, so it goes if another one is shown first (4.5).
         if location.path().is_some_and(|p| folder_written(p) != written) {
-            self.queue_refresh();
+            self.on_folder_changed();
         }
         // A move shows where the tab is now. A tab switch showed it when it began, and the address bar may hold what
-        // the user typed since (5.3).
+        // the user typed since (5.3); so may it after a move to the folder already shown, while the user is typing
+        // there.
         if moved {
-            self.show_location();
+            if !old.same(&location) || unsafe { GetFocus() } != self.address {
+                self.show_location();
+            }
             self.set_message(self.late_hint.get().unwrap_or("")); // a navigation clears the message, or says its hint
-        } else if kept_back && loading_shown {
-            let said = self.kept_said.borrow().clone();
-            self.set_message(&said); // what "Loading..." took the place of
         }
         if !moving {
             self.late_hint.set(None); // a hint for the move still out waits for it
@@ -1800,7 +1842,9 @@ impl App {
 
     /// The folder could not be read: decide what to show or do instead.
     fn on_load_failed(&self, listing: &Listing, error: &str, pending: &Pending) {
-        self.late_hint.set(None); // the error is what to say
+        if self.st.borrow().pending.is_none() {
+            self.late_hint.set(None); // the error is what to say; a move still out keeps its hint
+        }
         if matches!(pending.nav, Nav::Refresh | Nav::Switch) {
             return self.show_unavailable(&listing.location, error);
         }
@@ -1814,12 +1858,19 @@ impl App {
                 let _ = SetTimer(Some(self.wnd), TIMER_LOADING, 250, None); // "Loading..." if it is slow (4.1)
             }
         }
+        if pending.refresh_lost {
+            self.queue_refresh(); // the refresh of the tab's folder this move replaced (open_from, 4.5)
+        }
         match (&pending.origin, &listing.location) {
             // A shortcut that leads to a file: Windows opens it (never an unreachable one: that would hang, then fail).
             (Origin::Shortcut(lnk), _) if listing.is_file => open_file(self.wnd, lnk),
             (Origin::AddressBar, Location::Dir(path)) if listing.is_file => {
                 open_file(self.wnd, path); // a file typed in the address bar: open it
-                set_text(self.address, self.location().text());
+                // The tab looked up again: while Windows asks about the file, messages run that can add or close tabs.
+                // What the user types there meanwhile stays (5.3).
+                if unsafe { GetFocus() } != self.address {
+                    set_text(self.address, self.location().text());
+                }
             }
             _ => {
                 // Let the user fix what they typed (5.3), unless they moved on: a dead share fails a minute later.
@@ -2345,11 +2396,7 @@ impl App {
     /// size, maximized if this one is. The place goes in its STARTUPINFO, which load_settings there takes over the
     /// saved one.
     pub fn new_window(&self, dir: &Path) -> NewWindow {
-        let exe = {
-            let mut buf = [0u16; 32768]; // not MAX_PATH: the app may live in a deep folder
-            let n = unsafe { GetModuleFileNameW(None, &mut buf) } as usize;
-            from_wide(&buf[..n])
-        };
+        let exe = std::env::current_exe().unwrap_or_default();
         let mut command_line = OsString::from("\"");
         command_line.push(&exe);
         command_line.push("\" ");
@@ -2372,12 +2419,12 @@ impl App {
             let title_bar = GetSystemMetricsForDpi(SM_CYCAPTION, dpi)
                 + GetSystemMetricsForDpi(SM_CYSIZEFRAME, dpi)
                 + GetSystemMetricsForDpi(SM_CXPADDEDBORDER, dpi);
-            NewWindow { command_line, place: cascade(from, mi.rcWork, title_bar), maximized }
+            NewWindow { exe, command_line, place: cascade(from, mi.rcWork, title_bar), maximized }
         }
     }
 
     fn open_in_new_window(&self, dir: &Path) {
-        let NewWindow { command_line, place, maximized } = self.new_window(dir);
+        let NewWindow { exe, command_line, place, maximized } = self.new_window(dir);
         let wnd = self.wnd.0 as usize;
         // On a worker thread: the exe may live on a server, which can be slow to answer.
         in_background(move || {
@@ -2394,9 +2441,10 @@ impl App {
             };
             let mut line = wide(&command_line);
             let mut pi = PROCESS_INFORMATION::default();
+            // The exe named apart: read from the command line, its path could be no longer than MAX_PATH.
             let started = unsafe {
                 CreateProcessW(
-                    PCWSTR::null(),
+                    pcwstr(&wide(&exe)),
                     Some(PWSTR(line.as_mut_ptr())),
                     None,
                     None,
@@ -2421,7 +2469,7 @@ impl App {
         });
     }
 
-    fn load_settings(&self, cmd: &CommandLine) {
+    fn load_settings(&self, cmd: &CommandLine, ask: &StartAsk) {
         let dpi = self.dpi.get();
         self.tree_width.set(self.number("TreeWidth", 220));
         self.list.set_show_hidden(self.number("ShowHidden", 0) != 0);
@@ -2444,30 +2492,15 @@ impl App {
             st.active = 0;
         }
 
-        let quiet = !self.use_settings || Self::started_quiet(); // a self-test never steals the focus either
-        // Started with a place and size, as Open in new window starts one (5.8): there, maximized if asked, when that
-        // is on a monitor. Any other start takes the saved place.
-        let mut si = STARTUPINFOW { cb: size_of::<STARTUPINFOW>() as u32, ..Default::default() };
-        unsafe { GetStartupInfoW(&mut si) };
-        // Summed as u32s, which wrap: nonsense from the program that started this one can't trip the overflow check.
-        let given = RECT {
-            left: si.dwX as i32,
-            top: si.dwY as i32,
-            right: si.dwX.wrapping_add(si.dwXSize) as i32,
-            bottom: si.dwY.wrapping_add(si.dwYSize) as i32,
-        };
-        let placed = si.dwFlags.contains(STARTF_USEPOSITION | STARTF_USESIZE)
-            && !unsafe { MonitorFromRect(&given, MONITOR_DEFAULTTONULL) }.is_invalid();
+        let quiet = !self.use_settings || ask.quiet; // a self-test never steals the focus either
+        // A window asked to go somewhere (Open in new window, 5.8) was made there (create), so it is only shown here,
+        // maximized if asked. Any other start takes the saved place.
         let (w, h) = (self.number("Width", 0), self.number("Height", 0));
         unsafe {
-            if placed {
-                let (cx, cy) = (si.dwXSize as i32, si.dwYSize as i32);
-                let _ = SetWindowPos(self.wnd, None, given.left, given.top, cx, cy, SWP_NOZORDER | SWP_NOACTIVATE);
-                let maximized =
-                    si.dwFlags.contains(STARTF_USESHOWWINDOW) && i32::from(si.wShowWindow) == SW_SHOWMAXIMIZED.0;
+            if ask.placed {
                 let show = if quiet {
                     SW_SHOWNOACTIVATE
-                } else if maximized {
+                } else if ask.maximized {
                     SW_SHOWMAXIMIZED
                 } else {
                     SW_SHOWNORMAL

@@ -15,6 +15,9 @@ if (-not (Get-Command cargo -ErrorAction SilentlyContinue)) {
     . $rustEnv
 }
 # The panic messages of the crates used carry their source paths, which lie under CARGO_HOME: under C:\Users on a
-# per-user install. Name that folder "cargo" in the exe instead, as CMake does for the compiler's folder.
+# per-user install. Name that folder "cargo" in the exe instead, as CMake does for the compiler's folder. The flag goes
+# in CARGO_ENCODED_RUSTFLAGS, which cargo takes whole: RUSTFLAGS would split a folder name with a space in it.
 $cargoHome = if ($env:CARGO_HOME) { $env:CARGO_HOME } else { "$env:USERPROFILE\.cargo" }
-if (-not $env:RUSTFLAGS) { $env:RUSTFLAGS = "--remap-path-prefix=$cargoHome=cargo" }
+if (-not ($env:RUSTFLAGS -or $env:CARGO_ENCODED_RUSTFLAGS)) {
+    $env:CARGO_ENCODED_RUSTFLAGS = "--remap-path-prefix=$cargoHome=cargo"
+}

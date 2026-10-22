@@ -60,6 +60,13 @@ public:
 
 private:
     // Setup
+    struct StartAsk {                  // what the program that started this one asked of its window (startAsk)
+        bool quiet = false;            // no focus
+        bool maximized = false;
+        bool placed = false;           // a place and size on a monitor
+        int x = 0, y = 0, width = 0, height = 0;
+    };
+    static StartAsk startAsk();
     static LRESULT CALLBACK wndProc(HWND, UINT, WPARAM, LPARAM);
     void applyFont();
     void applyColors(bool highContrast);
@@ -140,13 +147,14 @@ private:
     void hint(bool& said, const wchar_t* text, bool afterLoad = false);
     void warn(const std::wstring& text);   // an error: in the status bar, with a beep
     struct NewWindow {                 // Open in new window (5.8): what is started
-        std::wstring commandLine;      // this exe, on the folder
+        std::wstring exe;
+        std::wstring commandLine;      // the exe again, on the folder
         RECT place{};                  // in screen coordinates, as STARTUPINFO takes it
         bool maximized = false;
     };
     NewWindow newWindow(const std::wstring& dir) const;
     void openInNewWindow(const std::wstring& dir);
-    void loadSettings(const CommandLine& cmd);
+    void loadSettings(const CommandLine& cmd, const StartAsk& ask);
     void saveSettings();
 
     // Self-test (selftest.cpp)
@@ -199,6 +207,7 @@ private:
         int tabId = 0;
         Origin origin;
         std::wstring filter;        // the filter box before this load cleared it: a failed one puts it back
+        bool refreshLost = false;   // a move that replaced a refresh of its tab's folder: a failed one asks again (4.5)
     } pending_;
     // A tab switch a move took over: its read goes on, and the tab shows what it finds as soon as it is back, as the
     // switch would have (4.2). Until then it counts as loading.

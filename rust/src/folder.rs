@@ -318,6 +318,21 @@ pub fn tab_argument(folder: &Path) -> OsString {
     arg
 }
 
+/// A command line's words, as Windows splits them (CommandLineToArgvW). The app reads its own through std, which
+/// splits them the same way; the tests check what a new window is given.
+#[cfg(any(test, feature = "selftest"))]
+pub fn command_line_words(line: &OsStr) -> Vec<OsString> {
+    use windows::Win32::Foundation::{HLOCAL, LocalFree};
+    use windows::Win32::UI::Shell::CommandLineToArgvW;
+    let mut count = 0;
+    unsafe {
+        let words = CommandLineToArgvW(pcwstr(&wide(line)), &mut count);
+        let list = (0..count.max(0) as usize).map(|i| OsString::from_wide((*words.add(i)).as_wide())).collect();
+        let _ = LocalFree(Some(HLOCAL(words.cast())));
+        list
+    }
+}
+
 // ---------------------------------------------------------------- reading a folder
 
 #[derive(Clone, Debug, Default)]
@@ -907,8 +922,6 @@ mod tests {
 
     #[test]
     fn tab_argument_comes_back_whole() {
-        use windows::Win32::Foundation::{HLOCAL, LocalFree};
-        use windows::Win32::UI::Shell::CommandLineToArgvW;
         // The folder a new window gets (5.8) comes back whole through Windows' command-line rules, a root's closing
         // backslash and a name that looks like an option or a variable included.
         let folders =
@@ -916,14 +929,9 @@ mod tests {
         for folder in folders {
             let mut line = OsString::from("qoqdir.exe ");
             line.push(tab_argument(Path::new(folder)));
-            let mut count = 0;
-            let args: Vec<OsString> = unsafe {
-                let words = CommandLineToArgvW(pcwstr(&wide(&line)), &mut count);
-                let args = (1..count.max(0) as usize).map(|i| OsString::from_wide((*words.add(i)).as_wide())).collect();
-                let _ = LocalFree(Some(HLOCAL(words.cast())));
-                args
-            };
-            let c = parse_command_line(&args);
+            let words = command_line_words(&line);
+            assert_eq!(words.len(), 2);
+            let c = parse_command_line(&words[1..]);
             assert!(c.error.is_none());
             assert_eq!(c.folders.iter().map(text).collect::<Vec<_>>(), [folder]);
         }

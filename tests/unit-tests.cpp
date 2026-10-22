@@ -200,13 +200,9 @@ int main(int argc, char** argv) {
     // closing backslash and a name that looks like an option or a variable included.
     for (const wchar_t* folder : {L"C:\\My Files", L"D:\\", L"\\\\nas\\share", L"C:\\-h", L"C:\\x\\%TEMP%",
                                   L"C:\\\u5831\u544A\\new folder"}) {
-        std::wstring line = L"qoqdir.exe " + tabArgument(folder);
-        int count = 0;
-        LPWSTR* words = CommandLineToArgvW(line.c_str(), &count);
-        std::vector<std::wstring> args;
-        if (words) args.assign(words + 1, words + count);
-        LocalFree(words);
-        CommandLine c = parseCommandLine(args);
+        std::vector<std::wstring> words = commandLineWords(L"qoqdir.exe " + tabArgument(folder));
+        CHECK(words.size() == 2);
+        CommandLine c = parseCommandLine(std::vector<std::wstring>(words.begin() + 1, words.end()));
         CHECK(c.error.empty() && c.folders.size() == 1);
         CHECK_EQ(c.folders.empty() ? L"" : c.folders[0], folder);
     }

@@ -1,8 +1,9 @@
 # Makes a release of both versions from the last commit. It builds them in a clean copy, runs the unit tests, the exe
 # checks and the CLI checks on each exe that ships, and each self-test (C++: on qoqdir-test.exe, the same compiled app
-# plus the self-test). It leaves in release\ the two zips to publish (their SHA-256s are printed) and a debug copy of
-# each exe to keep: the shipped exe with its symbols, which turns crash-log offsets into source lines (see
-# src/crashlog.cpp). Needs the build tools on the PATH, or where the build guide puts them (find-tools.ps1).
+# plus the self-test), whose two logs must match. It leaves in release\ the two zips to publish (their SHA-256s are
+# printed) and a debug copy of each exe to keep: the shipped exe with its symbols, which turns crash-log offsets into
+# source lines (see src/crashlog.cpp). Needs the build tools on the PATH, or where the build guide puts them
+# (find-tools.ps1).
 #     powershell -File scripts\release.ps1
 $ErrorActionPreference = 'Stop'
 Set-Location (Split-Path $PSScriptRoot)   # the repository
@@ -43,17 +44,26 @@ strip -o $exe "$work\build\qoqdir.exe"; Check 'strip'
 CheckExe 'C++' $exe "$work\build\qoqdir-test.exe" "$env:TEMP\qoqdir-selftest.log"
 
 # Rust: the crates in Cargo.lock, and the release profile, but with line tables and symbols for the debug copy, whose
-# paths start at the work folder too.
-$env:RUSTFLAGS += " --remap-path-prefix=$work=."
+# paths start at the work folder too. The flags go in CARGO_ENCODED_RUSTFLAGS, one per 0x1F, which cargo takes
+# whole: RUSTFLAGS would split a folder name with a space in it.
+$sep = [char]0x1F
+$given = if ($env:CARGO_ENCODED_RUSTFLAGS) { $env:CARGO_ENCODED_RUSTFLAGS -split $sep } else { -split $env:RUSTFLAGS }
+$given = @($given | Where-Object { $_ }) + "--remap-path-prefix=$work=."
+$env:CARGO_ENCODED_RUSTFLAGS = ($given | Select-Object -Unique) -join $sep   # once, if run twice in one shell
 $rust = '--manifest-path', "$work\src\rust\Cargo.toml", '--locked'
 $symbols = '--config', 'profile.release.debug=1', '--config', 'profile.release.strip=false'
 cargo build --release @rust @symbols --target-dir "$work\rust"; Check 'Rust build'
-cargo test @rust --target-dir "$work\rust"; Check 'Rust unit tests'
-cargo build --release @rust --features selftest --target-dir "$work\rust-selftest"
-Check 'Rust build with the self-test'
 $rsExe = "$work\rust\qoqdir.exe"
 strip -o $rsExe "$work\rust\release\qoqdir.exe"; Check 'strip'
-CheckExe 'Rust' $rsExe "$work\rust-selftest\release\qoqdir.exe" "$env:TEMP\qoqdir-rs-selftest.log"
+$rsDebug = "$work\rust\qoqdir-debug.exe"
+Copy-Item "$work\rust\release\qoqdir.exe" $rsDebug   # before the self-test build takes its place
+cargo test @rust --target-dir "$work\rust"; Check 'Rust unit tests'
+# The self-test build in the same folder and with the same flags: only qoqdir itself is compiled again.
+cargo build --release @rust @symbols --features selftest --target-dir "$work\rust"
+Check 'Rust build with the self-test'
+CheckExe 'Rust' $rsExe "$work\rust\release\qoqdir.exe" "$env:TEMP\qoqdir-rs-selftest.log"
+powershell -NoProfile -ExecutionPolicy Bypass -File "$work\src\tests\compare-selftests.ps1"
+Check 'the same self-test steps in both'
 
 # Each zip holds the exe, README, LICENSE and the notices for what else is in that exe. The Rust exe holds Rust's
 # standard library, whose notices come with the Rust that built it.
@@ -66,6 +76,6 @@ $rsFiles = $docs + $rsExe + "$work\src\rust\THIRD-PARTY-NOTICES.txt" + $std
 Compress-Archive -Force -DestinationPath $zips[0] -Path $cppFiles
 Compress-Archive -Force -DestinationPath $zips[1] -Path $rsFiles
 Copy-Item "$work\build\qoqdir.exe" "$out\qoqdir-$version-debug.exe" -Force
-Copy-Item "$work\rust\release\qoqdir.exe" "$out\qoqdir-rust-$version-debug.exe" -Force
+Copy-Item $rsDebug "$out\qoqdir-rust-$version-debug.exe" -Force
 Remove-Item $work -Recurse -Force
 foreach ($zip in $zips) { "$zip"; "SHA-256: $((Get-FileHash $zip -Algorithm SHA256).Hash)" }

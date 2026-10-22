@@ -47,9 +47,10 @@ Notes for working on the code. `SPEC.md` decides what is right: section 4
 - `res/qoqdir.rc`, `res/qoqdir.manifest`, `res/qoqdir.ico` (next to `src/`): the
   manifest (modern controls, high DPI, long paths), the version block and the
   icon, which `scripts/make-icon.ps1` draws (`BUILDING.md`, section 4). The Rust
-  build takes the icon from there too.
-- `version.h`: the version, shown in the exe's Properties, the help box and each
-  crash-log line. The Rust version keeps its own in `rust/Cargo.toml`.
+  build takes all three from there too.
+- `version.h`: the version, shown in both exes' Properties and in the C++ help
+  box and crash-log lines. The Rust help box and crash log take it from
+  `rust/Cargo.toml`, which `scripts/release.ps1` checks against `version.h`.
 
 ### Rust (`rust/`)
 

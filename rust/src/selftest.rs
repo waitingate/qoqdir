@@ -5,7 +5,7 @@
 use std::cell::{Cell, RefCell};
 use std::ffi::{OsStr, OsString};
 use std::io::Write;
-use std::os::windows::ffi::{OsStrExt, OsStringExt};
+use std::os::windows::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
@@ -14,7 +14,7 @@ use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
 
 use windows::Win32::Foundation::{
-    ERROR_BAD_NETPATH, HGLOBAL, HLOCAL, HWND, LPARAM, LocalFree, POINT, POINTL, RECT, WPARAM,
+    ERROR_BAD_NETPATH, HGLOBAL, HWND, LPARAM, POINT, POINTL, RECT, WPARAM,
 };
 use windows::Win32::Graphics::Gdi::{
     COLOR_WINDOW, ClientToScreen, GetMonitorInfoW, GetSysColor, GetSysColorBrush, MONITOR_DEFAULTTONEAREST, MONITORINFO,
@@ -48,8 +48,7 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
 use windows::Win32::System::Variant::VARIANT;
 use windows::Win32::UI::Accessibility::{AccessibleObjectFromWindow, IAccessible};
 use windows::Win32::UI::Shell::{
-    CommandLineToArgvW, DROPFILES, FOLDERID_Desktop, SHGFI_DISPLAYNAME, SHGFI_SMALLICON, SHGFI_SYSICONINDEX,
-    StrCmpLogicalW,
+    DROPFILES, FOLDERID_Desktop, SHGFI_DISPLAYNAME, SHGFI_SMALLICON, SHGFI_SYSICONINDEX, StrCmpLogicalW,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     BM_CLICK, CHILDID_SELF, EnumWindows, FindWindowExW, HTCLIENT, OBJID_CLIENT, GCLP_HBRBACKGROUND, GWLP_USERDATA, GetClassLongPtrW, GetWindowLongPtrW, GetWindowTextLengthW, IsWindowVisible,
@@ -61,8 +60,8 @@ use windows::Win32::UI::WindowsAndMessaging::{
 
 use crate::app::{App, Key, Nav, TIMER_LOADING, TIMER_REFRESH, ViewState};
 use crate::folder::{
-    Item, Listing, Location, SortKey, exists, folder_written, is_directory, is_shortcut, list_folder,
-    parse_command_line, sort_items, system_dir,
+    Item, Listing, Location, SortKey, command_line_words, exists, folder_written, is_directory, is_shortcut,
+    list_folder, parse_command_line, sort_items, system_dir,
 };
 use crate::shell::{
     copy_to_clipboard, data_object_at, file_info, item_menu_at, known_folder, paste_into, pidl_from, shortcut_target,
@@ -120,6 +119,11 @@ impl Steps {
     /// A step that opens the test folder again.
     fn home(&mut self, name: &'static str) {
         self.add(name, |a| a.open(Location::dir(test_dir()), Nav::New, ViewState::default()), |a| a.at(&test_dir()));
+    }
+
+    /// A step back to the first tab, on the test folder.
+    fn first_tab(&mut self) {
+        self.add("(back to the first tab)", |a| a.switch_tab(0), |a| a.at(&test_dir()) && a.active() == 0);
     }
 
     fn push(&mut self, name: &'static str, act: Option<Act>, done: Check) -> &mut Step {
@@ -210,17 +214,6 @@ fn test_dir() -> PathBuf {
 /// A path in the test folder.
 fn p(name: &str) -> PathBuf {
     test_dir().join(name)
-}
-
-/// A command line's words, as Windows splits them for the program it starts.
-fn command_line_words(line: &OsStr) -> Vec<OsString> {
-    let mut count = 0;
-    unsafe {
-        let words = CommandLineToArgvW(pcwstr(&wide(line)), &mut count);
-        let list = (0..count.max(0) as usize).map(|i| OsString::from_wide((*words.add(i)).as_wide())).collect();
-        let _ = LocalFree(Some(HLOCAL(words.cast())));
-        list
-    }
 }
 
 fn log_path() -> PathBuf {
@@ -1122,7 +1115,7 @@ impl App {
             },
         );
         // The switch showed where the tab is at once: what is typed into the address bar since is the user's (5.3).
-        s.add("(back to the first tab)", |a| a.switch_tab(0), move |a| a.at(&dir()) && a.active() == 0);
+        s.first_tab();
         s.add(
             "a tab switch whose folder then loads leaves what was typed into the address bar meanwhile (5.3)",
             |a| {
@@ -1131,7 +1124,7 @@ impl App {
             },
             |a| a.at(&p("sub")) && text_of(a.address) == "typed meanwhile",
         );
-        s.add("(back to the first tab)", |a| a.switch_tab(0), move |a| a.at(&dir()) && a.active() == 0);
+        s.first_tab();
         s.add(
             "...and so does one whose folder turns out not to be available (4.3)",
             |a| {
@@ -1153,6 +1146,20 @@ impl App {
             },
         );
         s.add("(close that tab)", |a| a.close_tab(a.active()), one_tab_home);
+        s.add(
+            "...and so does a move to the folder shown, while the user types there (5.3)",
+            |a| {
+                // As a click on the tree's selected folder: it is read again.
+                a.open(Location::dir(test_dir()), Nav::New, ViewState::default());
+                focus(a.address);
+                set_text(a.address, "typed meanwhile");
+            },
+            move |a| a.at(&dir()) && text_of(a.address) == "typed meanwhile",
+        );
+        s.add("(Esc puts the path back and returns to the list)", |a| a.press(VK_ESCAPE, 0), |a| {
+            let location = a.location(); // not borrowed across the window call below
+            text_of(a.address) == location.text().to_string_lossy() && unsafe { GetFocus() } == a.list.hwnd()
+        });
         s.add(
             "a typed path that fails while a rename box is open leaves the box alone",
             |a| {
@@ -2551,22 +2558,20 @@ impl App {
         // switch's read go on, and the tab shows what it finds as soon as it is back: the folder is not read a second
         // time (4.2). A read still out is stood in for by its number, so the test needs no network.
         const STUCK_READ: u32 = u32::MAX; // no real read gets this number
-        // To the second tab, and at once on to a folder that is not there, while the switch's read is still out.
-        fn overtake(a: &App, missing: &str) {
+        // To the second tab, and at once on to another folder (most often one that is not there), while the switch's
+        // read is still out.
+        fn overtake(a: &App, to: &str) {
             a.switch_tab(1);
-            a.open(Location::dir(p(missing)), Nav::New, ViewState::default());
-            stuck(a);
-        }
-        fn stuck(a: &App) {
+            a.open(Location::dir(p(to)), Nav::New, ViewState::default());
             if let Some(kept) = a.st.borrow_mut().kept.as_mut() {
                 kept.generation = STUCK_READ; // the real read comes back as one replaced, and is dropped
             }
         }
-        fn read_back(a: &App, error: Option<windows::core::Error>) {
-            // The stuck read comes back: sub, or the error it ran into.
+        // The stuck read comes back: sub, or the error it ran into; `changed`: sub changed while it was read.
+        fn read_back(a: &App, error: Option<windows::core::Error>, changed: bool) {
             let found = Listing {
                 location: Location::dir(p("sub")),
-                written: folder_written(&p("sub")),
+                written: if changed { 0 } else { folder_written(&p("sub")) },
                 error,
                 ..Default::default()
             };
@@ -2577,14 +2582,11 @@ impl App {
             a.st.borrow().pending.is_none()
         }
         // The first tab, which the steps switch away from and back to, shows the test folder: quick to read each time.
-        fn first_tab(s: &mut Steps) {
-            s.add("(back to the first tab)", |a| a.switch_tab(0), |a| a.at(&test_dir()) && a.active() == 0);
-        }
         s.home("(the first tab on the test folder)");
         s.add("(a second tab on sub)", |a| a.new_tab(Location::dir(p("sub")), true), |a| {
             a.at(&p("sub")) && a.tabs() == 2 && a.active() == 1
         });
-        first_tab(&mut s);
+        s.first_tab();
         s.add(
             "a failed move after a tab switch reads the tab's folder no second time: the switch's read is shown (4.2)",
             |a| {
@@ -2601,13 +2603,13 @@ impl App {
                     && a.generation.get() == COUNT.get() + 2
             },
         );
-        first_tab(&mut s);
+        s.first_tab();
         s.add(
             "a switch's read that is back while the move is still out shows the tab's folder at once (4.2)",
             |a| {
                 COUNT.set(a.generation.get());
                 overtake(a, "missing one");
-                read_back(a, None);
+                read_back(a, None, false);
                 let at_once = a.list.shows(&Location::dir(p("sub"))) && a.is_loading();
                 note(if at_once { "shown at once" } else { "held back" }.into());
             },
@@ -2620,7 +2622,7 @@ impl App {
                     && a.generation.get() == COUNT.get() + 2
             },
         );
-        first_tab(&mut s);
+        s.first_tab();
         s.add(
             "a failed move while the switch's read is still out leaves the tab waiting for it, reading no more (4.2)",
             |a| {
@@ -2656,7 +2658,7 @@ impl App {
             "...and once that read is back, the tab shows it with the move's error, then the refresh reads it (4.2)",
             |a| {
                 set_text(a.address, "missing tw"); // as if the user were fixing what they typed (5.3)
-                read_back(a, None);
+                read_back(a, None, false);
                 // Now: a slow refresh's "Loading..." may take its place.
                 FLAG.set(a.status_message().contains("missing two"));
             },
@@ -2672,7 +2674,7 @@ impl App {
         )
         .during_load();
         // What the status bar says after the error stays: "Loading..." gives back what it took the place of.
-        first_tab(&mut s);
+        s.first_tab();
         s.add(
             "(a failed move overtakes the switch while its read is still out)",
             |a| overtake(a, "missing three"),
@@ -2682,12 +2684,12 @@ impl App {
             "a message shown while the tab waits for its switch's read stays once the folder is back (4.2)",
             |a| {
                 a.set_message("a newer message");
-                read_back(a, None);
+                read_back(a, None, false);
             },
             |a| a.idle() && a.list.shows(&Location::dir(p("sub"))) && a.status_message().contains("a newer message"),
         )
         .during_load();
-        first_tab(&mut s);
+        s.first_tab();
         s.add(
             "(a failed move overtakes the switch while its read is still out, again)",
             |a| overtake(a, "missing four"),
@@ -2698,13 +2700,13 @@ impl App {
             |a| {
                 a.set_message("a newer message");
                 send(a.wnd, WM_TIMER, TIMER_LOADING, 0); // as if the read took 250 ms more
-                read_back(a, None);
+                read_back(a, None, false);
             },
             |a| a.idle() && a.list.shows(&Location::dir(p("sub"))) && a.status_message().contains("a newer message"),
         )
         .during_load();
         // A read that comes back with an error has its answer: the folder is not available (4.3), no second read.
-        first_tab(&mut s);
+        s.first_tab();
         s.add(
             "(a failed move overtakes the switch while its read is still out, once more)",
             |a| overtake(a, "missing five"),
@@ -2716,7 +2718,7 @@ impl App {
                 COUNT.set(a.generation.get());
                 set_text(a.address, "missing fiv"); // as if the user were fixing what they typed (5.3)
                 // What a share that is off answers in the end.
-                read_back(a, Some(ERROR_BAD_NETPATH.to_hresult().into()));
+                read_back(a, Some(ERROR_BAD_NETPATH.to_hresult().into()), false);
             },
             |a| {
                 note(format!("{} read(s)", a.generation.get() - COUNT.get()));
@@ -2736,21 +2738,54 @@ impl App {
             |a| a.idle() && a.list.shows(&Location::dir(p("sub"))),
         );
         // A move that lands after the switch's read was shown goes on from the tab's folder, as from any other.
-        first_tab(&mut s);
+        s.first_tab();
         s.add(
             "a move that lands after the switch's read was shown goes on from the tab's folder (4.2)",
             |a| {
-                a.switch_tab(1);
-                a.open(Location::dir(p("big")), Nav::New, ViewState::default());
-                stuck(a);
-                read_back(a, None); // the move is still out
+                overtake(a, "big");
+                read_back(a, None, false); // the move is still out
             },
             |a| {
                 let came_from_sub = a.with_tab(|t| t.back.last().is_some_and(|l| l.same(&Location::dir(p("sub")))));
                 a.at(&p("big")) && a.active() == 1 && came_from_sub
             },
         );
+        // A change the switch's read saw is about the tab's folder, as one the watch sees: the move's folder is not
+        // read again for it (4.5).
+        s.first_tab();
+        s.add(
+            "...and a change seen by the switch's read is not read again in the move's folder (4.5)",
+            |a| {
+                COUNT.set(a.generation.get());
+                overtake(a, "big");
+                read_back(a, None, true);
+            },
+            |a| {
+                a.at(&p("big")) && a.active() == 1 && !a.refresh_queued.get() && a.generation.get() == COUNT.get() + 2
+            },
+        );
+        // The move's own hint, said once it lands (5.3), is still to come when the switch's read fails before it.
+        s.first_tab();
+        s.add(
+            "a hint of the move waits for it when the switch's read fails first (5.3)",
+            |a| {
+                overtake(a, "sub");
+                a.late_hint.set(Some("the move's own hint"));
+                read_back(a, Some(ERROR_BAD_NETPATH.to_hresult().into()), false); // the move is still out
+            },
+            |a| a.at(&p("sub")) && a.active() == 1 && a.status_message().contains("the move's own hint"),
+        );
         s.add("(close that tab)", |a| a.close_tab(1), one_tab_home);
+        // A refresh a move replaced goes with the move: if the move fails, the refresh is asked for again (4.5).
+        s.add(
+            "a refresh that a failed move replaced is asked for again (4.5)",
+            |a| {
+                COUNT.set(a.generation.get());
+                a.refresh(ViewState::default());
+                a.open(Location::dir(p("missing six")), Nav::New, ViewState::default());
+            },
+            |a| a.idle() && !a.refresh_queued.get() && a.generation.get() == COUNT.get() + 3,
+        );
         s.add(
             "(back into big)",
             |a| a.open(Location::dir(p("big")), Nav::New, ViewState::default()),
@@ -2871,8 +2906,9 @@ impl App {
         s.check(name, move |a| {
             let w = a.new_window(&dir());
             let words = command_line_words(&w.command_line);
-            let exe = std::env::current_exe().unwrap_or_default();
-            let started = words.len() == 2 && Location::dir(PathBuf::from(&words[0])).same(&Location::dir(exe)) && {
+            let exe = Location::dir(std::env::current_exe().unwrap_or_default());
+            let named = Location::dir(w.exe.clone()).same(&exe);
+            let started = named && words.len() == 2 && Location::dir(PathBuf::from(&words[0])).same(&exe) && {
                 let folders = parse_command_line(&words[1..]).folders;
                 folders.len() == 1 && folders[0].same(&Location::dir(dir()))
             };

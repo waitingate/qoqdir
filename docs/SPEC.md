@@ -783,8 +783,12 @@ result:
     refresh asked for meanwhile reading nothing; a message shown meanwhile
     stays, the address bar is left alone, a read that comes back with an error
     shows the tab not available at once, and a move that lands after the
-    switch's read was shown goes on from that folder. A This PC tab left while
-    its list is emptied keeps its selection.
+    switch's read was shown goes on from that folder; a change that read saw is
+    not read again in the move's folder, and a hint of the move still waits for
+    it when that read fails first. A refresh that a failed move replaced is
+    asked for again, and a move to the folder shown leaves what the user types
+    into the address bar meanwhile. A This PC tab left while its list is
+    emptied keeps its selection.
 67. Open in new window would start this exe on the folder, a title bar down
     and right of this window, the same size and not maximized. The self-test
     checks what it would start, without starting it: that would show a window.

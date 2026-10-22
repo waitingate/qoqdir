@@ -28,7 +28,7 @@ qoqdir [options] [folder ...]
   {folder}           open the folder in a tab (qoqdir . works too)
   --tab="{folder}"   the same: --tab="D:\logs"
   -t="{folder}"      short for --tab=: -t="D:\logs" -t="C:\My Files"
-  -h, --help, -?     print the help: options, examples, notes for scripts 
+  -h, --help, -?     print the help: options, examples, notes for scripts
 ```
 
 Each folder opens once, and the first one is shown. With no folders you get the
@@ -185,7 +185,8 @@ steps. GitHub Actions builds and checks both versions on every push
 ### The Rust version
 
 `rust\` holds the same program in Rust. It needs Rust 1.91 or newer for the
-GNU target, plus the MinGW `bin` above on the PATH for the icon. This installs
+GNU target, plus the MinGW `bin` above on the PATH for `windres`, which builds
+the exe's manifest, icon and version block. This installs
 Rust in `%LOCALAPPDATA%\Programs\rust`, again without admin rights. In
 PowerShell:
 
@@ -205,8 +206,8 @@ script that sets Rust's PATH in each new terminal.
 
 - `src/` the program, `res/` its manifest and icon
 - `rust/` the same program in Rust
-- `tests/` the unit tests and the three check scripts (the exe, the command
-  line, the self-test with its popup watch)
+- `tests/` the unit tests and the check scripts (the exe, the command line, the
+  self-test with its popup watch, and the comparison of the two self-test logs)
 - `scripts/` `build.ps1` builds and checks both versions, `release.ps1` makes a
   release of both (both scripts find the tools through `find-tools.ps1`),
   `make-icon.ps1` draws the icon

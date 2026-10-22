@@ -178,6 +178,16 @@ std::wstring tabArgument(const std::wstring& folder) {
     return arg + L'"';
 }
 
+std::vector<std::wstring> commandLineWords(const std::wstring& line) {
+    std::vector<std::wstring> words;
+    int count = 0;
+    if (LPWSTR* list = CommandLineToArgvW(line.c_str(), &count)) {
+        words.assign(list, list + count);
+        LocalFree(list);
+    }
+    return words;
+}
+
 // ---------------------------------------------------------------- reading a folder
 
 std::vector<std::wstring> driveRoots() {

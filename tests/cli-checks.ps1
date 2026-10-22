@@ -38,20 +38,24 @@ public class QoqdirHelp {
     if (!CreateProcess(null, new StringBuilder(cmd), IntPtr.Zero, IntPtr.Zero, false, flags, IntPtr.Zero, null, ref si, out pi)) return 0;
     CloseHandle(pi.hThread); CloseHandle(pi.hProcess); return pi.dwProcessId;
   }
-  [DllImport("user32.dll")] static extern uint GetDpiForSystem();
-  // Where a window is, and px pixels at 100% at the screen's scaling, in the screen's own pixels: as a program that
-  // follows the scaling sees them, as Qoqdir does (not scaled down for this one).
+  [StructLayout(LayoutKind.Sequential)] struct POINT { public int X, Y; }
+  [DllImport("user32.dll")] static extern IntPtr MonitorFromPoint(POINT pt, uint flags);
+  [DllImport("shcore.dll")] static extern int GetDpiForMonitor(IntPtr monitor, int type, out uint dpiX, out uint dpiY);
+  // Where a window is, and px pixels at 100% at the scaling of the monitor at (x, y), in the screen's own pixels: as a
+  // program that follows each monitor's scaling sees them, as Qoqdir does (not scaled down for this one).
   public static string Place(IntPtr h) {
     IntPtr old = SetThreadDpiAwarenessContext(new IntPtr(-4));   // DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2
     RECT r; GetWindowRect(h, out r);
     SetThreadDpiAwarenessContext(old);
     return r.Left + "," + r.Top + "," + r.Right + "," + r.Bottom;
   }
-  public static int Scaled(int px) {
+  public static int Scaled(int px, int x, int y) {
     IntPtr old = SetThreadDpiAwarenessContext(new IntPtr(-4));
-    uint dpi = GetDpiForSystem();
+    var at = new POINT(); at.X = x; at.Y = y;
+    uint dpiX, dpiY;
+    GetDpiForMonitor(MonitorFromPoint(at, 2), 0, out dpiX, out dpiY);   // MONITOR_DEFAULTTONEAREST, MDT_EFFECTIVE_DPI
     SetThreadDpiAwarenessContext(old);
-    return (int)(px * dpi / 96);
+    return (int)(px * dpiX / 96);
   }
   // A message box's text (its static control, id 0xFFFF), and its title.
   public static string Text(IntPtr box) { var s = new StringBuilder(8192); GetDlgItemText(box, 0xFFFF, s, s.Capacity); return s.ToString(); }
@@ -80,10 +84,10 @@ function Check([bool]$ok, [string]$what) {
   if ($ok) { "ok    $what" } else { "FAIL  $what"; $script:failures++ }
 }
 function WaitFor([scriptblock]$what, [int]$ms) {   # asks every 50 ms until $what gives something, for $ms at most
-  $end = [DateTime]::Now.AddMilliseconds($ms)
+  $clock = [Diagnostics.Stopwatch]::StartNew()   # not the time of day, which a clock change moves
   while ($true) {
     $got = & $what
-    if ($got -or [DateTime]::Now -ge $end) { return $got }
+    if ($got -or $clock.ElapsedMilliseconds -ge $ms) { return $got }
     Start-Sleep -Milliseconds 50
   }
 }
@@ -167,7 +171,7 @@ $r = TitleAfterStart @('--tab=C:\Users\Public') 'Public'
 Check ($r.Title -eq 'Public') "a damaged qoqdir.ini (X=2147483000) falls back to the defaults: '$($r.Title)'"
 # Started with a place and size, as Open in new window starts one (5.8): there, not at the place saved.
 Set-Content -Path $ini -Value "[Window]`r`nX=300`r`nY=200`r`nWidth=600`r`nHeight=400"
-$w = [QoqdirHelp]::Scaled(600); $h = [QoqdirHelp]::Scaled(400)   # over the window's least size (520 by 320)
+$w = [QoqdirHelp]::Scaled(600, 100, 80); $h = [QoqdirHelp]::Scaled(400, 100, 80)   # over its least size, 520 by 320
 $p = StartQuiet $copy '--tab=C:\Users\Public' @(100, 80, $w, $h)
 [void](WaitFor { $p.Refresh(); $p.MainWindowTitle -eq 'Public' } 5000)
 $place = [QoqdirHelp]::Place($p.MainWindowHandle)

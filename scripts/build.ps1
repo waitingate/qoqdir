@@ -44,6 +44,7 @@ Step 'self-test, C++' {
 Step 'self-test, Rust' {
     powershell -NoProfile -ExecutionPolicy Bypass -File tests\watch-windows.ps1 -Exe rust\target\selftest\release\qoqdir.exe -Log $logs[1]
 }
-$cpp, $rs = $logs | ForEach-Object { ((Get-Content $_ -Encoding UTF8) -replace '   \(slow step: \d+ ms\)$' -replace '   \[.*\]$') -join "`n" }
-if ($cpp -ne $rs) { throw 'The two versions did not take the same self-test steps.' }
+Step 'the same self-test steps in both' {
+    powershell -NoProfile -ExecutionPolicy Bypass -File tests\compare-selftests.ps1 -CppLog $logs[0] -RustLog $logs[1]
+}
 'all checks passed'
