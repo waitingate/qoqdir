@@ -90,10 +90,11 @@ instead of corrupting data, and the crash log says where.
   menu and drops on the tab check it, so they never ask Windows about a server
   that is off (that can freeze for 20 to 40 s). A failed Back or Forward drops the
   dead history entry; a typed path that is a file gets opened. A move that takes
-  over from a tab switch and fails, or opens a file, has `restoreTab()` read
-  the tab's folder as the switch would have, one read per folder at a time (a
-  late answer with an error makes the tab not available at once). A cleared
-  list (`FileList::clear`) shows no folder: compare with `shows()`, not `dir()`.
+  over from a tab switch keeps the switch's read going (`kept_`, which
+  `loading()` counts): if the move fails or opens a file, `onLoaded` applies
+  what that read finds as the switch, held in `keptListing_` if it came back
+  first. A cleared list (`FileList::clear`) shows no folder: compare with
+  `shows()`, not `dir()`.
 - The right-click menu is modal, so Qoqdir's own commands in it only act if the
   folder and the selection are the same as when it opened.
 - Live updates: `FolderWatch` posts `WM_APP_CHANGED`, and a burst of changes

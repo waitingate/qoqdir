@@ -115,6 +115,8 @@ const BN_CLICKED: u32 = 0;
 
 /// The newest load, for the load threads: a replaced one stops reading (4.2). Global: a thread can outlive the window.
 static NEWEST_LOAD: AtomicU32 = AtomicU32::new(0);
+/// A tab switch's load a move took over: it reads on all the same (State::kept).
+static KEPT_LOAD: AtomicU32 = AtomicU32::new(0);
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Nav {
@@ -161,7 +163,6 @@ enum Origin {
     Other,
     AddressBar,        // typed in the address bar: a file is opened instead
     Shortcut(PathBuf), // opened from this shortcut: if it leads to a file, Windows opens the shortcut
-    Restore,           // brings back the tab's own view, as a tab switch would (restore_tab)
 }
 
 struct Pending {
@@ -178,6 +179,10 @@ pub struct State {
     pub active: usize,
     next_tab_id: u32,
     pending: Option<Pending>,
+    // A tab switch a move took over: its read goes on, so that if the move comes to nothing the tab shows what it
+    // finds, as the switch would have (4.2). Until then it counts as loading (App::kept_read).
+    kept: Option<Pending>,
+    kept_listing: Option<Listing>, // what that read found, if it came back while the move still loaded
     // What a delete, rename or new folder asked to select while a load was pending, and in which folder.
     pub queued_view: Option<(Location, ViewState)>,
     rename: Option<(PathBuf, OsString)>, // done after the edit box has closed
@@ -227,11 +232,9 @@ pub struct App {
     dragging_files: Cell<bool>, // a drag started from our own list is in progress
     pub refresh_queued: Cell<bool>,
     refresh_for_watch: Cell<bool>, // ...and only the folder watch asked for it
-    list_emptied: Cell<bool>,      // a tab switch emptied the list, and no folder has filled it since
-    pub restore_read: Cell<u32>,   // the read restore_tab() started, until it comes back
-    pub restore_path: RefCell<Location>, // ...and the folder it reads
-    restore_said: RefCell<String>, // what the failed move said, or what "Loading..." covered: back with the folder
-    load_message_shown: Cell<bool>, // "Loading..." or "not available": cleared when a folder loads
+    pub kept_read: Cell<u32>,      // the number of the read State::kept holds, 0 for none
+    pub kept_said: RefCell<String>, // what the failed move said, or what "Loading..." covered since: back with the folder
+    load_message_shown: Cell<bool>, // the status bar says "Loading..." or "not available": cleared when a folder loads
     pub generation: Cell<u32>,
     pub loads_done: Cell<u32>,   // folder reads that reported back (self-test)
     pub loads_wasted: Cell<u32>, // ...of which a newer load had replaced, yet they read the whole folder (self-test)
@@ -537,10 +540,8 @@ impl App {
                 dragging_files: Cell::new(false),
                 refresh_queued: Cell::new(false),
                 refresh_for_watch: Cell::new(false),
-                list_emptied: Cell::new(false),
-                restore_read: Cell::new(0),
-                restore_path: RefCell::new(Location::ThisPc),
-                restore_said: RefCell::new(String::new()),
+                kept_read: Cell::new(0),
+                kept_said: RefCell::new(String::new()),
                 load_message_shown: Cell::new(false),
                 generation: Cell::new(0),
                 loads_done: Cell::new(0),
@@ -553,6 +554,8 @@ impl App {
                     active: 0,
                     next_tab_id: 1,
                     pending: None,
+                    kept: None,
+                    kept_listing: None,
                     queued_view: None,
                     rename: None,
                     watch: None,
@@ -666,8 +669,9 @@ impl App {
         si.dwFlags.contains(STARTF_USESHOWWINDOW) && [SW_SHOWNOACTIVATE, SW_SHOWMINNOACTIVE, SW_SHOWNA].contains(&asked)
     }
 
+    /// A folder read is in flight for this window: the newest, or a tab switch's that a move took over (State::kept).
     pub fn is_loading(&self) -> bool {
-        self.st.borrow().pending.is_some()
+        self.st.borrow().pending.is_some() || self.kept_read.get() != 0
     }
 
     fn apply_font(&self) {
@@ -1066,10 +1070,9 @@ impl App {
                         let _ = KillTimer(Some(self.wnd), TIMER_REFRESH);
                         self.refresh_queued.set(false);
                         // What a delete, rename or new folder asked to select, if its folder is still shown.
-                        // Not available: F5 (4.3). A list a tab switch emptied waits for restore_tab(), which reads
-                        // the tab's folder one read at a time (4.2).
+                        // Not available: F5 (4.3).
                         let queued = self.st.borrow_mut().queued_view.take();
-                        if !self.with_tab(|t| t.unavailable) && !self.list_emptied.get() {
+                        if !self.with_tab(|t| t.unavailable) {
                             let view = queued.filter(|(dir, _)| self.list.shows(dir)).map(|(_, view)| view);
                             self.refresh(view.unwrap_or_default());
                         }
@@ -1082,13 +1085,11 @@ impl App {
                 TIMER_LOADING => {
                     let _ = KillTimer(Some(self.wnd), TIMER_LOADING);
                     if self.is_loading() {
-                        // A tab's folder read again after a failed move gives back what this takes the place of
-                        // (on_loaded, 4.2): the move's error, or a message shown since.
-                        let restoring =
-                            self.st.borrow().pending.as_ref().is_some_and(|p| matches!(p.origin, Origin::Restore));
-                        if restoring {
+                        // A tab waiting for its switch's read after a failed move gets back what this takes the
+                        // place of (on_loaded, 4.2): the move's error, or a message shown since.
+                        if self.st.borrow().pending.is_none() {
                             let said = self.status_message();
-                            *self.restore_said.borrow_mut() = said;
+                            *self.kept_said.borrow_mut() = said;
                         }
                         self.set_message("Loading\u{2026}"); // only when it is slow
                         self.load_message_shown.set(true);
@@ -1561,6 +1562,24 @@ impl App {
         if nav != Nav::Refresh && !filter.is_empty() {
             set_text(self.filter, "");
         }
+        // A move that takes over from a tab switch lets the switch's read go on (State::kept, 4.2), and so does a
+        // further move on that tab; anything else makes it of no use. Set before the newest load is, so that read
+        // never stops.
+        let moving = matches!(nav, Nav::New | Nav::Back | Nav::Forward);
+        {
+            let mut st = self.st.borrow_mut();
+            let tab_id = st.tabs[st.active].id;
+            let switching = st.pending.as_ref().is_some_and(|p| p.nav == Nav::Switch && p.tab_id == tab_id);
+            if moving && switching {
+                st.kept = st.pending.take();
+                self.kept_read.set(st.kept.as_ref().map_or(0, |p| p.generation));
+            } else if !moving || !st.kept.as_ref().is_some_and(|k| k.tab_id == tab_id) {
+                st.kept = None;
+                st.kept_listing = None;
+                self.kept_read.set(0);
+            }
+        }
+        KEPT_LOAD.store(self.kept_read.get(), Ordering::SeqCst);
         let generation = self.generation.get() + 1;
         self.generation.set(generation);
         NEWEST_LOAD.store(generation, Ordering::SeqCst);
@@ -1575,13 +1594,13 @@ impl App {
         if nav == Nav::Switch {
             // Show the new tab at once; until its folder loads the list has none, so nothing acts on the old one.
             self.list.clear();
-            self.list_emptied.set(true);
             self.show_location(nav);
             self.show_status();
         }
         let wnd = self.wnd.0 as usize; // HWND is just a handle; the thread only posts to it
         in_background(move || {
-            let replaced = || NEWEST_LOAD.load(Ordering::SeqCst) != generation;
+            let replaced =
+                || NEWEST_LOAD.load(Ordering::SeqCst) != generation && KEPT_LOAD.load(Ordering::SeqCst) != generation;
             // Hidden items too: Ctrl+H only shows or hides them.
             let mut listing = list_folder(&location, true, Some(&replaced));
             if !replaced() {
@@ -1597,13 +1616,25 @@ impl App {
     }
 
     pub fn on_loaded(&self, listing: Listing, generation: u32) {
+        // The read of a tab switch a move took over (State::kept): held while the move still loads, and shown as the
+        // switch's own once the move came to nothing (on_load_failed hands it back).
+        let kept_back = self.kept_read.get() != 0 && generation == self.kept_read.get();
+        if kept_back {
+            let mut st = self.st.borrow_mut();
+            if st.pending.is_some() {
+                st.kept_listing = Some(listing);
+                return;
+            }
+            st.pending = st.kept.take().map(|switch| Pending { generation, ..switch });
+            st.kept_listing = None;
+        }
+        if kept_back {
+            self.kept_read.set(0);
+            KEPT_LOAD.store(0, Ordering::SeqCst);
+        }
         let counted = generation != self.uncounted_load.get();
         if counted {
             self.loads_done.set(self.loads_done.get() + 1);
-        }
-        let restored = generation == self.restore_read.get(); // the read restore_tab() started is back
-        if restored {
-            self.restore_read.set(0);
         }
         let pending = self.st.borrow_mut().pending.take_if(|p| p.generation == generation);
         let Some(pending) = pending else {
@@ -1611,17 +1642,6 @@ impl App {
             let aborted = listing.error.as_ref().is_some_and(|e| e.code() == ERROR_OPERATION_ABORTED.to_hresult());
             if counted && !aborted {
                 self.loads_wasted.set(self.loads_wasted.get() + 1);
-            }
-            // The move that replaced it came to nothing. An error other than "stopped" is the folder's answer: it is
-            // not available (4.3), and no second read is due.
-            if restored && !self.is_loading() {
-                let answered = listing.error.is_some() && !aborted;
-                if answered && self.list_emptied.get() && listing.location.same(&self.location()) {
-                    let error = listing.error.as_ref().map(|e| e.message()).unwrap_or_default();
-                    self.show_unavailable(&listing.location, &error, Nav::Refresh);
-                } else {
-                    self.restore_tab();
-                }
             }
             return;
         };
@@ -1650,16 +1670,28 @@ impl App {
         }
 
         if let Some(error) = &listing.error {
+            if kept_back {
+                // As on_load_failed, with the address bar left alone as below.
+                self.late_hint.set(None);
+                return self.show_unavailable(&listing.location, &error.message(), Nav::Refresh);
+            }
             return self.on_load_failed(&listing, &error.message(), &pending);
         }
+        {
+            // The tab shows a folder: a switch's read kept for a move is of no use any more.
+            let mut st = self.st.borrow_mut();
+            st.kept = None;
+            st.kept_listing = None;
+        }
+        self.kept_read.set(0);
+        KEPT_LOAD.store(0, Ordering::SeqCst);
 
         let same_folder = self.list.shows(&listing.location);
         let moved = matches!(pending.nav, Nav::New | Nav::Back | Nav::Forward);
         let reload = pending.nav == Nav::Refresh && same_folder;
         let mut view = pending.view;
-        // An item a rename, delete or new folder asked for (a tab switch, and restore_tab, bring back the scroll
-        // exactly).
-        let requested = pending.nav == Nav::Refresh && !matches!(pending.origin, Origin::Restore) && view.asks();
+        // An item a rename, delete or new folder asked for (a tab switch restores the scroll exactly instead).
+        let requested = pending.nav == Nav::Refresh && view.asks();
         if reload {
             if !view.asks() {
                 view = self.current_view();
@@ -1723,7 +1755,6 @@ impl App {
         // The tree follows the folder shown: its node is read again when the subfolders or shortcuts changed (5.5).
         let tree_names = if reload { self.list.tree_names() } else { Vec::new() };
         self.list.set_listing(listing);
-        self.list_emptied.set(false);
         if reload && tree_names != self.list.tree_names() {
             self.tree.refresh_folder(&location);
         }
@@ -1748,11 +1779,13 @@ impl App {
         if location.path().is_some_and(|p| folder_written(p) != written) {
             self.queue_refresh();
         }
-        self.show_location(pending.nav);
+        // A switch's read kept for a move: the switch showed where the tab is when it began, and the address bar may
+        // hold what the user is fixing since (5.3).
+        self.show_location(if kept_back { Nav::Refresh } else { pending.nav });
         if moved {
             self.set_message(self.late_hint.get().unwrap_or("")); // a navigation clears the message, or says its hint
-        } else if matches!(pending.origin, Origin::Restore) && loading_shown {
-            let said = self.restore_said.borrow().clone();
+        } else if kept_back && loading_shown {
+            let said = self.kept_said.borrow().clone();
             self.set_message(&said); // what "Loading..." took the place of
         }
         self.late_hint.set(None);
@@ -1792,8 +1825,19 @@ impl App {
         } else {
             format!("{}: {}", listing.location.display_name().to_string_lossy(), error.trim())
         };
-        *self.restore_said.borrow_mut() = said.clone();
-        self.restore_tab(); // before the file opens: Windows may keep a prompt about it up for a while
+        // A tab switch this move took over reads on: the tab shows what it finds, as the switch would have
+        // (on_loaded, 4.2). Done before a file opens, as Windows may keep a prompt about it up for a while.
+        let kept = self.kept_read.get();
+        if kept != 0 {
+            *self.kept_said.borrow_mut() = said.clone();
+            let held = self.st.borrow_mut().kept_listing.take();
+            match held {
+                Some(found) => post(self.wnd.0 as usize, WM_APP_LOADED, kept as usize, Box::new(found)),
+                None => unsafe {
+                    let _ = SetTimer(Some(self.wnd), TIMER_LOADING, 250, None); // "Loading..." if it is slow (4.1)
+                },
+            }
+        }
         match (&pending.origin, &listing.location) {
             // A shortcut that leads to a file: Windows opens it (never an unreachable one: that would hang, then fail).
             (Origin::Shortcut(lnk), _) if listing.is_file => open_file(self.wnd, lnk),
@@ -1825,29 +1869,10 @@ impl App {
         }
     }
 
-    /// A tab switch emptied the list and the move that took over failed or opened a file: the tab's folder is read
-    /// again, as the switch would have shown it. If "Loading..." took the place of the move's error, or of a message
-    /// shown since, that comes back once it is there (4.2). If that read fails too, the tab is not available, which the
-    /// status bar then says instead (4.3). One read of a folder at a time: on a share that is off, each one waits
-    /// 20-40 s. One replaced by a move that came to nothing is started again, unless it came back with an error
-    /// (on_loaded). A read still out for another folder holds none back.
-    fn restore_tab(&self) {
-        let location = self.location();
-        let waiting = self.restore_read.get() != 0 && self.restore_path.borrow().same(&location);
-        if !self.list_emptied.get() || waiting {
-            return;
-        }
-        let view = self.with_tab(|t| t.view.clone());
-        self.open_from(location.clone(), Nav::Refresh, view, Origin::Restore);
-        self.restore_read.set(self.generation.get());
-        *self.restore_path.borrow_mut() = location;
-    }
-
     /// A tab never changes its folder by itself (a drive may come back): show it empty and say why. The
     /// list gets no folder, so nothing asks Windows about it (that can freeze the window for 20-40 s).
     pub fn show_unavailable(&self, location: &Location, error: &str, nav: Nav) {
         self.list.clear();
-        self.list_emptied.set(false); // empty on purpose: the message says why
         self.with_tab(|t| t.unavailable = true);
         let old_watch = self.st.borrow_mut().watch.take();
         drop(old_watch);
@@ -2303,6 +2328,7 @@ impl App {
     pub fn set_message(&self, text: &str) {
         let w = wide(text);
         send(self.status, SB_SETTEXTW, 1, w.as_ptr() as isize);
+        self.load_message_shown.set(false); // a "Loading..." or "not available" there is gone (their callers set it again)
     }
 
     /// What the status bar says (set_message).

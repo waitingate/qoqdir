@@ -26,11 +26,9 @@ struct ViewState {                  // what to select and scroll to after a fold
 struct Origin {
     bool typed = false;      // typed in the address bar: a file is opened instead
     std::wstring shortcut;   // opened from this shortcut: if it leads to a file, Windows opens the shortcut
-    bool restore = false;    // brings back the tab's own view, as a tab switch would (restoreTab)
 
     static Origin addressBar() { return {true, {}}; }
     static Origin fromShortcut(std::wstring lnk) { return {false, std::move(lnk)}; }
-    static Origin tabRestore() { return {false, {}, true}; }
 };
 
 struct Tab {
@@ -92,7 +90,6 @@ private:
     void onLoaded(Listing&& listing, UINT generation);
     struct Pending;
     void onLoadFailed(const Listing& listing, const Pending& p);
-    void restoreTab();   // a failed move left the list a tab switch emptied: read the tab's folder again
     void showLocation(Nav nav);
     void goBack();
     void goForward();
@@ -100,7 +97,8 @@ private:
     bool refresh(ViewState view = {});   // false: a load was in progress, so none was started
     // F5 and the Refresh button: the list (unless it is loading already) and the tree (5.5); the status bar says so.
     void refreshAll() { bool list = refresh(); tree_.refresh(); if (list) setMessage(L"Refreshed"); }
-    bool loading() const { return pending_.generation != 0; }   // a folder read is in flight for this window
+    // A folder read is in flight for this window: the newest, or a tab switch's that a move took over (kept_).
+    bool loading() const { return pending_.generation != 0 || kept_.generation != 0; }
     void showTab() { open(tab().path, Nav::Switch, tab().view); }   // the current tab's folder into the list
     void showUnavailable(const std::wstring& path, DWORD error, Nav nav);   // the tab's folder can't be read (4.3)
     std::vector<std::wstring> tabFolders() const;
@@ -176,15 +174,11 @@ private:
     bool draggingFiles_ = false;    // a drag started from our own list is in progress
     bool refreshQueued_ = false;
     bool refreshForWatch_ = false;   // ...and only the folder watch asked for it
-    bool listEmptied_ = false;       // a tab switch emptied the list, and no folder has filled it since
-    UINT restoreRead_ = 0;           // the read restoreTab() started, until it comes back
-    std::wstring restorePath_;       // ...and the folder it reads
-    std::wstring restoreSaid_;       // what the failed move said, or what "Loading..." covered: back with the folder
     struct QueuedView {             // kept by refresh() while a load is pending: what a delete, rename or new
         std::wstring dir;           // folder wanted selected. The queued refresh applies it if 'dir' is still shown.
         ViewState view;
     } queuedView_;
-    bool loadMessageShown_ = false; // "Loading..." or "not available": cleared when a folder loads
+    bool loadMessageShown_ = false; // the status bar says "Loading..." or "not available": cleared when a folder loads
     const wchar_t* lateHint_ = nullptr;   // a hint for when the folder being loaded lands (a navigation clears messages)
 
     std::vector<Tab> tabs_;
@@ -199,6 +193,11 @@ private:
         Origin origin;
         std::wstring filter;        // the filter box before this load cleared it: a failed one puts it back
     } pending_;
+    // A tab switch a move took over: its read goes on, so that if the move comes to nothing the tab shows what it
+    // finds, as the switch would have (4.2). Until then it counts as loading.
+    Pending kept_;
+    std::unique_ptr<Listing> keptListing_;   // what that read found, if it came back while the move still loaded
+    std::wstring keptSaid_;   // what the failed move said, or what "Loading..." covered since: back with the folder
     UINT generation_ = 0;
     int loadsDone_ = 0;     // folder reads that reported back (self-test)
     int loadsWasted_ = 0;   // ...of which a newer load had replaced, yet they read the whole folder (self-test)

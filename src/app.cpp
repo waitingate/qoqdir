@@ -26,6 +26,7 @@ constexpr size_t kMaxHistory = 100;
 
 // The newest load, for the load threads: a replaced one stops reading (4.2). Global: a thread can outlive the window.
 std::atomic<UINT> g_newestLoad{0};
+std::atomic<UINT> g_keptLoad{0};   // a tab switch's load a move took over: it reads on all the same (App::kept_)
 
 constexpr COLORREF kBackground = RGB(235, 235, 235);   // soft gray: less glare than white
 
@@ -556,18 +557,17 @@ void App::onTimer(UINT_PTR id) {
         KillTimer(wnd_, kRefreshTimer);
         refreshQueued_ = false;
         // What a delete, rename or new folder asked to select, if its folder is still shown. Not available: F5 (4.3).
-        // A list a tab switch emptied waits for restoreTab(), which reads the tab's folder one read at a time (4.2).
         QueuedView q = std::exchange(queuedView_, {});
-        if (!tab().unavailable && !listEmptied_) refresh(list_.shows(q.dir) ? std::move(q.view) : ViewState{});
+        if (!tab().unavailable) refresh(list_.shows(q.dir) ? std::move(q.view) : ViewState{});
     } else if (id == kStatusTimer) {
         KillTimer(wnd_, kStatusTimer);
         showStatus();
     } else if (id == kLoadingTimer) {
         KillTimer(wnd_, kLoadingTimer);
         if (loading()) {   // say "Loading..." only if it is slow
-            // A tab's folder read again after a failed move gives back what this takes the place of (onLoaded, 4.2):
-            // the move's error, or a message shown since.
-            if (pending_.origin.restore) restoreSaid_ = message();
+            // A tab waiting for its switch's read after a failed move gets back what this takes the place of
+            // (onLoaded, 4.2): the move's error, or a message shown since.
+            if (!pending_.generation) keptSaid_ = message();
             setMessage(L"Loading…");
             loadMessageShown_ = true;
         }
@@ -857,6 +857,16 @@ void App::open(const std::wstring& path, Nav nav, ViewState view, Origin origin)
     // A new folder starts unfiltered (5.4): cleared now, so letters typed while it loads filter it.
     std::wstring filter = windowText(filter_);
     if (nav != Nav::Refresh && !filter.empty()) SetWindowTextW(filter_, L"");
+    // A move that takes over from a tab switch lets the switch's read go on (kept_, 4.2), and so does a further move
+    // on that tab; anything else makes it of no use. Set before the newest load is, so that read never stops.
+    bool move = nav == Nav::New || nav == Nav::Back || nav == Nav::Forward;
+    if (move && pending_.generation && pending_.nav == Nav::Switch && pending_.tabId == tab().id) {
+        kept_ = pending_;
+    } else if (!move || kept_.tabId != tab().id) {
+        kept_ = {};
+        keptListing_.reset();
+    }
+    g_keptLoad = kept_.generation;
     UINT generation = ++generation_;
     g_newestLoad = generation;
     pending_ = {generation, nav, std::move(view), tab().id, std::move(origin), std::move(filter)};
@@ -864,12 +874,11 @@ void App::open(const std::wstring& path, Nav nav, ViewState view, Origin origin)
     if (nav == Nav::Switch) {
         // Show the new tab at once; until its folder loads the list has none, so nothing acts on the old one.
         list_.clear();
-        listEmptied_ = true;
         showLocation(nav);
         showStatus();
     }
     inBackground([wnd = wnd_, generation, path] {
-        auto replaced = [generation] { return g_newestLoad != generation; };
+        auto replaced = [generation] { return g_newestLoad != generation && g_keptLoad != generation; };
         auto result = std::make_unique<Listing>(listFolder(path, true, replaced));
         if (!replaced()) fillTypes(result->items);   // the shell's type names and icons, off the window's thread
         std::vector<std::wstring> own;
@@ -882,25 +891,25 @@ void App::open(const std::wstring& path, Nav nav, ViewState view, Origin origin)
 }
 
 void App::onLoaded(Listing&& listing, UINT generation) {
+    // The read of a tab switch a move took over (kept_): held while the move still loads, and shown as the switch's
+    // own once the move came to nothing (onLoadFailed hands it back).
+    bool keptBack = kept_.generation && generation == kept_.generation;
+    if (keptBack && pending_.generation) {
+        keptListing_ = std::make_unique<Listing>(std::move(listing));
+        return;
+    }
+    if (keptBack) {
+        pending_ = std::exchange(kept_, {});
+        g_keptLoad = 0;
+    }
     bool counted = generation != uncountedLoad_;
     if (counted) ++loadsDone_;
-    bool restored = generation == restoreRead_;   // the read restoreTab() started is back
-    if (restored) restoreRead_ = 0;
     if (generation != pending_.generation) {   // superseded (open() sets both together)
         if (counted && listing.error != ERROR_OPERATION_ABORTED) ++loadsWasted_;
-        // The move that replaced it came to nothing. An error other than "stopped" is the folder's answer: it is not
-        // available (4.3), and no second read is due.
-        if (restored && !loading()) {
-            bool answered = listing.error && listing.error != ERROR_OPERATION_ABORTED;
-            if (answered && listEmptied_ && samePath(listing.path, tab().path))
-                showUnavailable(listing.path, listing.error, Nav::Refresh);
-            else
-                restoreTab();
-        }
         return;
     }
     KillTimer(wnd_, kLoadingTimer);
-    bool loadingShown = loadMessageShown_;   // "Loading..." took the place of what the status bar said
+    bool loadingShown = loadMessageShown_;   // the status bar still says "Loading...": nothing newer was said
     if (loadMessageShown_) {   // any load, not only navigation, may have shown one
         setMessage(L"");
         loadMessageShown_ = false;
@@ -916,7 +925,14 @@ void App::onLoaded(Listing&& listing, UINT generation) {
     }
     Tab& t = tab();
 
+    if (listing.error && keptBack) {   // as onLoadFailed, with the address bar left alone as below
+        lateHint_ = nullptr;
+        return showUnavailable(listing.path, listing.error, Nav::Refresh);
+    }
     if (listing.error) return onLoadFailed(listing, p);
+    kept_ = {};   // the tab shows a folder: a switch's read kept for a move is of no use any more
+    keptListing_.reset();
+    g_keptLoad = 0;
 
     std::wstring old = t.path;
     bool sameFolder = list_.shows(listing.path);
@@ -943,8 +959,8 @@ void App::onLoaded(Listing&& listing, UINT generation) {
     if (t.forward.size() > kMaxHistory) t.forward.erase(t.forward.begin());
 
     ViewState view = std::move(p.view);
-    // An item a rename, delete or new folder asked for (a tab switch, and restoreTab, bring back the scroll exactly).
-    bool requested = p.nav == Nav::Refresh && !p.origin.restore && view.asks();
+    // An item a rename, delete or new folder asked for (a tab switch restores the scroll exactly instead).
+    bool requested = p.nav == Nav::Refresh && view.asks();
     bool moved = p.nav == Nav::New || p.nav == Nav::Back || p.nav == Nav::Forward;
     bool reload = p.nav == Nav::Refresh && sameFolder;
     if (reload) {
@@ -975,7 +991,6 @@ void App::onLoaded(Listing&& listing, UINT generation) {
     // The tree follows the folder shown: its node is read again when the subfolders or shortcuts changed (5.5).
     std::vector<std::wstring> treeNames = reload ? list_.treeNames() : std::vector<std::wstring>{};
     list_.setListing(std::move(listing));
-    listEmptied_ = false;
     if (reload && treeNames != list_.treeNames()) tree_.refreshFolder(t.path);
     int row = list_.select(view.select, view.focus);
     if (row < 0 && !requested && view.focusRow >= 0 && list_.count() > 0)   // the focused item is gone (4.5):
@@ -987,9 +1002,11 @@ void App::onLoaded(Listing&& listing, UINT generation) {
     // A change during the read, before the watch was there, is missed by both: the folder's own time tells.
     FILETIME now = folderWritten(t.path);
     if (CompareFileTime(&now, &written) != 0) queueRefresh();
-    showLocation(p.nav);
+    // A switch's read kept for a move: the switch showed where the tab is when it began, and the address bar may hold
+    // what the user is fixing since (5.3).
+    showLocation(keptBack ? Nav::Refresh : p.nav);
     if (moved) setMessage(lateHint_ ? lateHint_ : L"");   // a navigation clears the message, or says its hint
-    else if (p.origin.restore && loadingShown) setMessage(restoreSaid_);   // what "Loading..." took the place of
+    else if (keptBack && loadingShown) setMessage(keptSaid_);   // what "Loading..." took the place of
     lateHint_ = nullptr;
     showStatus();
 }
@@ -1017,8 +1034,14 @@ void App::onLoadFailed(const Listing& listing, const Pending& p) {
     // A move that fails or opens a file leaves the tab where it was: its filter comes back, unless retyped.
     if (GetWindowTextLengthW(filter_) == 0) SetWindowTextW(filter_, p.filter.c_str());
     bool opensFile = listing.isFile && (!p.origin.shortcut.empty() || p.origin.typed);
-    restoreSaid_ = opensFile ? std::wstring() : displayName(listing.path) + L": " + errorText(listing.error);
-    restoreTab();   // before the file opens: Windows may keep a prompt about it up for a while
+    std::wstring said = opensFile ? std::wstring() : displayName(listing.path) + L": " + errorText(listing.error);
+    // A tab switch this move took over reads on: the tab shows what it finds, as the switch would have (onLoaded,
+    // 4.2). Done before a file opens, as Windows may keep a prompt about it up for a while.
+    if (kept_.generation) {
+        keptSaid_ = said;
+        if (keptListing_) post(wnd_, WM_APP_LOADED, kept_.generation, std::move(keptListing_));
+        else SetTimer(wnd_, kLoadingTimer, 250, nullptr);   // "Loading..." if it is slow (4.1)
+    }
     if (!p.origin.shortcut.empty() && listing.isFile) {
         // A shortcut that leads to a file: Windows opens it (never an unreachable one: that would hang, then fail).
         openFile(wnd_, p.origin.shortcut);
@@ -1036,28 +1059,14 @@ void App::onLoadFailed(const Listing& listing, const Pending& p) {
             EnableWindow(back_, !t.back.empty());
             EnableWindow(forward_, !t.forward.empty());
         }
-        warn(restoreSaid_);
+        warn(said);
     }
-}
-
-// A tab switch emptied the list and the move that took over failed or opened a file: the tab's folder is read again,
-// as the switch would have shown it. If "Loading..." took the place of the move's error, or of a message shown since,
-// that comes back once it is there (4.2). If that read fails too, the tab is not available, which the status bar then
-// says instead (4.3). One read of a folder at a time: on a share that is off, each one waits 20-40 s. One replaced by
-// a move that came to nothing is started again, unless it came back with an error (onLoaded). A read still out for
-// another folder holds none back.
-void App::restoreTab() {
-    if (!listEmptied_ || (restoreRead_ && samePath(restorePath_, tab().path))) return;
-    open(tab().path, Nav::Refresh, tab().view, Origin::tabRestore());
-    restoreRead_ = generation_;
-    restorePath_ = tab().path;
 }
 
 // A tab never changes its folder by itself (a drive may come back): show it empty and say why. The list gets
 // no folder, so nothing asks Windows about it (that can freeze the window for 20-40 s).
 void App::showUnavailable(const std::wstring& path, DWORD error, Nav nav) {
     list_.clear();
-    listEmptied_ = false;   // empty on purpose: the message says why
     tab().unavailable = true;
     watch_ = {};
     showLocation(nav);
@@ -1405,6 +1414,7 @@ void App::warn(const std::wstring& text) {
 
 void App::setMessage(const std::wstring& text) {
     SendMessageW(status_, SB_SETTEXTW, 1, reinterpret_cast<LPARAM>(text.c_str()));
+    loadMessageShown_ = false;   // a "Loading..." or "not available" there is gone (their callers set it again)
 }
 
 std::wstring App::message() const {

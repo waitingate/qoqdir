@@ -468,7 +468,7 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
         [=, this] { goTo(L"rundll32"); },
         [=, this] { return at(path(L"gone")) && statusHas(L"not available"); });
     add(L"F5 tries again once it is back", [=, this] { CreateDirectoryW(path(L"gone").c_str(), nullptr); selfTestKey(VK_F5); },
-        [=, this] { return at(path(L"gone")) && statusMessage().empty(); });
+        [=, this] { return at(path(L"gone")) && list_.shows(path(L"gone")) && !statusHas(L"not available"); });
     add(L"(back up to the test folder)", [=, this] { SetFocus(list_.hwnd()); selfTestKey(VK_BACK); }, [=, this] { return at(dir); });
     add(L"Ctrl+T opens a tab of the same folder", [=, this] { selfTestKey('T', true); },
         [=, this] { return tabs_.size() == 2 && at(dir); });
@@ -1711,137 +1711,127 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
         [=, this] { return at(L"") && active_ == 1 && list_.focusedName() == *drive; });
     add(L"(close that tab too)", [=, this] { closeTab(1); },
         [=, this] { return at(path(L"big")) && tabs_.size() == 1; });
-    // On a share that is off, each read of the tab's folder waits 20-40 s: one at a time, as with F5 (4.2). A read
-    // still out is stood in for by its number, so the test needs no network. The tab has loaded before, so a refresh
-    // would read it (one that never loaded is not available, 4.3).
+    // On a share that is off, a read of the tab's folder waits 20-40 s. A move that overtakes a tab switch lets the
+    // switch's read go on, so a move that fails shows what it finds: the folder is not read a second time (4.2). A read
+    // still out is stood in for by its number, so the test needs no network.
     constexpr UINT kStuckRead = 0xFFFFFFFF;   // no real read gets this number
     auto reads = std::make_shared<UINT>(0);
+    // To the second tab, and at once on to a folder that is not there, while the switch's read is still out.
+    auto overtake = [=, this](const wchar_t* missing) {
+        switchTab(1);
+        open(path(missing), Nav::New);
+        kept_.generation = kStuckRead;   // the real read comes back as one replaced, and is dropped
+    };
+    auto readBack = [=, this](DWORD error) {   // the stuck read comes back: sub, or the error it ran into
+        Listing found;
+        found.path = path(L"sub");
+        found.written = folderWritten(found.path);
+        found.error = error;
+        onLoaded(std::move(found), kStuckRead);
+    };
+    // The move has failed: what it said waits to come back with the folder.
+    auto keptSays = [this](const wchar_t* text) { return keptSaid_.find(text) != std::wstring::npos; };
     add(L"(a second tab on sub)", [=, this] { newTab(path(L"sub"), true); },
         [=, this] { return at(path(L"sub")) && tabs_.size() == 2 && active_ == 1; });
     add(L"(the first tab again)", [=, this] { switchTab(0); }, [=, this] { return at(path(L"big")) && active_ == 0; });
-    add(L"a failed move starts no read of the tab's folder while an earlier one is still out (4.2)",
+    add(L"a failed move after a tab switch reads the tab's folder no second time: the switch's read is shown (4.2)",
         [=, this] {
             *reads = generation_;
             switchTab(1);
-            restoreRead_ = kStuckRead;   // as if a read of sub were still out
-            restorePath_ = path(L"sub");
-            open(path(L"missing one"), Nav::New);
+            open(path(L"missing zero"), Nav::New);
         },
         [=, this] {
             selfTest_->note = std::to_wstring(generation_ - *reads) + L" read(s)";
-            return statusHas(L"missing one") && !loading() && generation_ == *reads + 2 && !list_.shows(path(L"sub"));
+            return idle() && active_ == 1 && list_.shows(path(L"sub")) && statusHas(L"missing zero") &&
+                   generation_ == *reads + 2;
         });
-    add(L"...nor does a refresh the folder watch asks for meanwhile (4.2)",
+    add(L"(the first tab, after that)", [=, this] { switchTab(0); },
+        [=, this] { return at(path(L"big")) && active_ == 0; });
+    add(L"a switch's read that is back before the move fails waits for it, then shows (4.2)",
         [=, this] {
             *reads = generation_;
-            onFolderChanged();   // stands in for a change in big, which the watch is still on
+            overtake(L"missing one");
+            readBack(0);   // the move is still out
         },
         [=, this] {
             selfTest_->note = std::to_wstring(generation_ - *reads) + L" read(s)";
-            // 0.8 s of nothing (the watch's refresh comes at 400 ms).
-            return GetTickCount64() - selfTest_->startTick >= 800 && !refreshQueued_ && generation_ == *reads;
+            return idle() && active_ == 1 && list_.shows(path(L"sub")) && statusHas(L"missing one") &&
+                   generation_ == *reads + 2;
         });
-    add(L"...and once that read is back, replaced and unused, the tab's folder is read and shown (4.2)",
-        [=, this] {
-            Listing late;
-            late.path = path(L"sub");
-            late.error = ERROR_OPERATION_ABORTED;
-            onLoaded(std::move(late), kStuckRead);
-        },
-        [=, this] { return idle() && list_.shows(path(L"sub")) && statusHas(L"missing one"); });
     add(L"(the first tab, once more)", [=, this] { switchTab(0); },
         [=, this] { return at(path(L"big")) && active_ == 0; });
-    add(L"a read still out for another folder does not hold back the tab's own (4.2)",
+    add(L"a failed move while the switch's read is still out leaves the tab waiting for it, reading no more (4.2)",
         [=, this] {
-            restoreRead_ = kStuckRead;   // as if a read of a share that is off were still out
-            restorePath_ = L"\\\\192.0.2.1\\share";
-            switchTab(1);
-            open(path(L"missing two"), Nav::New);
+            *reads = generation_;
+            overtake(L"missing two");
         },
-        [=, this] { return idle() && active_ == 1 && list_.shows(path(L"sub")) && statusHas(L"missing two"); });
+        [=, this] {
+            selfTest_->note = std::to_wstring(generation_ - *reads) + L" read(s)";
+            return loading() && keptSays(L"missing two") && statusHas(L"Loading") && !list_.shows(path(L"sub")) &&
+                   generation_ == *reads + 2;
+        });
+    add(L"...and a refresh asked for meanwhile waits for it, reading nothing beside it (4.2)",
+        [=, this] {
+            *reads = generation_;
+            queueRefresh();
+        },
+        [=, this] {
+            selfTest_->note = std::to_wstring(generation_ - *reads) + L" read(s)";
+            // 0.8 s of nothing (the refresh tries every 400 ms).
+            return GetTickCount64() - selfTest_->startTick >= 800 && refreshQueued_ && generation_ == *reads &&
+                   statusHas(L"Loading");
+        }).whileLoading = true;
+    add(L"...and once that read is back, the tab shows it with the move's error, then the refresh reads it (4.2)",
+        [=, this] {
+            SetWindowTextW(address_, L"missing tw");   // as if the user were fixing what they typed (5.3)
+            readBack(0);
+        },
+        [=, this] {
+            selfTest_->note = std::to_wstring(generation_ - *reads) + L" read(s)";
+            return idle() && list_.shows(path(L"sub")) && !refreshQueued_ && generation_ == *reads + 1 &&
+                   statusHas(L"missing two") && windowText(address_) == L"missing tw";
+        }).whileLoading = true;
     // What the status bar says after the error stays: "Loading..." gives back what it took the place of.
     add(L"(the first tab, a third time)", [=, this] { switchTab(0); },
         [=, this] { return at(path(L"big")) && active_ == 0; });
-    add(L"(a failed move overtakes the switch while a read of sub is still out)",
-        [=, this] {
-            restoreRead_ = kStuckRead;
-            restorePath_ = path(L"sub");
-            switchTab(1);
-            open(path(L"missing three"), Nav::New);
-        },
-        [=, this] { return statusHas(L"missing three") && !loading(); });
-    add(L"a message shown while the tab's folder is read again stays once it is back (4.2)",
+    add(L"(a failed move overtakes the switch while its read is still out)", [=, this] { overtake(L"missing three"); },
+        [=, this] { return loading() && keptSays(L"missing three") && statusHas(L"Loading"); });
+    add(L"a message shown while the tab waits for its switch's read stays once the folder is back (4.2)",
         [=, this] {
             setMessage(L"a newer message");
-            Listing late;
-            late.path = path(L"sub");
-            late.error = ERROR_OPERATION_ABORTED;
-            onLoaded(std::move(late), kStuckRead);
+            readBack(0);
         },
-        [=, this] { return idle() && list_.shows(path(L"sub")) && statusHas(L"a newer message"); });
-    // A read that comes back with an error has its answer: the folder is not available (4.3), no second read.
+        [=, this] { return idle() && list_.shows(path(L"sub")) && statusHas(L"a newer message"); })
+        .whileLoading = true;
     add(L"(the first tab, a fourth time)", [=, this] { switchTab(0); },
         [=, this] { return at(path(L"big")) && active_ == 0; });
-    add(L"(a failed move overtakes the switch while a read of sub is still out, again)",
+    add(L"(a failed move overtakes the switch while its read is still out, again)",
+        [=, this] { overtake(L"missing four"); }, [=, this] { return loading() && keptSays(L"missing four"); });
+    add(L"...and a message \"Loading...\" took the place of while it waited comes back with the folder (4.2)",
         [=, this] {
-            restoreRead_ = kStuckRead;
-            restorePath_ = path(L"sub");
-            switchTab(1);
-            open(path(L"missing four"), Nav::New);
+            setMessage(L"a newer message");
+            SendMessageW(wnd_, WM_TIMER, kLoadingTimer, 0);   // as if the read took 250 ms more
+            readBack(0);
         },
-        [=, this] { return statusHas(L"missing four") && !loading(); });
+        [=, this] { return idle() && list_.shows(path(L"sub")) && statusHas(L"a newer message"); })
+        .whileLoading = true;
+    // A read that comes back with an error has its answer: the folder is not available (4.3), no second read.
+    add(L"(the first tab, a fifth time)", [=, this] { switchTab(0); },
+        [=, this] { return at(path(L"big")) && active_ == 0; });
+    add(L"(a failed move overtakes the switch while its read is still out, once more)",
+        [=, this] { overtake(L"missing five"); }, [=, this] { return loading() && keptSays(L"missing five"); });
     add(L"...and if that read comes back with an error, the tab is not available at once (4.3)",
         [=, this] {
             *reads = generation_;
-            Listing late;
-            late.path = path(L"sub");
-            late.error = ERROR_BAD_NETPATH;   // what a share that is off answers in the end
-            onLoaded(std::move(late), kStuckRead);
+            SetWindowTextW(address_, L"missing fiv");   // as if the user were fixing what they typed (5.3)
+            readBack(ERROR_BAD_NETPATH);   // what a share that is off answers in the end
         },
         [=, this] {
             selfTest_->note = std::to_wstring(generation_ - *reads) + L" read(s)";
-            return !loading() && generation_ == *reads && tab().unavailable && statusHas(L"is not available");
-        });
+            return !loading() && generation_ == *reads && tab().unavailable && statusHas(L"is not available") &&
+                   windowText(address_) == L"missing fiv";
+        }).whileLoading = true;
     add(L"(F5 shows it again)", [=, this] { refresh(); }, [=, this] { return idle() && list_.shows(path(L"sub")); });
-    add(L"(the first tab, a fifth time)", [=, this] { switchTab(0); },
-        [=, this] { return at(path(L"big")) && active_ == 0; });
-    add(L"(a failed move overtakes the switch while a read of sub is still out, once more)",
-        [=, this] {
-            restoreRead_ = kStuckRead;
-            restorePath_ = path(L"sub");
-            switchTab(1);
-            open(path(L"missing five"), Nav::New);
-        },
-        [=, this] { return statusHas(L"missing five") && !loading(); });
-    add(L"...and if \"Loading...\" takes the place of its error, the error comes back with the tab's folder (4.2)",
-        [=, this] {
-            Listing late;
-            late.path = path(L"sub");
-            late.error = ERROR_OPERATION_ABORTED;
-            onLoaded(std::move(late), kStuckRead);
-            SendMessageW(wnd_, WM_TIMER, kLoadingTimer, 0);   // as if the read took over 250 ms
-        },
-        [=, this] { return idle() && list_.shows(path(L"sub")) && statusHas(L"missing five"); });
-    add(L"(the first tab, a sixth time)", [=, this] { switchTab(0); },
-        [=, this] { return at(path(L"big")) && active_ == 0; });
-    add(L"(a failed move overtakes the switch while a read of sub is still out, a last time)",
-        [=, this] {
-            restoreRead_ = kStuckRead;
-            restorePath_ = path(L"sub");
-            switchTab(1);
-            open(path(L"missing six"), Nav::New);
-        },
-        [=, this] { return statusHas(L"missing six") && !loading(); });
-    add(L"...and if it takes the place of a message shown since, that message comes back instead (4.2)",
-        [=, this] {
-            setMessage(L"a newer message");
-            Listing late;
-            late.path = path(L"sub");
-            late.error = ERROR_OPERATION_ABORTED;
-            onLoaded(std::move(late), kStuckRead);
-            SendMessageW(wnd_, WM_TIMER, kLoadingTimer, 0);   // as if the read took over 250 ms
-        },
-        [=, this] { return idle() && list_.shows(path(L"sub")) && statusHas(L"a newer message"); });
     add(L"(close that tab)", [=, this] { closeTab(1); }, [=, this] { return at(path(L"big")) && tabs_.size() == 1; });
 
     add(L"copies 10,000 selected files to the clipboard",
