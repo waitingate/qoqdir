@@ -26,7 +26,6 @@ use windows::Win32::System::Console::{
 use windows::Win32::System::Diagnostics::Debug::{SEM_FAILCRITICALERRORS, SetErrorMode};
 use windows::Win32::System::LibraryLoader::{GetModuleHandleW, LOAD_LIBRARY_SEARCH_SYSTEM32, SetDefaultDllDirectories};
 use windows::Win32::System::Ole::{OleFlushClipboard, OleInitialize, OleUninitialize};
-use windows::Win32::System::SystemInformation::GetSystemDirectoryW;
 use windows::Win32::UI::Controls::{
     ICC_BAR_CLASSES, ICC_LISTVIEW_CLASSES, ICC_STANDARD_CLASSES, ICC_TAB_CLASSES, ICC_TREEVIEW_CLASSES,
     INITCOMMONCONTROLSEX, InitCommonControlsEx,
@@ -37,7 +36,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
     TranslateMessage,
 };
 
-use crate::util::{from_wide, pcwstr, wide};
+use crate::util::{pcwstr, wide};
 
 // ---------------------------------------------------------------- help
 
@@ -203,9 +202,8 @@ fn main() {
     let args: Vec<OsString> = std::env::args_os().skip(1).collect();
     let mut cmd = folder::parse_command_line(&args); // "qoqdir ." is resolved here, against the terminal's folder
     // Then leave it: a program's working folder cannot be renamed, deleted or ejected. Explorer's is System32.
-    let mut system = [0u16; 260];
-    if unsafe { GetSystemDirectoryW(Some(&mut system)) } > 0 {
-        let _ = std::env::set_current_dir(from_wide(&system));
+    if let Some(system) = folder::system_dir() {
+        let _ = std::env::set_current_dir(system);
     }
     #[cfg(not(feature = "selftest"))]
     if cmd.self_test {

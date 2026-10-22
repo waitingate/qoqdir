@@ -6,11 +6,7 @@
 param([switch]$Test)
 $ErrorActionPreference = 'Stop'
 Set-Location (Split-Path $PSScriptRoot)   # the repository
-if (-not (Get-Command g++ -ErrorAction SilentlyContinue)) {
-    $mingw = @("$env:LOCALAPPDATA\Programs\mingw64\bin", 'C:\mingw64\bin') | Where-Object { Test-Path "$_\g++.exe" } | Select-Object -First 1
-    if (-not $mingw) { throw 'MinGW-w64 not found: see docs\BUILDING.md, section 1' }
-    $env:PATH = "$mingw;" + $env:PATH
-}
+. "$PSScriptRoot\find-mingw.ps1"
 if (-not (Get-Command cargo -ErrorAction SilentlyContinue)) {
     $rustEnv = @("$env:LOCALAPPDATA\Programs\rust\rust-env.ps1", 'C:\rust\rust-env.ps1') | Where-Object { Test-Path $_ } | Select-Object -First 1
     if (-not $rustEnv) { throw 'Rust not found: see docs\BUILDING.md, section 1' }

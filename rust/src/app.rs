@@ -10,7 +10,10 @@ use std::path::{Path, PathBuf};
 use std::rc::{Rc, Weak};
 use std::sync::atomic::{AtomicU32, Ordering};
 
-use windows::Win32::Foundation::{COLORREF, ERROR_OPERATION_ABORTED, HINSTANCE, HWND, LPARAM, LRESULT, POINT, RECT, SIZE, WPARAM};
+use windows::Win32::Foundation::{
+    COLORREF, ERROR_ALREADY_EXISTS, ERROR_OPERATION_ABORTED, HINSTANCE, HWND, LPARAM, LRESULT, POINT, RECT, SIZE,
+    WPARAM,
+};
 use windows::Win32::Graphics::Gdi::{
     COLOR_WINDOW, ClientToScreen, CreateFontIndirectW, CreateSolidBrush, InvalidateRect, GetDC, GetSysColor, GetSysColorBrush,
     GetTextExtentExPointW, GetTextExtentPoint32W, GetTextMetricsW, HBRUSH, HDC, MONITOR_DEFAULTTONULL, MonitorFromRect, PtInRect,
@@ -43,7 +46,7 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
 use windows::Win32::UI::Shell::{DefSubclassProc, FOLDERID_Profile, SHACF_FILESYS_DIRS, SHAutoComplete, SetWindowSubclass};
 use windows::Win32::UI::WindowsAndMessaging::{
     AppendMenuW, CHILDID_SELF, CW_USEDEFAULT, CreatePopupMenu, CreateWindowExW, DefWindowProcW, DestroyWindow, GCLP_HBRBACKGROUND,
-    GWLP_USERDATA, GetClientRect, GetCursorPos, GetParent, GetWindowLongPtrW, GetWindowPlacement, GetWindowRect,
+    GWLP_USERDATA, GetParent, GetWindowLongPtrW, GetWindowPlacement,
     HMENU, HTCLIENT, IDC_ARROW, IDC_SIZEWE, IsChild, KillTimer, WPF_RESTORETOMAXIMIZED, LoadCursorW, LoadIconW, MB_ICONQUESTION,
     IDCANCEL, IDYES, MB_ICONWARNING, MB_OKCANCEL, MB_YESNOCANCEL, MF_GRAYED, MF_SEPARATOR, MF_STRING, MINMAXINFO, MSG,
     MessageBoxW, MoveWindow,
@@ -73,7 +76,8 @@ use crate::shell::{
 };
 use crate::tree::{FolderTree, TreeBatch};
 use crate::util::{
-    Font, OwnedMenu, focus, from_wide, key_down, mul_div, pcwstr, scale, send, set_text, unscale, wide, window_text,
+    Font, OwnedMenu, client_rect, cursor_pos, focus, from_wide, key_down, mul_div, packed, pcwstr, scale, send,
+    set_text, unscale, wide, window_rect, window_text,
 };
 
 const ID_BACK: i32 = 100;
@@ -150,10 +154,10 @@ impl ViewState {
 }
 
 pub struct Tab {
-    pub id: u32, // stable identity; indexes shift when tabs close
+    id: u32, // stable identity; indexes shift when tabs close
     pub location: Location,
     pub back: Vec<Location>,
-    pub forward: Vec<Location>,
+    forward: Vec<Location>,
     view: ViewState,       // remembered while the tab is in the background
     pub unavailable: bool, // not loaded here yet, or failed: no drops onto it (asking Windows could freeze)
 }
@@ -185,8 +189,6 @@ pub struct State {
     // What a delete, rename or new folder asked to select while a load was pending, and in which folder.
     pub queued_view: Option<(Location, ViewState)>,
     rename: Option<(PathBuf, OsString)>, // done after the edit box has closed
-    pub watch: Option<FolderWatch>,
-    bookmarks_watch: Option<FolderWatch>, // the Bookmarks node follows its folder whatever the list shows (5.5)
     last_focus: Option<HWND>,
 }
 
@@ -213,7 +215,7 @@ pub struct App {
     pub filter: HWND,
     pub tab_bar: HWND,
     plus: HWND,
-    pub status: HWND,
+    status: HWND,
     pub list: FileList,
     pub tree: FolderTree,
     pub tab_drop: RefCell<Option<IDropTarget>>, // files dropped on a tab go to its folder
@@ -231,6 +233,10 @@ pub struct App {
     dragging_files: Cell<bool>, // a drag started from our own list is in progress
     pub refresh_queued: Cell<bool>,
     refresh_for_watch: Cell<bool>, // ...and only the folder watch asked for it
+    // Out of `st`: a watch talks to the shell as it goes, which can call straight back into on_message, so each is
+    // taken out of its cell (take, replace) before it drops.
+    pub watch: RefCell<Option<FolderWatch>>,
+    bookmarks_watch: RefCell<Option<FolderWatch>>, // Bookmarks' node follows its folder whatever the list shows (5.5)
     kept_said: RefCell<String>, // what "Loading..." covered while the tab waited for State::kept: back with the folder
     load_message_shown: Cell<bool>, // the status bar says "Loading..." or "not available" (set_message clears it)
     pub generation: Cell<u32>,
@@ -272,13 +278,13 @@ fn point_from(lp: LPARAM) -> POINT {
 fn fit_text(dc: HDC, text: &[u16], width: i32) -> Vec<u16> {
     let (mut fit, mut size) = (0, SIZE::default());
     unsafe {
-        let _ = GetTextExtentExPointW(dc, PCWSTR(text.as_ptr()), text.len() as i32, width, Some(&raw mut fit), None, &mut size);
+        let _ = GetTextExtentExPointW(dc, pcwstr(text), text.len() as i32, width, Some(&raw mut fit), None, &mut size);
         if fit as usize >= text.len() {
             return text.to_vec();
         }
         let _ = GetTextExtentPoint32W(dc, &[0x2026], &mut size);
         let width = width - size.cx;
-        let _ = GetTextExtentExPointW(dc, PCWSTR(text.as_ptr()), text.len() as i32, width, Some(&raw mut fit), None, &mut size);
+        let _ = GetTextExtentExPointW(dc, pcwstr(text), text.len() as i32, width, Some(&raw mut fit), None, &mut size);
     }
     let mut cut = text[..fit as usize].to_vec();
     cut.push(0x2026);
@@ -386,8 +392,8 @@ unsafe extern "system" fn middle_click_proc(h: HWND, msg: u32, wp: WPARAM, lp: L
         unsafe {
             let _ = ClientToScreen(h, &mut pt);
             if let Ok(parent) = GetParent(h) {
-                let packed = (pt.x as u16 as u32 | ((pt.y as u16 as u32) << 16)) as isize;
-                let _ = PostMessageW(Some(parent), WM_APP_MIDDLECLICK, WPARAM(h.0 as usize), LPARAM(packed));
+                let (wp, lp) = (WPARAM(h.0 as usize), LPARAM(packed(pt.x, pt.y)));
+                let _ = PostMessageW(Some(parent), WM_APP_MIDDLECLICK, wp, lp);
             }
         }
         return LRESULT(0);
@@ -538,6 +544,8 @@ impl App {
                 dragging_files: Cell::new(false),
                 refresh_queued: Cell::new(false),
                 refresh_for_watch: Cell::new(false),
+                watch: RefCell::new(None),
+                bookmarks_watch: RefCell::new(Some(bookmarks_watch)),
                 kept_said: RefCell::new(String::new()),
                 load_message_shown: Cell::new(false),
                 generation: Cell::new(0),
@@ -554,8 +562,6 @@ impl App {
                     kept: None,
                     queued_view: None,
                     rename: None,
-                    watch: None,
-                    bookmarks_watch: Some(bookmarks_watch),
                     last_focus: None,
                 }),
                 quiet: Cell::new(false),
@@ -628,7 +634,7 @@ impl App {
         unsafe { (*app).on_message(msg, wp, lp) }
     }
 
-    fn with_tab<R>(&self, f: impl FnOnce(&mut Tab) -> R) -> R {
+    pub(crate) fn with_tab<R>(&self, f: impl FnOnce(&mut Tab) -> R) -> R {
         let mut st = self.st.borrow_mut();
         let active = st.active;
         f(&mut st.tabs[active])
@@ -722,12 +728,10 @@ impl App {
     fn layout(&self) {
         let dpi = self.dpi.get();
         unsafe {
-            let mut rc = RECT::default();
-            let _ = GetClientRect(self.wnd, &mut rc);
+            let rc = client_rect(self.wnd);
             let (w, h) = (rc.right, rc.bottom);
             send(self.status, WM_SIZE, 0, 0);
-            let mut sr = RECT::default();
-            let _ = GetWindowRect(self.status, &mut sr);
+            let sr = window_rect(self.status);
             let status_h = sr.bottom - sr.top;
             let parts = [scale(380, dpi), -1];
             send(self.status, SB_SETPARTS, 2, parts.as_ptr() as isize);
@@ -750,8 +754,7 @@ impl App {
             place(self.filter, w - pad - filter_w, y, filter_w, row);
             y += row + pad;
             let tab_h = self.tab_height.get();
-            let mut bar = RECT::default();
-            let _ = GetClientRect(self.tab_bar, &mut bar); // its width before
+            let bar = client_rect(self.tab_bar); // its width before
             place(self.tab_bar, 0, y, w - btn - pad, tab_h);
             place(self.plus, w - btn - pad, y + (tab_h - row) / 2, btn, row);
             y += tab_h;
@@ -833,8 +836,8 @@ impl App {
                         ID_BACK => self.go_back(),
                         ID_FORWARD => self.go_forward(),
                         ID_UP => {
-                        self.go_up();
-                    }
+                            self.go_up();
+                        }
                         ID_REFRESH => self.refresh_all(),
                         ID_PLUS => self.new_tab(self.location(), true),
                         _ => {}
@@ -912,9 +915,7 @@ impl App {
                 }
                 WM_MOUSEWHEEL => {
                     // Over the tab bar it switches tabs, up to the left (a touchpad's small steps add up).
-                    let mut bar = RECT::default();
-                    let _ = GetWindowRect(self.tab_bar, &mut bar);
-                    if PtInRect(&bar, point_from(lp)).as_bool() {
+                    if PtInRect(&window_rect(self.tab_bar), point_from(lp)).as_bool() {
                         let wheel = self.wheel.get() + i32::from(hiword(wp.0) as u16 as i16);
                         self.wheel.set(wheel % 120);
                         let steps = wheel / 120;
@@ -958,8 +959,7 @@ impl App {
                 }
                 WM_SETCURSOR => {
                     if HWND(wp.0 as _) == self.wnd && loword(lp.0 as usize) == HTCLIENT {
-                        let mut p = POINT::default();
-                        let _ = GetCursorPos(&mut p);
+                        let mut p = cursor_pos();
                         let _ = ScreenToClient(self.wnd, &mut p);
                         if self.over_splitter(p.x) {
                             SetCursor(LoadCursorW(None, IDC_SIZEWE).ok());
@@ -1016,13 +1016,8 @@ impl App {
                     return LRESULT(0);
                 }
                 WM_DESTROY => {
-                    // Taken out first, dropped after: deregistering a watch talks to the shell, which can send this
-                    // window a message meanwhile, and a handler that borrows `st` then would abort the app.
-                    let watches = {
-                        let mut st = self.st.borrow_mut();
-                        (st.watch.take(), st.bookmarks_watch.take())
-                    };
-                    drop(watches);
+                    drop(self.watch.take());
+                    drop(self.bookmarks_watch.take());
                     let _ = RevokeDragDrop(self.list.hwnd());
                     let _ = RevokeDragDrop(self.tab_bar);
                     let _ = RevokeDragDrop(self.tree.hwnd());
@@ -1240,10 +1235,7 @@ impl App {
         if from == self.tree.hwnd() {
             let Some(location) = self.tree.location_at(pt) else { return };
             if keyboard {
-                let mut r = RECT::default();
-                unsafe {
-                    let _ = GetWindowRect(self.tree.hwnd(), &mut r);
-                }
+                let r = window_rect(self.tree.hwnd());
                 pt = POINT { x: r.left + scale(24, self.dpi.get()), y: r.top + scale(24, self.dpi.get()) };
             }
             let Some(cm) = item_menu_at(self.wnd, &location) else { return };
@@ -1264,10 +1256,7 @@ impl App {
     }
 
     fn on_tab_menu(&self) {
-        let mut screen = POINT::default();
-        unsafe {
-            let _ = GetCursorPos(&mut screen);
-        }
+        let screen = cursor_pos();
         let Some(index) = tab_at(self.tab_bar, screen) else { return };
         let tab_count = self.tabs();
         let cmd = unsafe {
@@ -1537,7 +1526,7 @@ impl App {
         false
     }
 
-    pub fn focus_list(&self) {
+    fn focus_list(&self) {
         focus(self.list.hwnd());
         if self.list.selection().is_empty() && let Some(row) = self.list.focused() {
             self.list.set_state(Some(row), LVIS_SELECTED, LVIS_SELECTED);
@@ -1563,7 +1552,9 @@ impl App {
         // further move on that tab; anything else makes it of no use. Set before the newest load is, so that read
         // never stops.
         let moving = matches!(nav, Nav::New | Nav::Back | Nav::Forward);
-        let kept = {
+        let generation = self.generation.get() + 1;
+        self.generation.set(generation);
+        {
             let mut st = self.st.borrow_mut();
             let tab_id = st.tabs[st.active].id;
             let switching = st.pending.as_ref().is_some_and(|p| p.nav == Nav::Switch && p.tab_id == tab_id);
@@ -1572,15 +1563,8 @@ impl App {
             } else if !moving {
                 st.kept = None;
             }
-            st.kept.as_ref().map_or(0, |k| k.generation)
-        };
-        KEPT_LOAD.store(kept, Ordering::SeqCst);
-        let generation = self.generation.get() + 1;
-        self.generation.set(generation);
-        NEWEST_LOAD.store(generation, Ordering::SeqCst);
-        {
-            let mut st = self.st.borrow_mut();
-            let tab_id = st.tabs[st.active].id;
+            KEPT_LOAD.store(st.kept.as_ref().map_or(0, |k| k.generation), Ordering::SeqCst);
+            NEWEST_LOAD.store(generation, Ordering::SeqCst);
             st.pending = Some(Pending { generation, nav, view, tab_id, origin, filter });
         }
         unsafe {
@@ -1624,7 +1608,10 @@ impl App {
         let (pending, kept_back, moving) = {
             let mut st = self.st.borrow_mut();
             match st.kept.take_if(|k| k.generation == generation) {
-                Some(kept) => (Some(kept), true, st.pending.is_some()),
+                Some(kept) => {
+                    KEPT_LOAD.store(0, Ordering::SeqCst);
+                    (Some(kept), true, st.pending.is_some())
+                }
                 None => (st.pending.take_if(|p| p.generation == generation), false, false),
             }
         };
@@ -1636,9 +1623,6 @@ impl App {
             }
             return;
         };
-        if kept_back {
-            KEPT_LOAD.store(0, Ordering::SeqCst);
-        }
         // The move is still out: "Loading..." and its hint are its own.
         if !moving {
             unsafe {
@@ -1726,18 +1710,16 @@ impl App {
         // The watch stays while it watches the folder shown: setting one up costs 25-75 ms, and a reload is not a
         // change. Otherwise the old one goes first, and with it a refresh only it asked for: that was about a folder no
         // longer shown, unless this one is the folder it was in, which it watched too (4.5).
-        if !self.st.borrow().watch.as_ref().is_some_and(|w| w.watches(&location)) {
-            let above = self.st.borrow().watch.as_ref().is_some_and(|w| w.watches_child_of(&location));
-            let old_watch = self.st.borrow_mut().watch.take();
-            drop(old_watch);
+        if !self.watch.borrow().as_ref().is_some_and(|w| w.watches(&location)) {
+            let above = self.watch.borrow().as_ref().is_some_and(|w| w.watches_child_of(&location));
+            drop(self.watch.take());
             if self.refresh_queued.get() && self.refresh_for_watch.get() && !above {
                 unsafe {
                     let _ = KillTimer(Some(self.wnd), TIMER_REFRESH);
                 }
                 self.refresh_queued.set(false);
             }
-            let watch = FolderWatch::new(self.wnd, WM_APP_CHANGED, &location);
-            self.st.borrow_mut().watch = Some(watch);
+            let _ = self.watch.replace(Some(FolderWatch::new(self.wnd, WM_APP_CHANGED, &location)));
         }
         // The tree follows the folder shown: its node is read again when the subfolders or shortcuts changed (5.5).
         let tree_names = if reload { self.list.tree_names() } else { Vec::new() };
@@ -1838,7 +1820,7 @@ impl App {
                         let _ = EnableWindow(self.forward, can_forward);
                     }
                 }
-                self.warn(&format!("{}: {}", listing.location.display_name().to_string_lossy(), error.trim()));
+                self.warn(&format!("{}: {error}", listing.location.display_name().to_string_lossy()));
             }
         }
     }
@@ -1848,9 +1830,9 @@ impl App {
     pub fn show_unavailable(&self, location: &Location, error: &str) {
         self.list.clear();
         self.with_tab(|t| t.unavailable = true);
-        let old_watch = self.st.borrow_mut().watch.take();
-        drop(old_watch);
-        self.set_message(&format!("\"{}\" is not available: {}   (F5 tries again)", location.text().to_string_lossy(), error.trim()));
+        drop(self.watch.take());
+        let path = location.text();
+        self.set_message(&format!("\"{}\" is not available: {error}   (F5 tries again)", path.to_string_lossy()));
         self.load_message_shown.set(true);
         self.show_status();
     }
@@ -1895,7 +1877,7 @@ impl App {
     }
 
     /// F5 and the Refresh button: the list (unless it is loading already) and the tree (5.5); the status bar says so.
-    pub fn refresh_all(&self) {
+    fn refresh_all(&self) {
         let list = self.refresh(ViewState::default());
         self.tree.refresh();
         if list {
@@ -2163,9 +2145,7 @@ impl App {
         let dpi = self.dpi.get();
         let font = self.font.borrow().as_ref().map(|f| f.0).unwrap_or_default();
         unsafe {
-            let mut bar = RECT::default();
-            let _ = GetClientRect(self.tab_bar, &mut bar);
-            let share = (bar.right - 2) / (names.len() as i32).max(1);
+            let share = (client_rect(self.tab_bar).right - 2) / (names.len() as i32).max(1);
             let width = share.clamp(scale(80, dpi), scale(150, dpi));
             send(self.tab_bar, TCM_SETMINTABWIDTH, 0, width as isize);
             let dc = GetDC(Some(self.tab_bar));
@@ -2262,12 +2242,12 @@ impl App {
         loop {
             match unsafe { CreateDirectoryW(pcwstr(&wide(dir.join(&name))), None) } {
                 Ok(()) => break,
-                Err(e) if e.code() == windows::Win32::Foundation::ERROR_ALREADY_EXISTS.to_hresult() && i <= 999 => {
+                Err(e) if e.code() == ERROR_ALREADY_EXISTS.to_hresult() && i <= 999 => {
                     name = format!("New folder ({i})").into();
                     i += 1;
                 }
                 Err(e) => {
-                    self.warn(e.message().trim()); // 4.9: an impossible action beeps
+                    self.warn(&e.message()); // 4.9: an impossible action beeps
                     return;
                 }
             }

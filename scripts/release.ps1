@@ -2,16 +2,11 @@
 # exe that ships and the self-test on qoqdir-test.exe (the same compiled app plus the self-test), and leaves in
 # release\ the zip to publish (its SHA-256 is printed) and qoqdir-<version>-debug.exe to keep: the shipped exe
 # with its symbols, which turns crash-log offsets into source lines (see src/crashlog.cpp).
-# Needs MinGW (with CMake and Ninja) on the PATH, or where the build guide puts it: %LOCALAPPDATA%\Programs\mingw64
-# or C:\mingw64.
+# Needs MinGW (with CMake and Ninja) on the PATH, or where the build guide puts it (find-mingw.ps1).
 #     powershell -File scripts\release.ps1
 $ErrorActionPreference = 'Stop'
 Set-Location (Split-Path $PSScriptRoot)   # the repository
-if (-not (Get-Command g++ -ErrorAction SilentlyContinue)) {
-    $mingw = @("$env:LOCALAPPDATA\Programs\mingw64\bin", 'C:\mingw64\bin') | Where-Object { Test-Path "$_\g++.exe" } | Select-Object -First 1
-    if (-not $mingw) { throw 'MinGW-w64 not found: see docs\BUILDING.md, section 1' }
-    $env:PATH = "$mingw;" + $env:PATH
-}
+. "$PSScriptRoot\find-mingw.ps1"
 if (git status --porcelain) { throw 'Commit your changes first: a release is built from the last commit.' }
 $header = Get-Content src\version.h -Raw
 $version = [regex]::Match($header, 'QOQDIR_VERSION "([^"]+)"').Groups[1].Value

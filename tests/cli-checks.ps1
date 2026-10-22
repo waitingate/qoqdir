@@ -1,6 +1,6 @@
 # Command-line checks for qoqdir.exe. Uses a private copy of the exe in a temp folder (with its
 # own qoqdir.ini and Bookmarks), so your real settings are never touched. Each check opens a
-# Qoqdir window for about two seconds and closes it again.
+# Qoqdir window until it shows what the check reads, and closes it again.
 #
 #   powershell -File tests\cli-checks.ps1 -Exe build\qoqdir.exe
 #   powershell -File tests\cli-checks.ps1 -Exe rust\target\release\qoqdir.exe
@@ -58,15 +58,38 @@ $failures = 0
 function Check([bool]$ok, [string]$what) {
   if ($ok) { "ok    $what" } else { "FAIL  $what"; $script:failures++ }
 }
+function WaitFor([scriptblock]$what, [int]$ms) {   # asks every 50 ms until $what gives something, for $ms at most
+  $end = [DateTime]::Now.AddMilliseconds($ms)
+  while ($true) {
+    $got = & $what
+    if ($got -or [DateTime]::Now -ge $end) { return $got }
+    Start-Sleep -Milliseconds 50
+  }
+}
+function Box($p) {   # the message box a process shows, or nothing
+  $box = [QoqdirHelp]::Dialog([uint32]$p.Id)
+  if ($box -ne [IntPtr]::Zero) { $box }
+}
+function CloseBox($p) {   # waits for the process's message box, closes it, and gives what it said
+  $box = WaitFor { Box $p } 5000
+  if (-not $box) { return @{ Shown = $false; Text = ''; Title = '' } }
+  $r = @{ Shown = $true; Text = [QoqdirHelp]::Text($box); Title = [QoqdirHelp]::Title($box) }
+  [void][QoqdirHelp]::PostMessage($box, 0x0010, [IntPtr]::Zero, [IntPtr]::Zero)   # WM_CLOSE
+  [void](WaitFor { -not (Box $p) } 2000)
+  $r
+}
 function StartQuiet([string]$exe, [string[]]$argList) {   # starts an exe with a window that takes no focus
   $id = [QoqdirHelp]::Start("`"$exe`" $($argList -join ' ')", 0, 4)
   $p = if ($id) { Get-Process -Id $id -ErrorAction SilentlyContinue }
   if ($p) { [void]$p.Handle }   # opened while it runs, so that its exit code can be read after it ends
   $p
 }
-function TitleAfterStart([string[]]$argList) {   # starts the copy, reads its window title and whether it took the focus, closes it
+# Starts the copy and waits until its window shows $title, or for a focus check $settle ms (time to take the focus,
+# if it would), then reads its title and whether it took the focus, and closes it.
+function TitleAfterStart([string[]]$argList, [string]$title, [int]$settle = 0) {
   $p = StartQuiet $copy $argList
-  Start-Sleep -Milliseconds 2000
+  if ($settle) { Start-Sleep -Milliseconds $settle }
+  elseif ($p) { [void](WaitFor { $p.Refresh(); $p.HasExited -or $p.MainWindowTitle -eq $title } 5000) }
   if (-not $p -or $p.HasExited) { return @{ Title = ''; Focused = $false } }   # it stopped by itself (the crash log says why)
   $p.Refresh()
   $r = @{ Title = $p.MainWindowTitle; Focused = [QoqdirHelp]::GetForegroundWindow() -eq $p.MainWindowHandle }
@@ -82,26 +105,23 @@ function HelpOutput([string]$arg) {   # runs the copy with its output going to a
 }
 function HelpBox([string]$arg) {   # starts the copy as a shortcut would, with no terminal to print in; closes its box
   [void][QoqdirHelp]::Start("cmd.exe /c start `"`" `"$copy`" $arg", 8, 0)   # a cmd with no console starts it
-  Start-Sleep -Milliseconds 1500
-  $p = Get-Process | Where-Object { $_.Path -eq $copy } | Select-Object -First 1
+  $name = [IO.Path]::GetFileNameWithoutExtension($copy)
+  $p = WaitFor { Get-Process -Name $name -ErrorAction SilentlyContinue | Where-Object { $_.Path -eq $copy } | Select-Object -First 1 } 5000
   if (-not $p) { return @{ Shown = $false; Code = 'none: it did not run' } }
   [void]$p.Handle   # opened while it runs, so that its exit code can be read after it ends
-  $box = [QoqdirHelp]::Dialog([uint32]$p.Id)
-  $text = if ($box -ne [IntPtr]::Zero) { [QoqdirHelp]::Text($box) } else { '' }
-  $title = if ($box -ne [IntPtr]::Zero) { [QoqdirHelp]::Title($box) } else { '' }
-  if ($box -ne [IntPtr]::Zero) { [void][QoqdirHelp]::PostMessage($box, 0x0010, [IntPtr]::Zero, [IntPtr]::Zero) }   # WM_CLOSE
+  $r = CloseBox $p
   [void]$p.WaitForExit(5000)
-  @{ Shown = $box -ne [IntPtr]::Zero; Code = $p.ExitCode; Text = $text; Title = $title }
+  $r + @{ Code = $p.ExitCode }
 }
 
-$r = TitleAfterStart @('--tab=C:\Users\Public', '-t="c:\users\public"')
+$r = TitleAfterStart @('--tab=C:\Users\Public', '-t="c:\users\public"') 'Public' 2000
 Check ($r.Title -eq 'Public') "the same folder given twice (--tab=, then -t= with quotes) opens one tab: '$($r.Title)'"
 Check (-not $r.Focused) 'started by a script that asks for no focus (SW_SHOWNOACTIVATE), the window takes none'
 $ini = Join-Path $dir 'qoqdir.ini'
 Check (-not ((Test-Path $ini) -and (Select-String -Path $ini -Pattern ':\\' -Quiet))) 'qoqdir.ini holds no paths (saved tabs are shortcuts in Bookmarks)'
 Check (Test-Path (Join-Path $dir 'Bookmarks') -PathType Container) 'a Bookmarks folder is created next to the exe'
 $homeName = Split-Path ([Environment]::GetFolderPath('UserProfile')) -Leaf
-$r = TitleAfterStart @()
+$r = TitleAfterStart @() $homeName
 Check ($r.Title -eq $homeName) "no folders opens the home folder$(if ($r.Title -ne $homeName) { ": '$($r.Title)'" })"   # the name stays out of a log that passes
 $r = HelpOutput '--help'   # the switch F1's help names (-h and -? are the same: unit tests)
 Check ($r.Code -eq 0 -and $r.Text -match '^Qoqdir \d' -and $r.Text -match 'Usage: qoqdir \[options\]' -and $r.Text -match '--tab="folder path"') `
@@ -111,23 +131,18 @@ Check ($r.Code -eq 1 -and $r.Text.StartsWith('Unknown option: -x') -and $r.Text 
   "-x writes the error, then the help, and exits with 1 (exit code $($r.Code))"
 # F1 in the window: posted to the file list as a key press would arrive (nothing global), then the box is closed.
 $p = StartQuiet $copy '--tab=C:\Users\Public'
-Start-Sleep -Milliseconds 2000
-$p.Refresh()
+[void](WaitFor { $p.Refresh(); $p.MainWindowTitle -eq 'Public' } 5000)
 [void][QoqdirHelp]::PostMessage([QoqdirHelp]::GetDlgItem($p.MainWindowHandle, 108), 0x0100, [IntPtr]0x70, [IntPtr]::Zero)   # WM_KEYDOWN, VK_F1
-Start-Sleep -Milliseconds 1000
-$box = [QoqdirHelp]::Dialog([uint32]$p.Id)
-$text = if ($box -ne [IntPtr]::Zero) { [QoqdirHelp]::Text($box) } else { '' }
-if ($box -ne [IntPtr]::Zero) { [void][QoqdirHelp]::PostMessage($box, 0x0010, [IntPtr]::Zero, [IntPtr]::Zero) }
-Start-Sleep -Milliseconds 300
+$r = CloseBox $p
 [void]$p.CloseMainWindow(); [void]$p.WaitForExit(5000)
-Check ($text.StartsWith('Navigation') -and $text -match 'Refresh: F5' -and $text -match 'type qoqdir --help') `
-  "F1 in the window shows the keys and points to qoqdir --help (shown: $($box -ne [IntPtr]::Zero))"
+Check ($r.Text.StartsWith('Navigation') -and $r.Text -match 'Refresh: F5' -and $r.Text -match 'type qoqdir --help') `
+  "F1 in the window shows the keys and points to qoqdir --help (shown: $($r.Shown))"
 $r = HelpBox '-x'
 Check ($r.Shown -and $r.Code -eq 1 -and $r.Text.StartsWith('Unknown option: -x') -and $r.Title -match '^Qoqdir \d') `
   "with no terminal (as from a shortcut), -x shows the error and help in a box and exits with 1 (shown: $($r.Shown), exit code $($r.Code))"
 # A damaged qoqdir.ini: a number far off any screen gives the default (x + width must not overflow and stop it).
 Set-Content -Path $ini -Value "[Window]`r`nX=2147483000`r`nWidth=1000`r`nHeight=600"
-$r = TitleAfterStart @('--tab=C:\Users\Public')
+$r = TitleAfterStart @('--tab=C:\Users\Public') 'Public'
 Check ($r.Title -eq 'Public') "a damaged qoqdir.ini (X=2147483000) falls back to the defaults: '$($r.Title)'"
 
 # A folder it can't write to, as Program Files is for most users: only adding files and folders is denied

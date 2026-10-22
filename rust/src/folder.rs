@@ -24,6 +24,7 @@ use windows::Win32::System::Diagnostics::ToolHelp::{
     CreateToolhelp32Snapshot, PROCESSENTRY32W, Process32FirstW, Process32NextW, TH32CS_SNAPPROCESS,
 };
 use windows::Win32::System::Environment::ExpandEnvironmentStringsW;
+use windows::Win32::System::SystemInformation::GetSystemDirectoryW;
 use windows::Win32::System::Threading::GetCurrentProcessId;
 use windows::Win32::System::Time::{FileTimeToSystemTime, SystemTimeToTzSpecificLocalTime};
 use windows::Win32::UI::Shell::{
@@ -157,6 +158,13 @@ pub fn exists(path: &Path) -> bool {
     unsafe { GetFileAttributesW(pcwstr(&wide(path))) != INVALID_FILE_ATTRIBUTES }
 }
 
+/// System32, as Windows names it.
+pub fn system_dir() -> Option<PathBuf> {
+    let mut buf = [0u16; 260];
+    let n = unsafe { GetSystemDirectoryW(Some(&mut buf)) } as usize;
+    (n > 0 && n < buf.len()).then(|| PathBuf::from(OsString::from_wide(&buf[..n])))
+}
+
 /// "C:\..." or "\\server\...", not a command like "cmd" (the same rule as the C++ version: a drive letter with a
 /// backslash, or two backslashes, so "\\server" alone counts too and opens with Windows' own error).
 pub fn is_absolute_path(text: &OsStr) -> bool {
@@ -224,7 +232,7 @@ pub fn expand_vars(text: &OsStr) -> OsString {
 }
 
 /// A folder given on the command line, relative to the current one ("qoqdir .").
-pub fn resolve_argument(arg: &OsStr) -> Location {
+fn resolve_argument(arg: &OsStr) -> Location {
     // "D:" alone means the drive's root (as in Explorer), not Windows' "current folder on D:".
     let mut arg = arg.to_os_string();
     if arg.len() == 2 && arg.to_string_lossy().ends_with(':') {
@@ -329,7 +337,7 @@ pub struct Listing {
 
 impl Listing {
     /// No items, and why.
-    pub fn failed(location: &Location, error: windows::core::Error) -> Listing {
+    fn failed(location: &Location, error: windows::core::Error) -> Listing {
         Listing { location: location.clone(), error: Some(error), ..Default::default() }
     }
 }
@@ -368,7 +376,8 @@ pub fn list_folder(location: &Location, show_hidden: bool, stop: Option<&dyn Fn(
             // An empty drive root has no "." entry, so "not found" just means empty.
             if !(e.code() == ERROR_FILE_NOT_FOUND.to_hresult() && is_directory(dir)) {
                 r.error = Some(e);
-                r.is_file = exists(dir) && !is_directory(dir);
+                let a = unsafe { GetFileAttributesW(pcwstr(&wide(dir))) };
+                r.is_file = a != INVALID_FILE_ATTRIBUTES && (a & FILE_ATTRIBUTE_DIRECTORY.0) == 0;
             }
             return r;
         }
@@ -588,6 +597,10 @@ pub fn row_after_deleting(rows: &[usize], count: usize) -> Option<usize> {
 // ---------------------------------------------------------------- text
 
 pub fn equal_no_case(a: &OsStr, b: &OsStr) -> bool {
+    // Without case, ordinal matching maps each UTF-16 unit to one: texts of other lengths never match.
+    if a.encode_wide().count() != b.encode_wide().count() {
+        return false;
+    }
     let a: Vec<u16> = a.encode_wide().collect();
     let b: Vec<u16> = b.encode_wide().collect();
     unsafe { CompareStringOrdinal(&a, &b, true) == CSTR_EQUAL }
@@ -612,7 +625,11 @@ fn ext(name: &[u16]) -> &[u16] {
 
 /// Lower-case extension with the dot (".txt"), empty if none.
 pub fn extension_of(name: &OsStr) -> String {
-    String::from_utf16_lossy(&to_lower(&OsString::from_wide(ext(&wide(name)))))
+    let mut w: Vec<u16> = name.encode_wide().collect();
+    let Some(dot) = w.iter().rposition(|&c| c == b'.' as u16) else { return String::new() };
+    let ext = &mut w[dot..];
+    unsafe { CharLowerBuffW(ext) };
+    String::from_utf16_lossy(ext)
 }
 
 /// A .lnk or .url file.
@@ -907,7 +924,7 @@ mod tests {
         let as_file = list_folder(&Location::dir(std::env::current_exe().unwrap()), false, None);
         assert!(as_file.error.is_some() && as_file.is_file);
         // A read that a newer load replaced stops early, keeping nothing (System32 has hundreds of entries).
-        let system = Location::dir(PathBuf::from(std::env::var_os("SystemRoot").unwrap()).join("System32"));
+        let system = Location::dir(system_dir().unwrap());
         let stopped = list_folder(&system, false, Some(&|| true));
         assert!(stopped.error.is_some_and(|e| e.code() == ERROR_OPERATION_ABORTED.to_hresult()) && stopped.items.is_empty());
         assert!(list_folder(&system, false, Some(&|| false)).items.len() > 256);
@@ -942,7 +959,7 @@ mod tests {
         }
         let temp = std::env::temp_dir().join("qoqdir-unit-tests");
         let _ = std::fs::create_dir(&temp);
-        let log = temp.join("qoqdir-crash.log");
+        let log = crate::crashlog::log_path(&temp);
         let _ = std::fs::remove_file(&log);
         assert_eq!(run_self("folder::tests::panic_is_logged", "panic", &temp), 3);
         let text = std::fs::read_to_string(&log).unwrap_or_default();

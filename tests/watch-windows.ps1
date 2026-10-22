@@ -43,7 +43,7 @@ while (-not $p.HasExited) {
     $seen[$w.Key] = $w.Value
     if ($w.Value -match '\[Ghost\] ') { $busy++ }   # Windows' stand-in for a window busy 5+ s (titled as the folder shown)
   }
-  Start-Sleep -Milliseconds 200
+  [void]$p.WaitForExit(200)
 }
 "self-test (pid $($p.Id)) exit code: $($p.ExitCode)"
 if ($busy) { "Qoqdir's window was busy for 5+ seconds $busy time(s) (the self-test's own setup of 10,000 files, and of 10,000 folders, does this)" }

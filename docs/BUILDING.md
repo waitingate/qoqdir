@@ -46,9 +46,9 @@ $env:PATH = "$env:LOCALAPPDATA\Programs\mingw64\bin;" + $env:PATH
 g++ --version
 ```
 
-`scripts\build.ps1` and `scripts\release.ps1` do step 3 themselves: when g++
-isn't on the PATH they look in `%LOCALAPPDATA%\Programs\mingw64`, then in
-`C:\mingw64`.
+`scripts\build.ps1` and `scripts\release.ps1` do step 3 themselves, through
+`scripts\find-mingw.ps1`: when g++ isn't on the PATH they look in
+`%LOCALAPPDATA%\Programs\mingw64`, then in `C:\mingw64`.
 
 Any other folder works if its path has no spaces, which MinGW's tools dislike.
 With a space in your user name, use `C:\mingw64`: any user may create a folder

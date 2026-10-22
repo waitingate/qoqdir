@@ -4,6 +4,7 @@ use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::ffi::{OsStr, OsString};
 use std::os::windows::ffi::OsStrExt;
+use std::path::Path;
 
 use windows::Win32::Foundation::{HWND, POINT};
 use windows::Win32::Graphics::Gdi::ScreenToClient;
@@ -25,7 +26,7 @@ use windows::Win32::UI::Shell::{
     FOLDERID_Desktop, FOLDERID_Documents, FOLDERID_Downloads, FOLDERID_Music, FOLDERID_Pictures, FOLDERID_Videos,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    CreateWindowExW, GetCursorPos, HMENU, WINDOW_EX_STYLE, WINDOW_STYLE, WS_CHILD, WS_TABSTOP, WS_VISIBLE,
+    CreateWindowExW, HMENU, WINDOW_EX_STYLE, WINDOW_STYLE, WS_CHILD, WS_TABSTOP, WS_VISIBLE,
 };
 use windows::core::{PWSTR, w};
 
@@ -34,7 +35,7 @@ use crate::shell::{
     IconBatch, describe, describe_shortcut, folder_icon, in_background, known_folder, post, read_own_icons, set_theme,
     shortcut_target, system_image_list,
 };
-use crate::util::{pcwstr, send, wide};
+use crate::util::{cursor_pos, pcwstr, send, wide};
 
 /// Subfolders of one node, read on a worker thread and posted to the tree's parent window.
 pub struct TreeBatch {
@@ -202,14 +203,7 @@ impl FolderTree {
 
     /// This PC, the last root (0 before the tree is filled).
     pub fn last_root(&self) -> isize {
-        let mut last = self.root();
-        while last != 0 {
-            match send(self.hwnd, TVM_GETNEXTITEM, TVGN_NEXT as usize, last) {
-                0 => break,
-                next => last = next,
-            }
-        }
-        last
+        self.siblings(self.root()).last().unwrap_or(0)
     }
 
     /// Drives came or went: re-read This PC only, so expanded folders stay open (4.5); its read in flight is dropped.
@@ -218,7 +212,7 @@ impl FolderTree {
         if pc == 0 {
             return;
         }
-        if send(self.hwnd, TVM_GETNEXTITEM, TVGN_CHILD as usize, pc) == 0 {
+        if self.child(pc) == 0 {
             // No drives shown yet: their first read is still in flight (read again, so the drive that came or went is
             // in the list), or This PC is closed and unread (its next expand reads them).
             if self.reading.borrow_mut().remove(&pc).is_some() {
@@ -256,7 +250,7 @@ impl FolderTree {
         let none = item.cChildren.0 == 0 && !is_shortcut(&self.location_of(HTREEITEM(node)).text());
         // An empty Bookmarks keeps its arrow (add_children), so the arrow can't tell: its last read does.
         let empty_root = self.bookmarks_empty.get() && node == self.root();
-        if send(self.hwnd, TVM_GETNEXTITEM, TVGN_CHILD as usize, node) != 0 || none || empty_root {
+        if self.child(node) != 0 || none || empty_root {
             self.start_reading(HTREEITEM(node));
         }
     }
@@ -284,8 +278,29 @@ impl FolderTree {
         HTREEITEM(node)
     }
 
-    fn root(&self) -> isize {
+    /// Bookmarks, the first root (0 before the tree is filled).
+    pub fn root(&self) -> isize {
         send(self.hwnd, TVM_GETNEXTITEM, TVGN_ROOT as usize, 0)
+    }
+
+    /// A node's first child (0: none shown).
+    pub fn child(&self, node: isize) -> isize {
+        send(self.hwnd, TVM_GETNEXTITEM, TVGN_CHILD as usize, node)
+    }
+
+    /// The next node under the same parent (0: none).
+    pub fn next_sibling(&self, node: isize) -> isize {
+        send(self.hwnd, TVM_GETNEXTITEM, TVGN_NEXT as usize, node)
+    }
+
+    /// A node and the ones after it under the same parent.
+    pub fn siblings(&self, first: isize) -> impl Iterator<Item = isize> + '_ {
+        std::iter::successors(Some(first).filter(|&n| n != 0), |&n| Some(self.next_sibling(n)).filter(|&n| n != 0))
+    }
+
+    /// The node lit up as a drop target (0: none).
+    pub fn drop_highlight(&self) -> isize {
+        send(self.hwnd, TVM_GETNEXTITEM, TVGN_DROPHILITE as usize, 0)
     }
 
     fn location_of(&self, node: HTREEITEM) -> Location {
@@ -350,14 +365,16 @@ impl FolderTree {
         }
         // Read again (refresh): a folder whose subfolders are the same stays as it is. Otherwise they are put in afresh,
         // and what was open below closes (an open list changed item by item is slow: Windows repaints it for each).
-        let mut shown = Vec::new();
-        let mut c = send(self.hwnd, TVM_GETNEXTITEM, TVGN_CHILD as usize, node.0);
-        while c != 0 {
-            shown.push(self.location_of(HTREEITEM(c)).text());
-            c = send(self.hwnd, TVM_GETNEXTITEM, TVGN_NEXT as usize, c);
-        }
+        let shown: Vec<isize> = self.siblings(self.child(node.0)).collect();
         if !shown.is_empty() {
-            if shown.into_iter().eq(batch.children.iter().map(|c| c.location.text())) {
+            fn text(l: &Location) -> Option<&OsStr> {
+                l.path().map(Path::as_os_str)
+            }
+            let same = shown.len() == batch.children.len() && {
+                let paths = self.paths.borrow();
+                shown.iter().zip(&batch.children).all(|(n, c)| text(&paths[n]) == text(&c.location))
+            };
+            if same {
                 return;
             }
             send(self.hwnd, TVM_EXPAND, (TVE_COLLAPSE.0 | TVE_COLLAPSERESET.0) as usize, node.0);
@@ -389,8 +406,7 @@ impl FolderTree {
             .iter()
             .map(|(name, icon)| (to_lower(Location::dir(batch.dir.join(name)).text().as_os_str()), *icon))
             .collect();
-        let mut child = send(self.hwnd, TVM_GETNEXTITEM, TVGN_CHILD as usize, node);
-        while child != 0 {
+        for child in self.siblings(self.child(node)) {
             if let Some(&icon) = icons.get(&to_lower(&self.location_of(HTREEITEM(child)).text())) {
                 let item = TVITEMW {
                     mask: TVIF_IMAGE | TVIF_SELECTEDIMAGE,
@@ -401,7 +417,6 @@ impl FolderTree {
                 };
                 send(self.hwnd, TVM_SETITEMW, 0, &item as *const _ as isize);
             }
-            child = send(self.hwnd, TVM_GETNEXTITEM, TVGN_NEXT as usize, child);
         }
     }
 
@@ -433,7 +448,7 @@ impl FolderTree {
     pub fn drop_target(&self, pt: Option<POINT>) -> Option<Location> {
         let node = pt.map_or(0, |pt| self.node_at(pt).0);
         let now = unsafe { GetTickCount64() };
-        if node != send(self.hwnd, TVM_GETNEXTITEM, TVGN_DROPHILITE as usize, 0) {
+        if node != self.drop_highlight() {
             send(self.hwnd, TVM_SELECTITEM, TVGN_DROPHILITE as usize, node);
             self.open_at.set(now + 700);
             let folder = if node == 0 { None } else { local_folder(self.location_of(HTREEITEM(node))) };
@@ -457,9 +472,7 @@ impl FolderTree {
                 let tv = unsafe { &*(nm as *const NMTREEVIEWW) };
                 let node = tv.itemNew.hItem;
                 // Not a node whose subfolders are shown: add_children expands the node it has just filled.
-                if tv.action.0 & TVE_EXPAND.0 != 0
-                    && send(self.hwnd, TVM_GETNEXTITEM, TVGN_CHILD as usize, node.0) == 0
-                {
+                if tv.action.0 & TVE_EXPAND.0 != 0 && self.child(node.0) == 0 {
                     self.start_reading(node);
                 }
                 None
@@ -488,11 +501,7 @@ impl FolderTree {
             }
             NM_CLICK => {
                 // Clicking the node that is already selected sends no change, so open it here.
-                let mut pt = POINT::default();
-                unsafe {
-                    let _ = GetCursorPos(&mut pt);
-                }
-                let (node, part) = self.node_at(pt);
+                let (node, part) = self.node_at(cursor_pos());
                 let selected = send(self.hwnd, TVM_GETNEXTITEM, TVGN_CARET as usize, 0);
                 let on_item = part & (TVHT_ONITEM.0 | TVHT_ONITEMRIGHT.0) != 0;
                 (node != 0 && node == selected && on_item).then(|| self.location_of(HTREEITEM(node)))

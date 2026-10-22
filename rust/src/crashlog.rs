@@ -4,7 +4,7 @@
 
 use std::fmt;
 use std::io::Write;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
 use windows::Win32::Foundation::{CloseHandle, HWND};
@@ -62,13 +62,18 @@ pub fn install() {
 }
 
 /// The log goes into this folder from now on (a self-test keeps its own).
-#[cfg_attr(not(feature = "selftest"), allow(dead_code))]
+#[cfg(feature = "selftest")]
 pub fn log_in(dir: &Path) {
     let _ = LOG_DIR.set(log_file(dir));
 }
 
+/// The crash log in a folder.
+pub fn log_path(dir: &Path) -> PathBuf {
+    dir.join(format!("{}-crash.log", APP_NAME.to_lowercase()))
+}
+
 fn log_file(dir: &Path) -> Vec<u16> {
-    wide(dir.join(format!("{}-crash.log", APP_NAME.to_lowercase())))
+    wide(log_path(dir))
 }
 
 /// "exe+0x1234" for an address in the exe; the bare address for one in a system DLL or a shell extension.

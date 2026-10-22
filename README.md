@@ -25,7 +25,7 @@ qoqdir [options] [folder ...]
   {folder}           open the folder in a tab (qoqdir . works too)
   --tab="{folder}"   the same: --tab="D:\logs"
   -t="{folder}"      short for --tab=: -t="D:\logs" -t="C:\My Files"
-  -h, --help, -?     print the help: options, examples, notes for scripts
+  -h, --help, -?     print the help: options, examples, notes for scripts 
 ```
 
 Each folder opens once, and the first one is shown. With no folders you get the
@@ -204,7 +204,8 @@ script that sets Rust's PATH in each new terminal.
 - `tests/` the unit tests and the three check scripts (the exe, the command
   line, the self-test with its popup watch)
 - `scripts/` `build.ps1` builds and checks both versions, `release.ps1` makes a
-  release, `make-icon.ps1` draws the icon
+  release (both find MinGW through `find-mingw.ps1`), `make-icon.ps1` draws the
+  icon
 - `docs/` `BUILDING.md` (tools, building, testing, releases), `DEVELOPING.md`
   (notes for working on the code) and `SPEC.md` (what Qoqdir must do and
   how it must behave)

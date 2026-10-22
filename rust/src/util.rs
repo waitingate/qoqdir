@@ -3,14 +3,15 @@
 use std::ffi::{OsStr, OsString};
 use std::os::windows::ffi::{OsStrExt, OsStringExt};
 
-use windows::Win32::Foundation::{HWND, LPARAM, WPARAM};
+use windows::Win32::Foundation::{HWND, LPARAM, POINT, RECT, WPARAM};
 use windows::Win32::Graphics::Gdi::{DeleteObject, HFONT};
 use windows::Win32::System::Com::CoTaskMemFree;
 use windows::Win32::System::WindowsProgramming::MulDiv;
 use windows::Win32::UI::Input::KeyboardAndMouse::{GetKeyState, SetFocus, VIRTUAL_KEY};
 use windows::Win32::UI::Shell::Common::ITEMIDLIST;
 use windows::Win32::UI::WindowsAndMessaging::{
-    DestroyMenu, GetWindowTextLengthW, GetWindowTextW, HMENU, SendMessageW, SetWindowTextW,
+    DestroyMenu, GetClientRect, GetCursorPos, GetWindowRect, GetWindowTextLengthW, GetWindowTextW, HMENU, SendMessageW,
+    SetWindowTextW,
 };
 use windows::core::PCWSTR;
 
@@ -73,6 +74,38 @@ pub fn focus(hwnd: HWND) {
 
 pub fn key_down(vk: VIRTUAL_KEY) -> bool {
     unsafe { GetKeyState(vk.0 as i32) < 0 }
+}
+
+/// A window's inside, from 0, 0.
+pub fn client_rect(hwnd: HWND) -> RECT {
+    let mut r = RECT::default();
+    unsafe {
+        let _ = GetClientRect(hwnd, &mut r);
+    }
+    r
+}
+
+/// A window's place on the screen.
+pub fn window_rect(hwnd: HWND) -> RECT {
+    let mut r = RECT::default();
+    unsafe {
+        let _ = GetWindowRect(hwnd, &mut r);
+    }
+    r
+}
+
+/// Where the mouse is, on the screen.
+pub fn cursor_pos() -> POINT {
+    let mut p = POINT::default();
+    unsafe {
+        let _ = GetCursorPos(&mut p);
+    }
+    p
+}
+
+/// A point as mouse messages carry it.
+pub fn packed(x: i32, y: i32) -> isize {
+    x as u16 as isize | ((y as u16 as isize) << 16)
 }
 
 /// a * b / c, rounded to the nearest whole number: Windows' MulDiv, which the C++ version's sizes go through.

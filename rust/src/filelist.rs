@@ -291,7 +291,7 @@ impl FileList {
         rows
     }
 
-    /// With their attributes, size and date: see `shell::data_object`.
+    /// With their attributes, size and date: see `shell::ui_object_of`.
     pub fn selected_items(&self) -> Vec<Item> {
         let rows = self.selection();
         let m = self.model.borrow();

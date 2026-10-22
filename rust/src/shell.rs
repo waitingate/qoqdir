@@ -155,7 +155,7 @@ fn ui_object_of<T: Interface>(owner: HWND, dir: &Location, items: &[Item]) -> Re
             copy_to(fd.cFileName.as_mut_ptr(), MAX_PATH as i32, &it.name); // "C:\" for a drive under This PC
             known.SetFindData(&fd)?;
             let mut child: *mut ITEMIDLIST = std::ptr::null_mut();
-            folder.ParseDisplayName(owner, &bind, PCWSTR(fd.cFileName.as_ptr()), None, &mut child, std::ptr::null_mut())?;
+            folder.ParseDisplayName(owner, &bind, pcwstr(&fd.cFileName), None, &mut child, std::ptr::null_mut())?;
             owned.push(Pidl(child));
         }
         let children: Vec<*const ITEMIDLIST> = owned.iter().map(|p| p.0 as *const _).collect();
