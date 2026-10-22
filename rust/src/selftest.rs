@@ -33,7 +33,7 @@ use windows::Win32::System::SystemServices::MK_LBUTTON;
 use windows::Win32::UI::Controls::{
     EM_SETSEL, EM_GETSEL, EM_REPLACESEL, HTREEITEM, LVIF_IMAGE, LVIR_LABEL, LVITEMW, LVM_CANCELEDITLABEL, LVM_GETBKCOLOR, LVM_GETCOUNTPERPAGE,
     LVM_GETTEXTBKCOLOR, TVM_GETBKCOLOR,
-    LVM_GETITEMRECT, LVM_GETITEMW, SB_GETTEXTLENGTHW, SB_GETTEXTW, TCIF_TEXT, TCITEMW,
+    LVM_GETITEMRECT, LVM_GETITEMW, TCIF_TEXT, TCITEMW,
     TCM_GETCURSEL, TCM_GETITEMCOUNT, TCM_GETITEMRECT, TCM_GETITEMW, TCM_SETCURFOCUS, UPDOWN_CLASSW,
     TVE_EXPAND, TVGN_CARET, TVGN_CHILD, TVGN_DROPHILITE, TVGN_NEXT, TVGN_ROOT, TVHITTESTINFO, TVHT_ONITEMBUTTON, TVIF_CHILDREN,
     TVIF_IMAGE,
@@ -429,13 +429,6 @@ impl App {
 
     fn at_pc(&self) -> bool {
         self.idle() && matches!(self.location(), Location::ThisPc)
-    }
-
-    fn status_message(&self) -> String {
-        let len = (send(self.status, SB_GETTEXTLENGTHW, 1, 0) & 0xFFFF) as usize;
-        let mut buf = vec![0u16; len + 1];
-        send(self.status, SB_GETTEXTW, 1, buf.as_mut_ptr() as isize);
-        from_wide(&buf).to_string_lossy().into_owned()
     }
 
     fn listed(&self, name: &str) -> bool {
@@ -2640,7 +2633,7 @@ impl App {
                     && a.status_message().contains("missing two")
             },
         );
-        // What the status bar says after the error stays: only "Loading..." gives the error its place back.
+        // What the status bar says after the error stays: "Loading..." gives back what it took the place of.
         s.add("(the first tab, a third time)", |a| a.switch_tab(0), |a| a.at(&p("big")) && a.active() == 0);
         s.add(
             "(a failed move overtakes the switch while a read of sub is still out)",
@@ -2702,6 +2695,55 @@ impl App {
                 a.refresh(ViewState::default());
             },
             |a| a.idle() && a.list.shows(&Location::dir(p("sub"))),
+        );
+        s.add("(the first tab, a fifth time)", |a| a.switch_tab(0), |a| a.at(&p("big")) && a.active() == 0);
+        s.add(
+            "(a failed move overtakes the switch while a read of sub is still out, once more)",
+            |a| {
+                a.restore_read.set(STUCK_READ);
+                *a.restore_path.borrow_mut() = Location::dir(p("sub"));
+                a.switch_tab(1);
+                a.open(Location::dir(p("missing five")), Nav::New, ViewState::default());
+            },
+            |a| a.status_message().contains("missing five") && !a.is_loading(),
+        );
+        s.add(
+            "...and if \"Loading...\" takes the place of its error, the error comes back with the tab's folder (4.2)",
+            |a| {
+                let late = Listing {
+                    location: Location::dir(p("sub")),
+                    error: Some(ERROR_OPERATION_ABORTED.to_hresult().into()),
+                    ..Default::default()
+                };
+                a.on_loaded(late, STUCK_READ);
+                send(a.wnd, WM_TIMER, TIMER_LOADING, 0); // as if the read took over 250 ms
+            },
+            |a| a.idle() && a.list.shows(&Location::dir(p("sub"))) && a.status_message().contains("missing five"),
+        );
+        s.add("(the first tab, a sixth time)", |a| a.switch_tab(0), |a| a.at(&p("big")) && a.active() == 0);
+        s.add(
+            "(a failed move overtakes the switch while a read of sub is still out, a last time)",
+            |a| {
+                a.restore_read.set(STUCK_READ);
+                *a.restore_path.borrow_mut() = Location::dir(p("sub"));
+                a.switch_tab(1);
+                a.open(Location::dir(p("missing six")), Nav::New, ViewState::default());
+            },
+            |a| a.status_message().contains("missing six") && !a.is_loading(),
+        );
+        s.add(
+            "...and if it takes the place of a message shown since, that message comes back instead (4.2)",
+            |a| {
+                a.set_message("a newer message");
+                let late = Listing {
+                    location: Location::dir(p("sub")),
+                    error: Some(ERROR_OPERATION_ABORTED.to_hresult().into()),
+                    ..Default::default()
+                };
+                a.on_loaded(late, STUCK_READ);
+                send(a.wnd, WM_TIMER, TIMER_LOADING, 0); // as if the read took over 250 ms
+            },
+            |a| a.idle() && a.list.shows(&Location::dir(p("sub"))) && a.status_message().contains("a newer message"),
         );
         s.add("(close that tab)", |a| a.close_tab(1), |a| a.at(&p("big")) && a.tabs() == 1);
 

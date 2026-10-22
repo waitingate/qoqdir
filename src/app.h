@@ -137,6 +137,7 @@ private:
     // Status and settings
     void showStatus();
     void setMessage(const std::wstring& text);
+    std::wstring message() const;   // what the status bar says (setMessage)
     // A status message once per run (5.3); with 'afterLoad', once the folder being loaded has landed.
     void hint(bool& said, const wchar_t* text, bool afterLoad = false);
     void warn(const std::wstring& text);   // an error: in the status bar, with a beep
@@ -178,7 +179,7 @@ private:
     bool listEmptied_ = false;       // a tab switch emptied the list, and no folder has filled it since
     UINT restoreRead_ = 0;           // the read restoreTab() started, until it comes back
     std::wstring restorePath_;       // ...and the folder it reads
-    std::wstring restoreSaid_;       // what the failed move said, said again once the tab's folder is back
+    std::wstring restoreSaid_;       // what the failed move said, or what "Loading..." covered: back with the folder
     struct QueuedView {             // kept by refresh() while a load is pending: what a delete, rename or new
         std::wstring dir;           // folder wanted selected. The queued refresh applies it if 'dir' is still shown.
         ViewState view;

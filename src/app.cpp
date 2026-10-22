@@ -565,6 +565,9 @@ void App::onTimer(UINT_PTR id) {
     } else if (id == kLoadingTimer) {
         KillTimer(wnd_, kLoadingTimer);
         if (loading()) {   // say "Loading..." only if it is slow
+            // A tab's folder read again after a failed move gives back what this takes the place of (onLoaded, 4.2):
+            // the move's error, or a message shown since.
+            if (pending_.origin.restore) restoreSaid_ = message();
             setMessage(L"Loading…");
             loadMessageShown_ = true;
         }
@@ -887,11 +890,13 @@ void App::onLoaded(Listing&& listing, UINT generation) {
         if (counted && listing.error != ERROR_OPERATION_ABORTED) ++loadsWasted_;
         // The move that replaced it came to nothing. An error other than "stopped" is the folder's answer: it is not
         // available (4.3), and no second read is due.
-        bool answered = listing.error && listing.error != ERROR_OPERATION_ABORTED;
-        if (restored && !loading() && answered && listEmptied_ && samePath(listing.path, tab().path))
-            showUnavailable(listing.path, listing.error, Nav::Refresh);
-        else if (restored && !loading())
-            restoreTab();
+        if (restored && !loading()) {
+            bool answered = listing.error && listing.error != ERROR_OPERATION_ABORTED;
+            if (answered && listEmptied_ && samePath(listing.path, tab().path))
+                showUnavailable(listing.path, listing.error, Nav::Refresh);
+            else
+                restoreTab();
+        }
         return;
     }
     KillTimer(wnd_, kLoadingTimer);
@@ -984,7 +989,7 @@ void App::onLoaded(Listing&& listing, UINT generation) {
     if (CompareFileTime(&now, &written) != 0) queueRefresh();
     showLocation(p.nav);
     if (moved) setMessage(lateHint_ ? lateHint_ : L"");   // a navigation clears the message, or says its hint
-    else if (p.origin.restore && loadingShown) setMessage(restoreSaid_);   // the error gets its place back
+    else if (p.origin.restore && loadingShown) setMessage(restoreSaid_);   // what "Loading..." took the place of
     lateHint_ = nullptr;
     showStatus();
 }
@@ -1036,10 +1041,11 @@ void App::onLoadFailed(const Listing& listing, const Pending& p) {
 }
 
 // A tab switch emptied the list and the move that took over failed or opened a file: the tab's folder is read again,
-// as the switch would have shown it, and the move's error comes back once it is there, if "Loading..." took its place
-// (4.2). If that read fails too, the tab is not available, which the status bar then says instead (4.3). One read of
-// a folder at a time: on a share that is off, each one waits 20-40 s. One replaced by a move that came to nothing is
-// started again, unless it came back with an error (onLoaded). A read still out for another folder holds none back.
+// as the switch would have shown it. If "Loading..." took the place of the move's error, or of a message shown since,
+// that comes back once it is there (4.2). If that read fails too, the tab is not available, which the status bar then
+// says instead (4.3). One read of a folder at a time: on a share that is off, each one waits 20-40 s. One replaced by
+// a move that came to nothing is started again, unless it came back with an error (onLoaded). A read still out for
+// another folder holds none back.
 void App::restoreTab() {
     if (!listEmptied_ || (restoreRead_ && samePath(restorePath_, tab().path))) return;
     open(tab().path, Nav::Refresh, tab().view, Origin::tabRestore());
@@ -1399,6 +1405,12 @@ void App::warn(const std::wstring& text) {
 
 void App::setMessage(const std::wstring& text) {
     SendMessageW(status_, SB_SETTEXTW, 1, reinterpret_cast<LPARAM>(text.c_str()));
+}
+
+std::wstring App::message() const {
+    std::wstring s(size_t(LOWORD(SendMessageW(status_, SB_GETTEXTLENGTHW, 1, 0))) + 1, L'\0');
+    SendMessageW(status_, SB_GETTEXTW, 1, reinterpret_cast<LPARAM>(s.data()));
+    return std::wstring(s.c_str());
 }
 
 void App::hint(bool& said, const wchar_t* text, bool afterLoad) {

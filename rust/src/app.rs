@@ -29,7 +29,7 @@ use windows::Win32::UI::Accessibility::{CLSID_AccPropServices, IAccPropServices,
 use windows::Win32::UI::Controls::{
     EM_GETSEL, EM_REPLACESEL, EM_SETCUEBANNER, EM_SETSEL, LVIR_LABEL, LVIS_SELECTED, LVM_CANCELEDITLABEL,
     LVHITTESTINFO, LVM_GETITEMRECT, LVM_HITTEST, LVN_BEGINDRAG, LVN_BEGINRDRAG, LVN_ENDLABELEDITW, LVN_ITEMACTIVATE,
-    LVM_SETBKCOLOR, LVM_SETTEXTBKCOLOR, TVM_SETBKCOLOR, LVN_ITEMCHANGED, LVN_ODSTATECHANGED, NM_RCLICK, NMHDR, NMLVDISPINFOW, SB_SETPARTS, SB_SETTEXTW,
+    LVM_SETBKCOLOR, LVM_SETTEXTBKCOLOR, TVM_SETBKCOLOR, LVN_ITEMCHANGED, LVN_ODSTATECHANGED, NM_RCLICK, NMHDR, NMLVDISPINFOW, SB_GETTEXTLENGTHW, SB_GETTEXTW, SB_SETPARTS, SB_SETTEXTW,
     TCHITTESTINFO, TCIF_TEXT, TCITEMW, TCM_DELETEALLITEMS, TCM_GETCURSEL, TCM_GETITEMRECT, TCM_HITTEST, TCM_INSERTITEMW,
     TCM_SETCURSEL, TCM_SETMINTABWIDTH, TCN_SELCHANGE, TOOLTIPS_CLASSW, TTF_IDISHWND, TTF_SUBCLASS, TTM_ADDTOOLW,
     TTS_ALWAYSTIP, TTTOOLINFOW,
@@ -230,7 +230,7 @@ pub struct App {
     list_emptied: Cell<bool>,      // a tab switch emptied the list, and no folder has filled it since
     pub restore_read: Cell<u32>,   // the read restore_tab() started, until it comes back
     pub restore_path: RefCell<Location>, // ...and the folder it reads
-    restore_said: RefCell<String>, // what the failed move said, said again once the tab's folder is back
+    restore_said: RefCell<String>, // what the failed move said, or what "Loading..." covered: back with the folder
     load_message_shown: Cell<bool>, // "Loading..." or "not available": cleared when a folder loads
     pub generation: Cell<u32>,
     pub loads_done: Cell<u32>,   // folder reads that reported back (self-test)
@@ -1082,6 +1082,14 @@ impl App {
                 TIMER_LOADING => {
                     let _ = KillTimer(Some(self.wnd), TIMER_LOADING);
                     if self.is_loading() {
+                        // A tab's folder read again after a failed move gives back what this takes the place of
+                        // (on_loaded, 4.2): the move's error, or a message shown since.
+                        let restoring =
+                            self.st.borrow().pending.as_ref().is_some_and(|p| matches!(p.origin, Origin::Restore));
+                        if restoring {
+                            let said = self.status_message();
+                            *self.restore_said.borrow_mut() = said;
+                        }
                         self.set_message("Loading\u{2026}"); // only when it is slow
                         self.load_message_shown.set(true);
                     }
@@ -1745,7 +1753,7 @@ impl App {
             self.set_message(self.late_hint.get().unwrap_or("")); // a navigation clears the message, or says its hint
         } else if matches!(pending.origin, Origin::Restore) && loading_shown {
             let said = self.restore_said.borrow().clone();
-            self.set_message(&said); // the error gets its place back
+            self.set_message(&said); // what "Loading..." took the place of
         }
         self.late_hint.set(None);
         self.show_status();
@@ -1818,11 +1826,11 @@ impl App {
     }
 
     /// A tab switch emptied the list and the move that took over failed or opened a file: the tab's folder is read
-    /// again, as the switch would have shown it, and the move's error comes back once it is there, if "Loading..."
-    /// took its place (4.2). If that read fails too, the tab is not available, which the status bar then says instead
-    /// (4.3). One read of a folder at a time: on a share that is off, each one waits 20-40 s. One replaced by a move
-    /// that came to nothing is started again, unless it came back with an error (on_loaded). A read still out for
-    /// another folder holds none back.
+    /// again, as the switch would have shown it. If "Loading..." took the place of the move's error, or of a message
+    /// shown since, that comes back once it is there (4.2). If that read fails too, the tab is not available, which the
+    /// status bar then says instead (4.3). One read of a folder at a time: on a share that is off, each one waits
+    /// 20-40 s. One replaced by a move that came to nothing is started again, unless it came back with an error
+    /// (on_loaded). A read still out for another folder holds none back.
     fn restore_tab(&self) {
         let location = self.location();
         let waiting = self.restore_read.get() != 0 && self.restore_path.borrow().same(&location);
@@ -2295,6 +2303,14 @@ impl App {
     pub fn set_message(&self, text: &str) {
         let w = wide(text);
         send(self.status, SB_SETTEXTW, 1, w.as_ptr() as isize);
+    }
+
+    /// What the status bar says (set_message).
+    pub fn status_message(&self) -> String {
+        let len = (send(self.status, SB_GETTEXTLENGTHW, 1, 0) & 0xFFFF) as usize;
+        let mut buf = vec![0u16; len + 1];
+        send(self.status, SB_GETTEXTW, 1, buf.as_mut_ptr() as isize);
+        from_wide(&buf).to_string_lossy().into_owned()
     }
 
     /// A status message once per run (5.3); with `after_load`, once the folder being loaded has landed (a navigation

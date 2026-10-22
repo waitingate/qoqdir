@@ -135,11 +135,7 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
     auto path = [dir](const std::wstring& name) { return joinPath(dir, name); };
     auto idle = [this] { return !loading(); };
     auto at = [this, idle](const std::wstring& p) { return idle() && samePath(tab().path, p); };
-    auto statusMessage = [this] {
-        std::wstring s(size_t(LOWORD(SendMessageW(status_, SB_GETTEXTLENGTHW, 1, 0))) + 1, L'\0');
-        SendMessageW(status_, SB_GETTEXTW, 1, reinterpret_cast<LPARAM>(s.data()));
-        return std::wstring(s.c_str());
-    };
+    auto statusMessage = [this] { return message(); };
     auto statusHas = [statusMessage](const wchar_t* text) { return statusMessage().find(text) != std::wstring::npos; };
     auto listed = [this](const std::wstring& name) {
         for (int i = 0; i < list_.count(); ++i)
@@ -1763,7 +1759,7 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
             open(path(L"missing two"), Nav::New);
         },
         [=, this] { return idle() && active_ == 1 && list_.shows(path(L"sub")) && statusHas(L"missing two"); });
-    // What the status bar says after the error stays: only "Loading..." gives the error its place back.
+    // What the status bar says after the error stays: "Loading..." gives back what it took the place of.
     add(L"(the first tab, a third time)", [=, this] { switchTab(0); },
         [=, this] { return at(path(L"big")) && active_ == 0; });
     add(L"(a failed move overtakes the switch while a read of sub is still out)",
@@ -1807,6 +1803,45 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
             return !loading() && generation_ == *reads && tab().unavailable && statusHas(L"is not available");
         });
     add(L"(F5 shows it again)", [=, this] { refresh(); }, [=, this] { return idle() && list_.shows(path(L"sub")); });
+    add(L"(the first tab, a fifth time)", [=, this] { switchTab(0); },
+        [=, this] { return at(path(L"big")) && active_ == 0; });
+    add(L"(a failed move overtakes the switch while a read of sub is still out, once more)",
+        [=, this] {
+            restoreRead_ = kStuckRead;
+            restorePath_ = path(L"sub");
+            switchTab(1);
+            open(path(L"missing five"), Nav::New);
+        },
+        [=, this] { return statusHas(L"missing five") && !loading(); });
+    add(L"...and if \"Loading...\" takes the place of its error, the error comes back with the tab's folder (4.2)",
+        [=, this] {
+            Listing late;
+            late.path = path(L"sub");
+            late.error = ERROR_OPERATION_ABORTED;
+            onLoaded(std::move(late), kStuckRead);
+            SendMessageW(wnd_, WM_TIMER, kLoadingTimer, 0);   // as if the read took over 250 ms
+        },
+        [=, this] { return idle() && list_.shows(path(L"sub")) && statusHas(L"missing five"); });
+    add(L"(the first tab, a sixth time)", [=, this] { switchTab(0); },
+        [=, this] { return at(path(L"big")) && active_ == 0; });
+    add(L"(a failed move overtakes the switch while a read of sub is still out, a last time)",
+        [=, this] {
+            restoreRead_ = kStuckRead;
+            restorePath_ = path(L"sub");
+            switchTab(1);
+            open(path(L"missing six"), Nav::New);
+        },
+        [=, this] { return statusHas(L"missing six") && !loading(); });
+    add(L"...and if it takes the place of a message shown since, that message comes back instead (4.2)",
+        [=, this] {
+            setMessage(L"a newer message");
+            Listing late;
+            late.path = path(L"sub");
+            late.error = ERROR_OPERATION_ABORTED;
+            onLoaded(std::move(late), kStuckRead);
+            SendMessageW(wnd_, WM_TIMER, kLoadingTimer, 0);   // as if the read took over 250 ms
+        },
+        [=, this] { return idle() && list_.shows(path(L"sub")) && statusHas(L"a newer message"); });
     add(L"(close that tab)", [=, this] { closeTab(1); }, [=, this] { return at(path(L"big")) && tabs_.size() == 1; });
 
     add(L"copies 10,000 selected files to the clipboard",
