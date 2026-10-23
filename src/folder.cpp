@@ -130,8 +130,10 @@ std::wstring expandVars(const std::wstring& text) {
 }
 
 std::wstring resolveArgument(const std::wstring& arg) {
-    // "D:" alone means the drive's root (as in Explorer), not Windows' "current folder on D:".
-    return normalizePath(fullPath(arg.size() == 2 && arg[1] == L':' ? arg + L'\\' : arg));
+    // Clean it first (quotes, spaces, "D:" -> "D:\", as in Explorer), then resolve against the working folder only
+    // what is still relative, so a quoted "D:\" from cmd (it arrives as D:") is not taken as D:'s current folder.
+    std::wstring a = normalizePath(arg);
+    return a.empty() || isAbsolutePath(a) ? a : normalizePath(fullPath(a));
 }
 
 std::wstring parentProcessName() {

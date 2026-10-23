@@ -10,7 +10,8 @@ use std::sync::OnceLock;
 
 use windows::Win32::Foundation::{CloseHandle, HWND};
 use windows::Win32::Storage::FileSystem::{
-    CreateFileW, FILE_APPEND_DATA, FILE_ATTRIBUTE_NORMAL, FILE_SHARE_READ, OPEN_ALWAYS, WriteFile,
+    CreateFileW, FILE_APPEND_DATA, FILE_ATTRIBUTE_NORMAL, FILE_FLAG_OPEN_REPARSE_POINT, FILE_SHARE_READ,
+    FILE_SHARE_WRITE, OPEN_ALWAYS, WriteFile,
 };
 use windows::Win32::System::Diagnostics::Debug::{
     AddVectoredExceptionHandler, CONTEXT, CONTEXT_CONTROL_AMD64, CONTEXT_INTEGER_AMD64, EXCEPTION_POINTERS,
@@ -199,8 +200,11 @@ fn walk_stack(thread: u32) -> ([u64; 24], usize) {
                 count += 1;
                 let rsp = c.0.Rsp;
                 let Some((base, f)) = function_entry(c.0.Rip) else {
-                    if count > 1 {
-                        break; // only the innermost frame can be a leaf: the walk is lost
+                    // Only the innermost frame can be a leaf, and only inside an image: code in no module (a shell
+                    // extension's JIT) has no unwind table, so taking [Rsp] as a return address could read off the
+                    // stack and fault the watch thread, ending a program whose window was merely slow (4.10).
+                    if count > 1 || image_base(c.0.Rip).is_none() {
+                        break;
                     }
                     c.0.Rip = *(c.0.Rsp as *const u64);
                     c.0.Rsp += 8;
@@ -279,7 +283,11 @@ fn log(what: fmt::Arguments) {
         w.position() as usize
     };
     unsafe {
-        let Ok(f) = CreateFileW(pcwstr(path), FILE_APPEND_DATA.0, FILE_SHARE_READ, None, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, None)
+        // Share writes too, so two processes appending at once don't lose a line to a sharing violation, and open
+        // the link itself, not a target it was pointed at, so a line can't be redirected into another file.
+        let share = FILE_SHARE_READ | FILE_SHARE_WRITE;
+        let attrs = FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OPEN_REPARSE_POINT;
+        let Ok(f) = CreateFileW(pcwstr(path), FILE_APPEND_DATA.0, share, None, OPEN_ALWAYS, attrs, None)
         else {
             return;
         };

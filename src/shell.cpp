@@ -557,6 +557,8 @@ std::vector<std::wstring> savedFolders(const std::wstring& dir) {
 
 void inBackground(std::function<void()> work) {
     std::thread([work = std::move(work)] {
+        ULONG guard = 64 * 1024;   // room for the crash log if this worker overflows its stack (as the main thread has)
+        SetThreadStackGuarantee(&guard);
         HRESULT co = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE);
         work();
         if (SUCCEEDED(co)) CoUninitialize();

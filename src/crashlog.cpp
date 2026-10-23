@@ -42,8 +42,11 @@ const char* describe(const void* p, char* out, size_t size) {
 }
 
 void writeLine(const char* what) {
-    HANDLE f = CreateFileW(logPath, FILE_APPEND_DATA, FILE_SHARE_READ, nullptr, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL,
-                           nullptr);
+    // Share writes too, so two processes appending at once (two windows hung on the same server) don't lose a line
+    // to a sharing violation; open the link itself, not a target it was pointed at, so an appended line can't be
+    // redirected into another file.
+    HANDLE f = CreateFileW(logPath, FILE_APPEND_DATA, FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_ALWAYS,
+                           FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
     if (f == INVALID_HANDLE_VALUE) return;
     SYSTEMTIME t;
     GetLocalTime(&t);
@@ -178,7 +181,10 @@ int walkStack(DWORD thread, DWORD64 (&frames)[24]) {
             DWORD64 base = 0, rsp = c.Rsp;
             RUNTIME_FUNCTION* fn = functionEntry(c.Rip, &base);
             if (!fn) {
-                if (count > 1) break;   // only the innermost frame can be a leaf: the walk is lost
+                // Only the innermost frame can be a leaf, and only inside an image: code in no module (a shell
+                // extension's JIT) has no unwind table, so taking [Rsp] as a return address could read off the
+                // stack and fault the watch thread, ending a program whose window was merely slow (4.10).
+                if (count > 1 || !imageBase(c.Rip)) break;
                 c.Rip = *reinterpret_cast<DWORD64*>(c.Rsp);
                 c.Rsp += 8;
                 continue;
@@ -200,6 +206,8 @@ int walkStack(DWORD thread, DWORD64 (&frames)[24]) {
 // Every second: once the window is hung, where its thread is, once per hang. The frames are named after the thread
 // runs again.
 DWORD WINAPI hangWatch(void*) {
+    ULONG guard = 64 * 1024;   // room for onCrash's line should this thread overflow its stack (as the main one has)
+    SetThreadStackGuarantee(&guard);
     bool said = false;
     for (;; Sleep(1000)) {
         if (!IsWindow(g_watched)) return 0;

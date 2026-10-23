@@ -233,12 +233,16 @@ pub fn expand_vars(text: &OsStr) -> OsString {
 
 /// A folder given on the command line, relative to the current one ("qoqdir .").
 fn resolve_argument(arg: &OsStr) -> Location {
-    // "D:" alone means the drive's root (as in Explorer), not Windows' "current folder on D:".
-    let mut arg = arg.to_os_string();
-    if arg.len() == 2 && arg.to_string_lossy().ends_with(':') {
-        arg.push("\\");
+    // Clean it first (quotes, spaces, "D:" -> "D:\", as in Explorer), then resolve against the working folder only
+    // what is still relative, so a quoted "D:\" from cmd (it arrives as D:") is not taken as D:'s current folder.
+    let location = normalize(arg);
+    match location.path() {
+        Some(p) if !is_absolute_path(p.as_os_str()) => {
+            let abs = std::path::absolute(p);
+            normalize(abs.as_deref().map_or(p.as_os_str(), |a| a.as_os_str()))
+        }
+        _ => location,
     }
-    normalize(std::path::absolute(&arg).as_deref().map_or(arg.as_os_str(), |p| p.as_os_str()))
 }
 
 /// The command line: qoqdir [switches] [folders...] (see 5.10 in docs/SPEC.md).
@@ -752,6 +756,7 @@ mod tests {
         assert!(resolve_argument(OsStr::new(".")).same(&Location::dir(cwd))); // "qoqdir ." from a terminal
         assert_eq!(text(&resolve_argument(OsStr::new("C:\\Windows\\"))), "C:\\Windows");
         assert_eq!(text(&resolve_argument(OsStr::new("C:"))), "C:\\"); // a drive alone is its root, as in Explorer
+        assert_eq!(text(&resolve_argument(OsStr::new("C:\""))), "C:\\"); // cmd's quoted "C:\" arrives as C:": the root
         assert_eq!(text(&normalize(OsStr::new("\\\\server\\share\\"))), "\\\\server\\share");
         let windir = std::env::var_os("SystemRoot").unwrap();
         assert!(normalize(&expand_vars(OsStr::new("%SystemRoot%"))).same(&Location::dir(windir)));

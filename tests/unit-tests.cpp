@@ -185,6 +185,8 @@ int main(int argc, char** argv) {
         CHECK_EQ(parseCommandLine({L"-x"}).error, L"Unknown option: -x");
         // A network folder comes out as itself, and a name that starts with "-" is a folder too.
         CHECK_EQ(parseCommandLine({L"--tab=\\\\nas\\share\\"}).folders.at(0), L"\\\\nas\\share");
+        // cmd turns `qoqdir "C:\"` into the argument C:" (trailing quote): cleaned to the drive root, not C:'s cwd.
+        CHECK_EQ(parseCommandLine({L"C:\""}).folders.at(0), L"C:\\");
         CommandLine dash = parseCommandLine({L"--tab=-h"});
         CHECK(dash.error.empty() && !dash.help && dash.folders.size() == 1 && dash.folders[0].ends_with(L"\\-h"));
         CHECK(!parseCommandLine({L"--tab=C:\\A", L"-q"}).error.empty());
