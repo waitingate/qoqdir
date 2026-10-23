@@ -13,9 +13,9 @@ use windows::Win32::Storage::FileSystem::{
     CreateFileW, FILE_APPEND_DATA, FILE_ATTRIBUTE_NORMAL, FILE_SHARE_READ, OPEN_ALWAYS, WriteFile,
 };
 use windows::Win32::System::Diagnostics::Debug::{
-    CONTEXT, CONTEXT_CONTROL_AMD64, CONTEXT_INTEGER_AMD64, EXCEPTION_POINTERS, GetThreadContext,
-    IMAGE_DIRECTORY_ENTRY_EXCEPTION, IMAGE_NT_HEADERS64, IMAGE_RUNTIME_FUNCTION_ENTRY, RtlVirtualUnwind,
-    SetUnhandledExceptionFilter, UNW_FLAG_NHANDLER,
+    AddVectoredExceptionHandler, CONTEXT, CONTEXT_CONTROL_AMD64, CONTEXT_INTEGER_AMD64, EXCEPTION_POINTERS,
+    GetThreadContext, IMAGE_DIRECTORY_ENTRY_EXCEPTION, IMAGE_NT_HEADERS64, IMAGE_RUNTIME_FUNCTION_ENTRY,
+    RtlVirtualUnwind, SetUnhandledExceptionFilter, UNW_FLAG_NHANDLER,
 };
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::System::Memory::{
@@ -34,6 +34,9 @@ use crate::APP_NAME;
 use crate::util::{from_wide, pcwstr, wide};
 
 const EXCEPTION_EXECUTE_HANDLER: i32 = 1;
+const EXCEPTION_CONTINUE_SEARCH: i32 = 0;
+const EXCEPTION_ACCESS_VIOLATION: u32 = 0xC0000005;
+const EXCEPTION_ILLEGAL_INSTRUCTION: u32 = 0xC000001D; // what the overflow trap raises, like the C++ build's
 
 static LOG_PATH: OnceLock<Vec<u16>> = OnceLock::new();
 static LOG_DIR: OnceLock<Vec<u16>> = OnceLock::new(); // set by log_in: the log there instead
@@ -52,6 +55,10 @@ pub fn install() {
         let mut guard = 64 * 1024; // after a stack overflow the filter runs on what is left of the stack: keep room
         let _ = SetThreadStackGuarantee(&mut guard);
         SetUnhandledExceptionFilter(Some(on_crash));
+        // A CPU fault on the main (window) thread is swallowed by the GNU runtime's start-up scope before the filter
+        // above runs, so on_crash never sees it (a worker, outside that scope, still does). A vectored handler runs
+        // first, on every thread, and catches a fatal fault in our own code there too (4.10).
+        AddVectoredExceptionHandler(1, Some(on_vectored));
     }
     std::panic::set_hook(Box::new(|info| {
         log(format_args!("{info}"));
@@ -93,6 +100,23 @@ unsafe extern "system" fn on_crash(e: *const EXCEPTION_POINTERS) -> i32 {
     let r = unsafe { &*(*e).ExceptionRecord };
     log(format_args!("Exception 0x{:08X}  [{}]", r.ExceptionCode.0 as u32, Where(r.ExceptionAddress as usize)));
     EXCEPTION_EXECUTE_HANDLER // ends the process without Windows' own error window
+}
+
+// Runs before any frame's handler, on every thread. A fatal fault (an access violation or the overflow trap) in our
+// own code is a bug of ours: log it and stop, which is the only way one on the main thread reaches the log. A fault
+// elsewhere is left to run its course (the search goes on): an exception a shell extension raises and handles itself
+// must not be turned into a crash (4.1), and a worker's unhandled one still reaches on_crash.
+unsafe extern "system" fn on_vectored(e: *mut EXCEPTION_POINTERS) -> i32 {
+    let r = unsafe { &*(*e).ExceptionRecord };
+    let (code, addr) = (r.ExceptionCode.0 as u32, r.ExceptionAddress as usize);
+    let in_exe = EXE.get().is_some_and(|&(base, size)| (base..base + size).contains(&addr));
+    if in_exe && (code == EXCEPTION_ACCESS_VIOLATION || code == EXCEPTION_ILLEGAL_INSTRUCTION) {
+        log(format_args!("Exception 0x{code:08X}  [{}]", Where(addr)));
+        unsafe {
+            let _ = TerminateProcess(GetCurrentProcess(), code);
+        }
+    }
+    EXCEPTION_CONTINUE_SEARCH
 }
 
 // ---------------------------------------------------------------- hangs
