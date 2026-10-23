@@ -64,8 +64,8 @@ use crate::folder::{
     list_folder, parse_command_line, sort_items, system_dir,
 };
 use crate::shell::{
-    copy_to_clipboard, data_object_at, file_info, item_menu_at, known_folder, paste_into, pidl_from, shortcut_target,
-    type_name,
+    command_program, copy_to_clipboard, data_object_at, file_info, item_menu_at, known_folder, paste_into, pidl_from,
+    shortcut_target, type_name,
 };
 use windows::core::{Interface, w};
 
@@ -1249,6 +1249,22 @@ impl App {
                 a.at(&dir()) && a.status_message().is_empty()
             },
         );
+        let ok = Rc::new(Cell::new(false)); // {a name on neither PATH nor App Paths is refused, "cmd" resolves}
+        let (ok_act, ok_done) = (ok.clone(), ok);
+        s.add(
+            "a program name on neither the PATH nor App Paths is refused, not run from the folder shown",
+            move |_a| {
+                write_file(&p("qoqnotonpath.exe")); // a decoy in the folder: command_program must ignore it
+                let decoy = command_program(OsStr::new("qoqnotonpath"));
+                let on_path = command_program(OsStr::new("cmd"));
+                let _ = std::fs::remove_file(p("qoqnotonpath.exe"));
+                let full = on_path.map(|f| String::from_utf16_lossy(&f).trim_end_matches('\0').to_lowercase());
+                note(format!("cmd -> {}", full.clone().unwrap_or_else(|| "(none)".into())));
+                let cmd_full = full.is_some_and(|s| s.ends_with("cmd.exe") && s.contains('\\'));
+                ok_act.set(decoy.is_none() && cmd_full);
+            },
+            move |_a| ok_done.get(),
+        );
 
         s.add("(open This PC)", |a| a.open(Location::ThisPc, Nav::New, ViewState::default()), |a| a.at_pc());
         s.add(
@@ -1287,6 +1303,22 @@ impl App {
             move |a| a.at(&dir()),
         )
         .during_load();
+        s.add(
+            "typing the path to a folder shortcut opens the folder here, not in Explorer (4.4)",
+            |a| {
+                make_shortcut(&p("ff-link.lnk"), p("sub"));
+                a.go_to(p("ff-link.lnk"));
+            },
+            |a| a.at(&p("sub")),
+        );
+        s.add(
+            "(remove the shortcut and return to the test folder)",
+            move |a| {
+                let _ = std::fs::remove_file(p("ff-link.lnk"));
+                a.open(Location::dir(dir()), Nav::New, ViewState::default());
+            },
+            move |a| a.at(&dir()) && !p("ff-link.lnk").exists(),
+        );
         s.add("typing a subfolder's name opens it here (not in Explorer)", |a| a.go_to("sub"), |a| a.at(&p("sub")));
         s.add("typing ..\\ goes up", |a| a.go_to("..\\"), move |a| a.at(&dir()));
         s.add("typing .\\sub opens it here (not in Explorer)", |a| a.go_to(".\\sub"), |a| a.at(&p("sub")));

@@ -2,6 +2,7 @@
 #include "shell.h"
 
 #include <shellapi.h>
+#include <shlwapi.h>
 
 #include <algorithm>
 #include <thread>
@@ -396,22 +397,41 @@ void openInExplorer(HWND owner, const std::wstring& dir, bool search) {
 }
 
 namespace {
-// The program a bare name means ("cmd", "code", "services.msc"): the one on the PATH, as the Run box finds it.
-// Windows would look in the folder shown first, where a program of that name could be waiting (in Downloads, on a
-// USB stick). A path, a web address or a document ("notes.txt") stays as typed.
-std::wstring programOnPath(const std::wstring& name) {
+// The full path App Paths gives for a program name ("chrome", "winword"), as the Run box finds one there, or ""
+// for none. The key is the name with ".exe" when it carries no extension of its own.
+std::wstring appPathProgram(const std::wstring& name) {
+    std::wstring key = extensionOf(name).empty() ? name + L".exe" : name;
+    wchar_t out[1024];
+    DWORD n = DWORD(std::size(out));
+    return SUCCEEDED(AssocQueryStringW(ASSOCF_OPEN_BYEXENAME, ASSOCSTR_EXECUTABLE, key.c_str(), nullptr, out, &n))
+               ? out
+               : L"";
+}
+}  // namespace
+
+// The full path a bare name typed in the address bar runs, found the way the Run box finds one: the PATH, then
+// App Paths. Windows would also look in the folder shown, where a program of that name could be waiting (in
+// Downloads, on a USB stick), so a program name found in neither place comes back as nothing and is not run from
+// there (5.3). A path or a web address (it has a slash or colon), and a document name (an extension outside
+// PATHEXT, "notes.txt"), stay as typed: a document still opens the folder shown's own.
+std::optional<std::wstring> commandProgram(const std::wstring& name) {
     if (name.find_first_of(L"\\/:") != std::wstring::npos) return name;
-    std::wstring own = extensionOf(name), path = expandVars(L"%PATH%"), found(32768, L'\0');
-    std::wstring exts = toLower(expandVars(L"%PATHEXT%")) + L';';
+    std::wstring own = extensionOf(name);
+    std::wstring exts = toLower(expandVars(L"%PATHEXT%"));
+    if (exts.find(L'%') != std::wstring::npos) exts = L".com;.exe;.bat;.cmd";   // unset: the usual few
+    exts += L';';
+    if (!own.empty() && exts.find(own + L';') == std::wstring::npos) return name;   // a document, not a program
+    std::wstring path = expandVars(L"%PATH%"), found(32768, L'\0');
     for (size_t at = 0, end; (end = exts.find(L';', at)) != std::wstring::npos; at = end + 1) {
         std::wstring ext = exts.substr(at, end - at);
-        if (!own.empty() && ext != own) continue;
+        if (ext.empty() || (!own.empty() && ext != own)) continue;
         DWORD n = SearchPathW(path.c_str(), name.c_str(), ext.c_str(), DWORD(found.size()), found.data(), nullptr);
         if (n > 0 && n < found.size()) return found.substr(0, n);
     }
-    return name;
+    std::wstring app = appPathProgram(name);
+    if (!app.empty()) return app;
+    return std::nullopt;   // on neither PATH nor App Paths: not the folder shown's own file (5.3)
 }
-}  // namespace
 
 bool runCommand(HWND owner, const std::wstring& command, const std::wstring& workDir) {
     SHELLEXECUTEINFOW sei{};
@@ -420,17 +440,18 @@ bool runCommand(HWND owner, const std::wstring& command, const std::wstring& wor
     sei.hwnd = owner;
     sei.lpDirectory = workDir.empty() ? nullptr : workDir.c_str();
     sei.nShow = SW_SHOWNORMAL;
-    std::wstring file = programOnPath(command);
-    sei.lpFile = file.c_str();
-    if (ShellExecuteExW(&sei)) return true;
+    auto run = [&](std::optional<std::wstring> file, const wchar_t* args) {
+        if (!file) return false;   // a program name on neither PATH nor App Paths: never run from the folder (5.3)
+        sei.lpFile = file->c_str();
+        sei.lpParameters = args;
+        return ShellExecuteExW(&sei) != FALSE;
+    };
+    if (run(commandProgram(command), nullptr)) return true;
     // "notepad file.txt": program first, the rest as arguments.
     size_t space = command.find(L' ');
     if (space == std::wstring::npos) return false;
     std::wstring args = command.substr(space + 1);
-    file = programOnPath(command.substr(0, space));
-    sei.lpFile = file.c_str();
-    sei.lpParameters = args.c_str();
-    return ShellExecuteExW(&sei) != FALSE;
+    return run(commandProgram(command.substr(0, space)), args.c_str());
 }
 
 void dragOut(HWND owner, const std::wstring& dir, const std::vector<Item>& items) {

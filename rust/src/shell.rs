@@ -34,6 +34,7 @@ use windows::Win32::UI::Controls::HIMAGELIST;
 use windows::Win32::UI::Input::KeyboardAndMouse::{VK_CONTROL, VK_SHIFT};
 use windows::Win32::UI::Shell::Common::ITEMIDLIST;
 use windows::Win32::UI::Shell::{
+    ASSOCF_OPEN_BYEXENAME, ASSOCSTR_EXECUTABLE, AssocQueryStringW,
     CMF_CANRENAME, CMF_EXTENDEDVERBS, CMF_NORMAL, CMIC_MASK_CONTROL_DOWN, CMIC_MASK_PTINVOKE, CMIC_MASK_SHIFT_DOWN,
     CMINVOKECOMMANDINFO, CMINVOKECOMMANDINFOEX, CLSID_DragDropHelper, FOF_ALLOWUNDO,
     FOF_NOCONFIRMATION, FOF_WANTNUKEWARNING, FOFX_RECYCLEONDELETE, FOLDERID_ComputerFolder, FileOperation,
@@ -54,7 +55,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
     MsgWaitForMultipleObjects, PM_REMOVE, PeekMessageW, PostMessageW, QS_ALLINPUT, SW_SHOWNORMAL, TPM_RETURNCMD,
     TPM_RIGHTBUTTON, TrackPopupMenuEx, TranslateMessage,
 };
-use windows::core::{GUID, HRESULT, IUnknown, Interface, PCSTR, PCWSTR, PSTR, Ref, Result, implement, s, w};
+use windows::core::{GUID, HRESULT, IUnknown, Interface, PCSTR, PCWSTR, PSTR, PWSTR, Ref, Result, implement, s, w};
 
 use crate::folder::{Item, Location, SortKey, exists, extension_of, list_folder, normalize, sort_items};
 use crate::util::{OwnedMenu, Pidl, copy_to, from_wide, key_down, pcwstr, wide};
@@ -559,38 +560,67 @@ pub fn open_in_explorer(owner: HWND, dir: &Path, search: bool) {
     }
 }
 
-/// The program a bare name means ("cmd", "code", "services.msc"): the one on the PATH, as the Run box finds it.
-/// Windows would look in the folder shown first, where a program of that name could be waiting (in Downloads, on a
-/// USB stick). A path, a web address or a document ("notes.txt") stays as typed.
-fn program_on_path(name: &OsStr) -> Vec<u16> {
+/// The full path App Paths gives for a program name ("chrome", "winword"), as the Run box finds one there, or
+/// None. The key is the name with ".exe" when it carries no extension of its own.
+fn app_path_program(name: &OsStr) -> Option<Vec<u16>> {
+    let key = if extension_of(name).is_empty() { wide(format!("{}.exe", name.to_string_lossy())) } else { wide(name) };
+    let mut out = vec![0u16; 1024];
+    let mut n = out.len() as u32;
+    let hr = unsafe {
+        AssocQueryStringW(ASSOCF_OPEN_BYEXENAME, ASSOCSTR_EXECUTABLE, pcwstr(&key), PCWSTR::null(),
+                          Some(PWSTR(out.as_mut_ptr())), &mut n)
+    };
+    if hr.is_err() {
+        return None;
+    }
+    let len = out.iter().position(|&c| c == 0)?;
+    out.truncate(len + 1); // keep the NUL
+    Some(out)
+}
+
+/// The full path a bare name typed in the address bar runs, found the way the Run box finds one: the PATH, then
+/// App Paths. Windows would also look in the folder shown, where a program of that name could be waiting (in
+/// Downloads, on a USB stick), so a program name found in neither place comes back as None and is not run from
+/// there (5.3). A path or web address (a slash or colon) and a document name (an extension outside PATHEXT,
+/// "notes.txt") stay as typed: a document still opens the folder shown's own.
+pub fn command_program(name: &OsStr) -> Option<Vec<u16>> {
     let typed = wide(name);
     if typed.iter().any(|&c| c == b'\\' as u16 || c == b'/' as u16 || c == b':' as u16) {
-        return typed;
+        return Some(typed);
     }
-    let (own, path) = (extension_of(name), wide(std::env::var_os("PATH").unwrap_or_default()));
+    let own = extension_of(name);
+    let exts = match std::env::var("PATHEXT") {
+        Ok(v) if !v.is_empty() => v.to_lowercase(),
+        _ => ".com;.exe;.bat;.cmd".to_string(), // unset: the usual few
+    };
+    if !own.is_empty() && !exts.split(';').any(|e| e == own) {
+        return Some(typed); // a document, not a program
+    }
+    let path = wide(std::env::var_os("PATH").unwrap_or_default());
     let mut found = vec![0u16; 32768];
-    for ext in std::env::var("PATHEXT").unwrap_or_default().to_lowercase().split(';') {
-        if !own.is_empty() && ext != own {
+    for ext in exts.split(';') {
+        if ext.is_empty() || (!own.is_empty() && ext != own) {
             continue;
         }
         let n = unsafe { SearchPathW(pcwstr(&path), pcwstr(&typed), pcwstr(&wide(ext)), Some(&mut found), None) } as usize;
         if n > 0 && n < found.len() {
             found.truncate(n + 1); // with its NUL
-            return found;
+            return Some(found);
         }
     }
-    typed
+    app_path_program(name)
 }
 
 /// Runs what was typed in the address bar: "cmd", "notepad file.txt", a web address...
 pub fn run_command(owner: HWND, command: &OsStr, work_dir: Option<&Path>) -> bool {
     let dir = work_dir.map(wide);
-    let run = |file: &[u16], args: Option<&[u16]>| {
+    let run = |file: Option<Vec<u16>>, args: Option<&[u16]>| {
+        let Some(file) = file else { return false }; // on neither PATH nor App Paths: not run from the folder (5.3)
         let mut sei = SHELLEXECUTEINFOW {
             cbSize: size_of::<SHELLEXECUTEINFOW>() as u32,
             fMask: SEE_MASK_FLAG_NO_UI,
             hwnd: owner,
-            lpFile: pcwstr(file),
+            lpFile: pcwstr(&file),
             lpParameters: args.map_or(PCWSTR::null(), pcwstr),
             lpDirectory: dir.as_deref().map_or(PCWSTR::null(), pcwstr),
             nShow: SW_SHOWNORMAL.0,
@@ -599,11 +629,11 @@ pub fn run_command(owner: HWND, command: &OsStr, work_dir: Option<&Path>) -> boo
         unsafe { ShellExecuteExW(&mut sei).is_ok() }
     };
     let text = command.to_string_lossy();
-    if run(&program_on_path(command), None) {
+    if run(command_program(command), None) {
         return true;
     }
     match text.split_once(' ') {
-        Some((file, args)) => run(&program_on_path(OsStr::new(file)), Some(&wide(args))),
+        Some((file, args)) => run(command_program(OsStr::new(file)), Some(&wide(args))),
         None => false,
     }
 }

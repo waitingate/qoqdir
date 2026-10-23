@@ -59,7 +59,7 @@ pub struct FolderTree {
     batch_msg: u32,
     icon_msg: u32,
     reads: Cell<u32>,                         // numbers every read started
-    paths: RefCell<HashMap<isize, Location>>, // each node's folder (or shortcut); a node leaves it when deleted
+    paths: RefCell<HashMap<isize, (Location, bool)>>, // each node's folder or shortcut (bool: a bookmark shortcut)
     reading: RefCell<HashMap<isize, u32>>,    // nodes whose subfolders are being read, by read number
     bookmarks_empty: Cell<bool>,              // Bookmarks was read and found empty (it keeps its arrow)
     open_at: Cell<u64>,                       // when the node a drag lights up opens (0: done)
@@ -108,9 +108,9 @@ fn read_children(batch: &mut TreeBatch, location: &Location, shortcuts: bool) {
 /// The local folder a node stands for: its own, or a bookmark shortcut's target (read from the .lnk alone). None for
 /// This PC, a link to a file or a web page, and anything on the network: asking Windows about a server that is off
 /// would freeze the drag.
-fn local_folder(location: Location) -> Option<Location> {
+fn local_folder(location: Location, shortcut: bool) -> Option<Location> {
     let path = location.path()?.to_path_buf(); // This PC: none
-    let location = if is_shortcut(path.as_os_str()) {
+    let location = if shortcut {
         match shortcut_target(&path)? {
             (target, true) => target,
             _ => return None, // a link to a file
@@ -193,7 +193,8 @@ impl FolderTree {
     pub fn fill(&self) {
         // Forgets each node's path and its read in flight too (TVN_DELETEITEM).
         send(self.hwnd, TVM_DELETEITEM, 0, TVI_ROOT.0);
-        let bookmarks = self.add(TVI_ROOT, self.bookmarks.clone(), OsStr::new("Bookmarks"), folder_icon(), false, TVI_LAST);
+        let bookmarks =
+            self.add(TVI_ROOT, self.bookmarks.clone(), OsStr::new("Bookmarks"), folder_icon(), false, TVI_LAST);
         self.start_worker(0, read_user_folders); // the user folders arrive later, like the drives
         let (_, icon) = describe(&Location::ThisPc);
         let this_pc = self.add(TVI_ROOT, Location::ThisPc, OsStr::new("This PC"), icon, false, TVI_LAST);
@@ -238,7 +239,8 @@ impl FolderTree {
     /// The same for one folder's nodes: the folder shown in the list when its subfolders changed, or the parent of a
     /// node whose own menu was used (the node's folder may be gone).
     pub fn refresh_folder(&self, dir: &Location) {
-        let nodes: Vec<isize> = self.paths.borrow().iter().filter(|(_, l)| l.same(dir)).map(|(&n, _)| n).collect();
+        let nodes: Vec<isize> =
+            self.paths.borrow().iter().filter(|(_, (l, _))| l.same(dir)).map(|(&n, _)| n).collect();
         for node in nodes {
             self.reread(node);
         }
@@ -247,7 +249,7 @@ impl FolderTree {
     fn reread(&self, node: isize) {
         let mut item = TVITEMW { mask: TVIF_CHILDREN, hItem: HTREEITEM(node), ..Default::default() };
         send(self.hwnd, TVM_GETITEMW, 0, &mut item as *mut _ as isize);
-        let none = item.cChildren.0 == 0 && !is_shortcut(&self.location_of(HTREEITEM(node)).text());
+        let none = item.cChildren.0 == 0 && !self.shortcut_of(HTREEITEM(node));
         // An empty Bookmarks keeps its arrow (add_children), so the arrow can't tell: its last read does.
         let empty_root = self.bookmarks_empty.get() && node == self.root();
         if self.child(node) != 0 || none || empty_root {
@@ -255,7 +257,8 @@ impl FolderTree {
         }
     }
 
-    fn add(&self, parent: HTREEITEM, location: Location, text: &OsStr, icon: i32, leaf: bool, after: HTREEITEM) -> HTREEITEM {
+    fn add(&self, parent: HTREEITEM, location: Location, text: &OsStr, icon: i32, shortcut: bool, after: HTREEITEM)
+           -> HTREEITEM {
         let text = wide(text);
         let ins = TVINSERTSTRUCTW {
             hParent: parent,
@@ -266,14 +269,15 @@ impl FolderTree {
                     pszText: PWSTR(text.as_ptr() as *mut u16),
                     iImage: icon,
                     iSelectedImage: icon,
-                    cChildren: TVITEMEXW_CHILDREN(if leaf { 0 } else { 1 }), // a folder's are unknown until expanded
+                    // a shortcut has no arrow; a folder's children are unknown until expanded
+                    cChildren: TVITEMEXW_CHILDREN(if shortcut { 0 } else { 1 }),
                     ..Default::default()
                 },
             },
         };
         let node = send(self.hwnd, TVM_INSERTITEMW, 0, &ins as *const _ as isize);
         if node != 0 {
-            self.paths.borrow_mut().insert(node, location);
+            self.paths.borrow_mut().insert(node, (location, shortcut));
         }
         HTREEITEM(node)
     }
@@ -304,7 +308,12 @@ impl FolderTree {
     }
 
     fn location_of(&self, node: HTREEITEM) -> Location {
-        self.paths.borrow()[&node.0].clone() // a node that is not there is a dead handle: stop loudly (4.10)
+        self.paths.borrow()[&node.0].0.clone() // a node that is not there is a dead handle: stop loudly (4.10)
+    }
+
+    // A bookmark shortcut, not a folder (so a folder named "x.lnk" is not treated as one, 5.6).
+    fn shortcut_of(&self, node: HTREEITEM) -> bool {
+        self.paths.borrow()[&node.0].1
     }
 
     fn start_reading(&self, node: HTREEITEM) {
@@ -372,7 +381,7 @@ impl FolderTree {
             }
             let same = shown.len() == batch.children.len() && {
                 let paths = self.paths.borrow();
-                shown.iter().zip(&batch.children).all(|(n, c)| text(&paths[n]) == text(&c.location))
+                shown.iter().zip(&batch.children).all(|(n, c)| text(&paths[n].0) == text(&c.location))
             };
             if same {
                 return;
@@ -432,13 +441,13 @@ impl FolderTree {
     }
 
     /// The location under a screen point, or of the selected node for (-1, -1).
-    pub fn location_at(&self, pt: POINT) -> Option<Location> {
+    pub fn location_at(&self, pt: POINT) -> Option<(Location, bool)> {
         let node = if pt.x == -1 && pt.y == -1 {
             send(self.hwnd, TVM_GETNEXTITEM, TVGN_CARET as usize, 0)
         } else {
             self.node_at(pt).0
         };
-        (node != 0).then(|| self.location_of(HTREEITEM(node)))
+        (node != 0).then(|| (self.location_of(HTREEITEM(node)), self.shortcut_of(HTREEITEM(node))))
     }
 
     /// During a drag: the local folder under the cursor, or a bookmark shortcut's, that may take the drop (`None` for
@@ -451,13 +460,17 @@ impl FolderTree {
         if node != self.drop_highlight() {
             send(self.hwnd, TVM_SELECTITEM, TVGN_DROPHILITE as usize, node);
             self.open_at.set(now + 700);
-            let folder = if node == 0 { None } else { local_folder(self.location_of(HTREEITEM(node))) };
+            let folder = (node != 0)
+                .then(|| local_folder(self.location_of(HTREEITEM(node)), self.shortcut_of(HTREEITEM(node))))
+                .flatten();
             *self.drop_folder.borrow_mut() = folder;
         } else if node != 0 && self.open_at.get() != 0 && now >= self.open_at.get() {
             send(self.hwnd, TVM_EXPAND, TVE_EXPAND.0 as usize, node);
             self.open_at.set(0); // once: a folder that can't be read would be read again and again
         }
-        self.drop_folder.borrow().clone()
+        // With the lit node gone (a drive came or went, Bookmarks changed, the tree rebuilt under the pointer), the
+        // cursor is now over empty space: the drop goes nowhere, not to the node that was lit here before.
+        if node == 0 { None } else { self.drop_folder.borrow().clone() }
     }
 
     // ------------------------------------------------------------ notifications
@@ -466,7 +479,7 @@ impl FolderTree {
     ///
     /// # Safety
     /// `nm` must be the NMHDR of a WM_NOTIFY from this tree.
-    pub unsafe fn on_notify(&self, nm: *const NMHDR) -> Option<Location> {
+    pub unsafe fn on_notify(&self, nm: *const NMHDR) -> Option<(Location, bool)> {
         match unsafe { (*nm).code } {
             TVN_ITEMEXPANDINGW => {
                 let tv = unsafe { &*(nm as *const NMTREEVIEWW) };
@@ -496,15 +509,28 @@ impl FolderTree {
             }
             TVN_SELCHANGEDW => {
                 let tv = unsafe { &*(nm as *const NMTREEVIEWW) };
-                let by_user = tv.action.0 == TVC_BYMOUSE.0 || tv.action.0 == TVC_BYKEYBOARD.0;
-                by_user.then(|| self.location_of(tv.itemNew.hItem))
+                if tv.action.0 != TVC_BYMOUSE.0 && tv.action.0 != TVC_BYKEYBOARD.0 {
+                    return None;
+                }
+                let node = tv.itemNew.hItem;
+                let shortcut = self.shortcut_of(node);
+                if tv.action.0 == TVC_BYKEYBOARD.0 && shortcut {
+                    // Moving the selection with the keyboard opens a folder shortcut, but not a program or a web link:
+                    // those need Enter, a click or the menu, so arrowing through Bookmarks starts nothing (4.4, 5.6).
+                    match shortcut_target(self.location_of(node).path()?) {
+                        Some((_, true)) => {}
+                        _ => return None,
+                    }
+                }
+                Some((self.location_of(node), shortcut))
             }
             NM_CLICK => {
                 // Clicking the node that is already selected sends no change, so open it here.
                 let (node, part) = self.node_at(cursor_pos());
                 let selected = send(self.hwnd, TVM_GETNEXTITEM, TVGN_CARET as usize, 0);
                 let on_item = part & (TVHT_ONITEM.0 | TVHT_ONITEMRIGHT.0) != 0;
-                (node != 0 && node == selected && on_item).then(|| self.location_of(HTREEITEM(node)))
+                (node != 0 && node == selected && on_item)
+                    .then(|| (self.location_of(HTREEITEM(node)), self.shortcut_of(HTREEITEM(node))))
             }
             _ => None,
         }

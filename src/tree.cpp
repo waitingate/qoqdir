@@ -45,9 +45,9 @@ void readChildren(TreeBatch& batch, const std::wstring& dir, bool shortcuts) {
 // The local folder a node stands for: its own, or a bookmark shortcut's target (read from the .lnk alone). None for
 // This PC, a link to a file or a web page, and anything on the network: asking Windows about a server that is off
 // would freeze the drag.
-std::optional<std::wstring> localFolder(std::wstring path) {
+std::optional<std::wstring> localFolder(std::wstring path, bool shortcut) {
     bool folder = true;
-    if (isShortcut(path)) path = shortcutTarget(path, &folder).value_or(L"");
+    if (shortcut) path = shortcutTarget(path, &folder).value_or(L"");
     bool local = folder && path.size() >= 3 && path[1] == L':' &&
                  GetDriveTypeW(path.substr(0, 3).c_str()) != DRIVE_REMOTE;
     return local ? std::optional(path) : std::nullopt;
@@ -126,8 +126,8 @@ void FolderTree::refresh() {
 // The same for one folder's nodes: the folder shown in the list when its subfolders changed, or the parent of a node
 // whose own menu was used (the node's folder may be gone).
 void FolderTree::refreshFolder(const std::wstring& dir) {
-    for (const auto& [node, path] : paths_)
-        if (samePath(path, dir)) reread(node);
+    for (const auto& [node, info] : paths_)
+        if (samePath(info.path, dir)) reread(node);
 }
 
 void FolderTree::reread(HTREEITEM n) {
@@ -137,26 +137,28 @@ void FolderTree::reread(HTREEITEM n) {
     TreeView_GetItem(tv_, &item);
     // An empty Bookmarks keeps its arrow (addChildren), so the arrow can't tell: its last read does.
     bool emptyRoot = bookmarksEmpty_ && n == TreeView_GetRoot(tv_);
-    if (TreeView_GetChild(tv_, n) || (!item.cChildren && !isShortcut(pathOf(n))) || emptyRoot) startReading(n);
+    if (TreeView_GetChild(tv_, n) || (!item.cChildren && !shortcutNode(n)) || emptyRoot) startReading(n);
 }
 
-HTREEITEM FolderTree::add(HTREEITEM parent, const std::wstring& path, const std::wstring& text, int icon, bool leaf,
-                          HTREEITEM after) {
+HTREEITEM FolderTree::add(HTREEITEM parent, const std::wstring& path, const std::wstring& text, int icon,
+                          bool shortcut, HTREEITEM after) {
     TVINSERTSTRUCTW ins{};
     ins.hParent = parent;
     ins.hInsertAfter = after;
     ins.item.mask = TVIF_TEXT | TVIF_IMAGE | TVIF_SELECTEDIMAGE | TVIF_CHILDREN;
     ins.item.pszText = const_cast<wchar_t*>(text.c_str());
     ins.item.iImage = ins.item.iSelectedImage = icon;
-    ins.item.cChildren = leaf ? 0 : 1;   // a folder's are unknown until expanded
+    ins.item.cChildren = shortcut ? 0 : 1;   // a shortcut has no arrow; a folder's children are unknown until expanded
     HTREEITEM node = TreeView_InsertItem(tv_, &ins);
-    if (node) paths_[node] = path;
+    if (node) paths_[node] = {path, shortcut};
     return node;
 }
 
 const std::wstring& FolderTree::pathOf(HTREEITEM node) const {
-    return paths_.at(node);   // a node that is not there is a dead handle: stop loudly (4.10)
+    return paths_.at(node).path;   // a node that is not there is a dead handle: stop loudly (4.10)
 }
+
+bool FolderTree::shortcutNode(HTREEITEM node) const { return paths_.at(node).shortcut; }
 
 void FolderTree::startReading(HTREEITEM node) {
     if (reading_.count(node)) return;   // being read
@@ -252,10 +254,11 @@ HTREEITEM FolderTree::nodeAt(POINT screenPt, UINT* where) const {
     return node;
 }
 
-bool FolderTree::pathAt(POINT pt, std::wstring* path) const {
+bool FolderTree::pathAt(POINT pt, std::wstring* path, bool* shortcut) const {
     HTREEITEM node = pt.x == -1 && pt.y == -1 ? TreeView_GetSelection(tv_) : nodeAt(pt);
     if (!node) return false;
     *path = pathOf(node);
+    if (shortcut) *shortcut = shortcutNode(node);
     return true;
 }
 
@@ -266,17 +269,24 @@ std::optional<std::wstring> FolderTree::dropTarget(const POINT* screenPt) {
     if (node != TreeView_GetDropHilight(tv_)) {
         TreeView_SelectDropTarget(tv_, node);
         openAt_ = GetTickCount64() + 700;
-        dropFolder_ = node ? localFolder(pathOf(node)) : std::nullopt;
+        dropFolder_ = node ? localFolder(pathOf(node), shortcutNode(node)) : std::nullopt;
     } else if (node && openAt_ && GetTickCount64() >= openAt_) {
         TreeView_Expand(tv_, node, TVE_EXPAND);
         openAt_ = 0;   // once: a folder that can't be read would be read again and again
     }
-    return dropFolder_;
+    // With the lit node gone (a drive came or went, Bookmarks changed, the tree rebuilt under the pointer), the
+    // cursor is now over empty space: the drop goes nowhere, not to the node that was lit here before.
+    return node ? dropFolder_ : std::nullopt;
 }
 
 // ---------------------------------------------------------------- notifications
 
-bool FolderTree::onNotify(NMHDR* nm, std::wstring* open) {
+bool FolderTree::onNotify(NMHDR* nm, std::wstring* open, bool* shortcut) {
+    auto chose = [&](HTREEITEM node) {   // report the node and whether it is a shortcut
+        *open = pathOf(node);
+        *shortcut = shortcutNode(node);
+        return true;
+    };
     switch (nm->code) {
     case TVN_ITEMEXPANDINGW: {
         auto* tv = reinterpret_cast<NMTREEVIEWW*>(nm);
@@ -301,11 +311,15 @@ bool FolderTree::onNotify(NMHDR* nm, std::wstring* open) {
         return false;
     case TVN_SELCHANGEDW: {
         auto* tv = reinterpret_cast<NMTREEVIEWW*>(nm);
-        if (tv->action == TVC_BYMOUSE || tv->action == TVC_BYKEYBOARD) {
-            *open = pathOf(tv->itemNew.hItem);
-            return true;
+        if (tv->action != TVC_BYMOUSE && tv->action != TVC_BYKEYBOARD) return false;
+        HTREEITEM node = tv->itemNew.hItem;
+        if (tv->action == TVC_BYKEYBOARD && shortcutNode(node)) {
+            // Moving the selection with the keyboard opens a folder shortcut, but not a program or a web link: those
+            // need Enter, a click or the menu, so arrowing through Bookmarks starts nothing (4.4, 5.6).
+            bool folder = false;
+            if (!(shortcutTarget(pathOf(node), &folder) && folder)) return false;
         }
-        return false;
+        return chose(node);
     }
     case NM_CLICK: {
         // Clicking the node that is already selected sends no change, so open it here.
@@ -313,10 +327,8 @@ bool FolderTree::onNotify(NMHDR* nm, std::wstring* open) {
         GetCursorPos(&pt);
         UINT where = 0;
         HTREEITEM node = nodeAt(pt, &where);
-        if (node && node == TreeView_GetSelection(tv_) && (where & (TVHT_ONITEM | TVHT_ONITEMRIGHT))) {
-            *open = pathOf(node);
-            return true;
-        }
+        if (node && node == TreeView_GetSelection(tv_) && (where & (TVHT_ONITEM | TVHT_ONITEMRIGHT)))
+            return chose(node);
         return false;
     }
     }

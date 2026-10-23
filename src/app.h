@@ -115,7 +115,7 @@ private:
     void activate(bool inNewTab);   // Enter / double-click on the selection
     void openShortcut(const std::wstring& path, bool inNewTab);
     void renameNode(const std::wstring& path);                // a tree node's Rename, done in the file list
-    void openNode(const std::wstring& path, bool inNewTab);   // a tree node: folder or bookmark
+    void openNode(const std::wstring& path, bool inNewTab, bool shortcut);   // a tree node: folder or shortcut
     ViewState currentView() const;
     void rememberView();   // the tab leaves the screen: keep its selection and scroll for when it comes back
 

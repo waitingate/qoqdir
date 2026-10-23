@@ -34,29 +34,32 @@ public:
     void addChildren(const TreeBatch& batch);
     void setIcons(HTREEITEM node, const IconBatch& batch);
 
-    // Path of the node under a screen point, or of the selected node when pt is (-1,-1).
-    bool pathAt(POINT screenPt, std::wstring* path) const;
+    // Path of the node under a screen point, or of the selected node when pt is (-1,-1). 'shortcut', when given,
+    // receives whether that node is a bookmark shortcut (not a folder of that name, 5.6).
+    bool pathAt(POINT screenPt, std::wstring* path, bool* shortcut = nullptr) const;
     // During a drag: the local folder under the cursor, or a bookmark shortcut's, that may take the drop (nullptr:
     // the drag left or ended).
     std::optional<std::wstring> dropTarget(const POINT* screenPt);
     // Returns true and sets 'open' when the user chose a folder (or a bookmark shortcut).
-    bool onNotify(NMHDR* nm, std::wstring* open);
+    bool onNotify(NMHDR* nm, std::wstring* open, bool* shortcut);
 
 private:
-    HTREEITEM add(HTREEITEM parent, const std::wstring& path, const std::wstring& text, int icon, bool leaf = false,
-                  HTREEITEM after = TVI_LAST);
+    HTREEITEM add(HTREEITEM parent, const std::wstring& path, const std::wstring& text, int icon, bool shortcut = false,
+                  HTREEITEM after = TVI_LAST);   // a bookmark shortcut gets no expand arrow
     void startReading(HTREEITEM node);
     void reread(HTREEITEM node);   // what refresh() does for one node
     // Runs `reader` on a worker thread to fill a batch, then posts it as the children of `node`.
     void startWorker(HTREEITEM node, std::function<void(TreeBatch&)> reader);
     const std::wstring& pathOf(HTREEITEM node) const;
+    bool shortcutNode(HTREEITEM node) const;   // a bookmark shortcut, not a folder (so a folder named "x.lnk" is not)
     HTREEITEM nodeAt(POINT screenPt, UINT* where = nullptr) const;   // where: on which part of it (TVHT_*)
 
     HWND tv_ = nullptr, parent_ = nullptr;
     std::wstring bookmarks_;
     UINT batchMsg_ = 0, iconMsg_ = 0;
     unsigned reads_ = 0;                      // numbers every read started
-    std::map<HTREEITEM, std::wstring> paths_;   // each node's folder (or shortcut); a node leaves it when deleted
+    struct Node { std::wstring path; bool shortcut = false; };   // a bookmark shortcut, or a folder (its own path)
+    std::map<HTREEITEM, Node> paths_;         // each node's folder or shortcut; a node leaves it when deleted
     std::map<HTREEITEM, unsigned> reading_;   // nodes whose subfolders are being read, by read number
     bool bookmarksEmpty_ = false;             // Bookmarks was read and found empty (it keeps its arrow)
     ULONGLONG openAt_ = 0;                    // when the node a drag lights up opens (0: done)

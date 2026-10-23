@@ -753,6 +753,19 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
             selfTest_->note = L"status: " + statusMessage();
             return at(dir) && statusMessage().empty();
         });
+    auto resolved = std::make_shared<std::pair<bool, bool>>();   // {a name not on PATH is refused, "cmd" resolves}
+    add(L"a program name on neither the PATH nor App Paths is refused, not run from the folder shown",
+        [=, this] {
+            writeFile(path(L"qoqnotonpath.exe"));   // a decoy in the folder: commandProgram must ignore it
+            std::optional<std::wstring> decoy = commandProgram(L"qoqnotonpath");
+            std::optional<std::wstring> onPath = commandProgram(L"cmd");
+            DeleteFileW(path(L"qoqnotonpath.exe").c_str());
+            resolved->first = !decoy;
+            resolved->second = onPath && onPath->size() >= 7 && onPath->find(L'\\') != std::wstring::npos &&
+                               _wcsicmp(onPath->substr(onPath->size() - 7).c_str(), L"cmd.exe") == 0;
+            selfTest_->note = L"cmd -> " + onPath.value_or(L"(none)") + L", decoy " + (decoy ? *decoy : L"(refused)");
+        },
+        [=, this] { return resolved->first && resolved->second; });
 
     add(L"(open This PC)", [=, this] { open(L"", Nav::New); }, [=, this] { return at(L""); });
     add(L"typing . on This PC says Can't find (not handed to Windows, which opens Explorer)",
@@ -781,6 +794,18 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
             open(dir, Nav::New);
         },
         [=, this] { return at(dir); }).whileLoading = true;
+    add(L"typing the path to a folder shortcut opens the folder here, not in Explorer (4.4)",
+        [=, this] {
+            makeShortcut(path(L"ff-link.lnk"), path(L"sub"));
+            goTo(path(L"ff-link.lnk"));
+        },
+        [=, this] { return at(path(L"sub")); });
+    add(L"(remove the shortcut and return to the test folder)",
+        [=, this] {
+            DeleteFileW(path(L"ff-link.lnk").c_str());
+            open(dir, Nav::New);
+        },
+        [=, this] { return at(dir) && !exists(path(L"ff-link.lnk")); });
     add(L"typing a subfolder's name opens it here (not in Explorer)", [=, this] { goTo(L"sub"); },
         [=, this] { return at(path(L"sub")); });
     add(L"typing ..\\ goes up", [=, this] { goTo(L"..\\"); }, [=, this] { return at(dir); });

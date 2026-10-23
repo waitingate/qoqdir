@@ -38,7 +38,11 @@ bool highContrastOn() {
 bool is(const std::wstring& verb, const wchar_t* name) { return _wcsicmp(verb.c_str(), name) == 0; }
 // The menu verbs that open an item, here or in a new tab (or window): Qoqdir opens folders itself.
 bool isOpenVerb(const std::wstring& verb) { return is(verb, L"open") || is(verb, L"explore"); }
-bool isNewTabVerb(const std::wstring& verb) { return is(verb, L"opennewtab") || is(verb, L"opennewwindow"); }
+// opennewprocess is Explorer's "Open in new process": like a new window, so a background tab here, not an Explorer
+// window (4.4).
+bool isNewTabVerb(const std::wstring& verb) {
+    return is(verb, L"opennewtab") || is(verb, L"opennewwindow") || is(verb, L"opennewprocess");
+}
 
 // The text cut to fit 'width' pixels on 'dc', ending in "…" if it was longer. Windows counts the two halves of an
 // emoji as one character, so the cut never splits one.
@@ -602,8 +606,8 @@ void App::onMiddleClick(HWND from, POINT screenPt) {
         ScreenToClient(from, &hit.pt);
         int row = ListView_HitTest(from, &hit);
         if (row >= 0 && row < list_.count() && list_.at(row).isDir()) newTab(list_.pathAt(row), false);
-    } else if (from == tree_.hwnd() && tree_.pathAt(screenPt, &path)) {
-        openNode(path, true);
+    } else if (bool shortcut = false; from == tree_.hwnd() && tree_.pathAt(screenPt, &path, &shortcut)) {
+        openNode(path, true, shortcut);
     }
 }
 
@@ -643,7 +647,8 @@ LRESULT App::onNotify(NMHDR* nm) {
     }
     if (nm->hwndFrom == tree_.hwnd()) {
         std::wstring path;
-        if (tree_.onNotify(nm, &path)) openNode(path, false);
+        bool shortcut = false;
+        if (tree_.onNotify(nm, &path, &shortcut)) openNode(path, false, shortcut);
         return 0;
     }
     if (nm->hwndFrom == tabBar_) {
@@ -699,15 +704,16 @@ void App::onContextMenu(HWND from, POINT pt) {
     }
     if (from == tree_.hwnd()) {
         std::wstring path;
-        if (!tree_.pathAt(pt, &path)) return;
+        bool shortcut = false;
+        if (!tree_.pathAt(pt, &path, &shortcut)) return;
         if (keyboard) {
             RECT r{};
             GetWindowRect(tree_.hwnd(), &r);
             pt = {r.left + scale(24, dpi_), r.top + scale(24, dpi_)};
         }
         showMenu(wnd_, itemMenu(wnd_, path).get(), pt, [&](const std::wstring& verb) {
-            if (isOpenVerb(verb)) openNode(path, false);
-            else if (isNewTabVerb(verb)) openNode(path, true);
+            if (isOpenVerb(verb)) openNode(path, false, shortcut);
+            else if (isNewTabVerb(verb)) openNode(path, true, shortcut);
             else if (is(verb, L"rename")) renameNode(path);
             else return false;
             return true;
@@ -1055,9 +1061,13 @@ void App::onLoadFailed(const Listing& listing, const Pending& p) {
     if (!p.origin.shortcut.empty() && listing.isFile) {
         // A shortcut that leads to a file: Windows opens it (never an unreachable one: that would hang, then fail).
         openFile(wnd_, p.origin.shortcut);
-    } else if (p.origin.typed && listing.isFile) {   // a file typed in the address bar: open it
-        openFile(wnd_, listing.path);
-        showLocation(true);   // the tab stays: what the user types there meanwhile stays too (5.3)
+    } else if (p.origin.typed && listing.isFile) {   // a file or shortcut typed in the address bar
+        if (isShortcut(listing.path)) {
+            openShortcut(listing.path, false);   // a folder opens here; a program or web link is Windows' (4.4)
+        } else {
+            openFile(wnd_, listing.path);
+            showLocation(true);   // the tab stays: what the user types there meanwhile stays too (5.3)
+        }
     } else {
         // Let the user fix what they typed (5.3), unless they moved on: a dead share fails a minute later.
         if (p.origin.typed && GetFocus() == list_.hwnd()) focusEdit(address_);
@@ -1192,9 +1202,10 @@ void App::renameNode(const std::wstring& path) {
     open(parentPath(path), Nav::New, v);
 }
 
-// A node in the tree: a folder, or a bookmark shortcut.
-void App::openNode(const std::wstring& path, bool inNewTab) {
-    if (isShortcut(path)) openShortcut(path, inNewTab);
+// A node in the tree: a folder, or a bookmark shortcut (the tree says which, so a folder named "x.lnk" opens as a
+// folder, not through the shell as a link, 5.6).
+void App::openNode(const std::wstring& path, bool inNewTab, bool shortcut) {
+    if (shortcut) openShortcut(path, inNewTab);
     else if (inNewTab) newTab(path, false);
     else open(path, Nav::New);
 }

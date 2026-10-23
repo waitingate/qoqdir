@@ -67,6 +67,10 @@ void openFile(HWND owner, const std::wstring& path);
 // inside subfolders).
 void openInExplorer(HWND owner, const std::wstring& dir, bool search);
 bool runCommand(HWND owner, const std::wstring& command, const std::wstring& workDir);
+// The full path a typed program name runs (PATH, then App Paths), nothing when it is on neither (so a file of
+// that name in the folder shown is never run, 5.3); a path or a document name comes back unchanged. For runCommand
+// and the self-test.
+std::optional<std::wstring> commandProgram(const std::wstring& name);
 void dragOut(HWND owner, const std::wstring& dir, const std::vector<Item>& items);
 
 // ---------------------------------------------------------------- shortcuts

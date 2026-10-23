@@ -340,8 +340,10 @@ fn delete_word_before(edit: HWND) {
 fn is_open_verb(verb: &str) -> bool {
     ["open", "explore"].iter().any(|v| verb.eq_ignore_ascii_case(v))
 }
+// opennewprocess is Explorer's "Open in new process": like a new window, so a background tab here, not an Explorer
+// window (4.4).
 fn is_new_tab_verb(verb: &str) -> bool {
-    ["opennewtab", "opennewwindow"].iter().any(|v| verb.eq_ignore_ascii_case(v))
+    ["opennewtab", "opennewwindow", "opennewprocess"].iter().any(|v| verb.eq_ignore_ascii_case(v))
 }
 
 /// A shortcut's target that opens in a tab: a folder path, or This PC. Anything else is for Windows.
@@ -1149,8 +1151,8 @@ impl App {
             if let Some(location) = folder.and_then(|r| self.list.item_location(r)) {
                 self.new_tab(location, false);
             }
-        } else if from == self.tree.hwnd() && let Some(location) = self.tree.location_at(pt) {
-            self.open_node(location, true);
+        } else if from == self.tree.hwnd() && let Some((location, shortcut)) = self.tree.location_at(pt) {
+            self.open_node(location, true, shortcut);
         }
     }
 
@@ -1194,8 +1196,8 @@ impl App {
             return LRESULT(0);
         }
         if from == self.tree.hwnd() {
-            if let Some(location) = unsafe { self.tree.on_notify(nm) } {
-                self.open_node(location, false);
+            if let Some((location, shortcut)) = unsafe { self.tree.on_notify(nm) } {
+                self.open_node(location, false, shortcut);
             }
             return LRESULT(0);
         }
@@ -1279,7 +1281,7 @@ impl App {
             return;
         }
         if from == self.tree.hwnd() {
-            let Some(location) = self.tree.location_at(pt) else { return };
+            let Some((location, shortcut)) = self.tree.location_at(pt) else { return };
             if keyboard {
                 let r = window_rect(self.tree.hwnd());
                 pt = POINT { x: r.left + scale(24, self.dpi.get()), y: r.top + scale(24, self.dpi.get()) };
@@ -1287,9 +1289,9 @@ impl App {
             let Some(cm) = item_menu_at(self.wnd, &location) else { return };
             show_menu(self.wnd, &cm, pt, &mut |verb| {
                 if is_open_verb(verb) {
-                    self.open_node(location.clone(), false);
+                    self.open_node(location.clone(), false, shortcut);
                 } else if is_new_tab_verb(verb) {
-                    self.open_node(location.clone(), true);
+                    self.open_node(location.clone(), true, shortcut);
                 } else if verb.eq_ignore_ascii_case("rename") {
                     self.rename_node(location.clone());
                 } else {
@@ -1854,8 +1856,12 @@ impl App {
             // A shortcut that leads to a file: Windows opens it (never an unreachable one: that would hang, then fail).
             (Origin::Shortcut(lnk), _) if listing.is_file => open_file(self.wnd, lnk),
             (Origin::AddressBar, Location::Dir(path)) if listing.is_file => {
-                open_file(self.wnd, path); // a file typed in the address bar: open it
-                self.show_location(true); // the tab stays: what the user types there meanwhile stays too (5.3)
+                if is_shortcut(path.as_os_str()) {
+                    self.open_shortcut(path.clone(), false); // a folder opens here; else Windows opens it (4.4)
+                } else {
+                    open_file(self.wnd, path); // a file typed in the address bar: open it
+                    self.show_location(true); // the tab stays: what the user types there meanwhile stays too (5.3)
+                }
             }
             _ => {
                 // Let the user fix what they typed (5.3), unless they moved on: a dead share fails a minute later.
@@ -2045,9 +2051,11 @@ impl App {
     }
 
     /// A node in the tree: a folder, or a bookmark shortcut.
-    fn open_node(&self, location: Location, in_new_tab: bool) {
+    // A tree node: a folder, or a bookmark shortcut (the tree says which, so a folder named "x.lnk" opens as a folder,
+    // not through the shell as a link, 5.6).
+    fn open_node(&self, location: Location, in_new_tab: bool, shortcut: bool) {
         match location {
-            Location::Dir(path) if is_shortcut(path.as_os_str()) => self.open_shortcut(path, in_new_tab),
+            Location::Dir(path) if shortcut => self.open_shortcut(path, in_new_tab),
             location if in_new_tab => self.new_tab(location, false),
             location => self.open(location, Nav::New, ViewState::default()),
         }

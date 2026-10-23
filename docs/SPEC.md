@@ -346,7 +346,9 @@ readers read the same as the button's name.
   deleted there leaves the tree.
 - Clicking a node, or moving to it with the keyboard, opens it in this tab, and
   clicking the selected node opens it again. Middle-click opens a new background
-  tab.
+  tab. Moving the selection with the keyboard opens a folder or a folder
+  shortcut, but not a shortcut to a program or a web page: those open only on a
+  click, Enter, or the menu, so arrowing through Bookmarks starts nothing.
 - Right-click gives Windows' context menu for that folder (Open opens here, Open
   in new tab or window opens a background tab).
 - Files dropped on a folder in the tree are copied or moved there, exactly as
@@ -374,8 +376,10 @@ readers read the same as the button's name.
   gives them ("Work", not "Work.lnk") and have no expand arrow.
 - Choosing a bookmark shortcut in the tree works like opening it in the list
   (5.4): a folder opens in this tab, anything else is opened by Windows, and an
-  unreachable folder gives the status message, never a Windows popup.
-  Middle-click (or Open in new tab) opens a folder in a new background tab.
+  unreachable folder gives the status message, never a Windows popup. Choosing
+  one with the keyboard opens only a folder shortcut; a program or web link
+  needs a click, Enter, or the menu (5.5). Middle-click (or Open in new tab)
+  opens a folder in a new background tab.
 - A shortcut made on the same drive as its target also remembers the way from
   itself to the target (Windows stores that). When the drive letter in the full
   path is gone, that way is tried, so bookmarks and saved tabs on a flash drive
