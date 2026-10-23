@@ -2,6 +2,8 @@ cmake_minimum_required(VERSION 3.20)
 # The app's name. (In the code it is kAppName in src/util.h.)
 project(qoqdir LANGUAGES CXX RC)
 
+# README.md and docs/BUILDING.md have a g++ command that builds qoqdir.exe without CMake, from the same flags, files
+# and libraries as below: change it with them.
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)

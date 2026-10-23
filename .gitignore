@@ -1,4 +1,4 @@
-# Build output (rebuilt from source), also from a build by hand in src\
+# Build output (rebuilt from source), also from a build with g++ alone (README.md)
 /build/
 /build-*/
 /rust/target/

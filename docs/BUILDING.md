@@ -131,22 +131,22 @@ winlibs) goes in a folder of its own:
 
 On a PC with just the compiler, no CMake or Ninja: `windres` and `g++` come with
 any MinGW-w64 GCC. It needs only the files in `src\` (not `selftest.cpp`, which
-goes into the test version only) and `res\`. In `src\`, with the compiler's
-`bin` on the PATH (section 1):
+goes into the test version only) and `res\`. From the repository folder, with
+the compiler's `bin` on the PATH (section 1):
 
 ```powershell
-windres ..\res\qoqdir.rc -O coff -o app_res.o
-g++ -std=c++20 -Werror -O2 -DNDEBUG -DUNICODE -D_UNICODE -DNOMINMAX -D_WIN32_WINNT=0x0A00 -DWINVER=0x0A00 -D_GLIBCXX_ASSERTIONS -fsanitize=signed-integer-overflow -fsanitize-undefined-trap-on-error -ffunction-sections -fdata-sections -mwindows -municode -static '-Wl,--gc-sections' -s main.cpp app.cpp filelist.cpp tree.cpp shell.cpp folder.cpp crashlog.cpp app_res.o -o qoqdir.exe -lole32 -loleaut32 -lshell32 -lshlwapi -lcomctl32 -luuid
+$mingw = (Split-Path (Split-Path (Get-Command g++).Source)) -replace '\\', '/'
+windres res\qoqdir.rc -O coff -o qoqdir-res.o
+g++ -std=c++20 -O2 -DNDEBUG -DUNICODE -D_UNICODE -DNOMINMAX -D_WIN32_WINNT=0x0A00 -DWINVER=0x0A00 -D_GLIBCXX_ASSERTIONS -fsanitize=signed-integer-overflow -fsanitize-undefined-trap-on-error "-ffile-prefix-map=$mingw=mingw64" -ffunction-sections -fdata-sections -mwindows -municode -static '-Wl,--gc-sections' -s src\main.cpp src\app.cpp src\filelist.cpp src\tree.cpp src\shell.cpp src\folder.cpp src\crashlog.cpp qoqdir-res.o -o qoqdir.exe -lole32 -loleaut32 -lshell32 -lshlwapi -lcomctl32 -luuid
 ```
 
-That makes the same `qoqdir.exe` as the CMake build, in about two minutes. The
-flags are the ones in `CMakeLists.txt`: keep the two in step. CMake adds one
-more, `-ffile-prefix-map=<your mingw64 folder>=mingw64` with the folder's full
-path in forward slashes, so that the runtime checks' messages in the exe name no
-local folder (and no user name, when the compiler is under `C:\Users`); add it
-to publish an exe built this way. PowerShell needs
-the quotes around `-Wl,--gc-sections`, as it reads a comma as a list; cmd.exe
-doesn't.
+That makes `qoqdir.exe` in the repository folder, in under a minute. It is the
+same program as the CMake build, from the flags in `CMakeLists.txt` that shape
+the exe (keep them in step), only linked in another order. The first line finds
+the compiler's folder for `-ffile-prefix-map`, as CMake does: the runtime
+checks' messages in the exe then name `mingw64/...`, not the compiler's full
+path, which holds your user name when it is under `C:\Users`. PowerShell needs
+the quotes around `-Wl,--gc-sections`, as it reads a comma as a list.
 
 ### The Rust version by hand
 
