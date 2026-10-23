@@ -61,10 +61,10 @@ public:
 private:
     // Setup
     struct StartAsk {                  // what the program that started this one asked of its window (startAsk)
+        struct Place { int x, y, width, height; };
         bool quiet = false;            // no focus
         bool maximized = false;
-        bool placed = false;           // a place and size on a monitor
-        int x = 0, y = 0, width = 0, height = 0;
+        std::optional<Place> place;    // a place and size on a monitor
     };
     static StartAsk startAsk();
     static LRESULT CALLBACK wndProc(HWND, UINT, WPARAM, LPARAM);
@@ -75,7 +75,7 @@ private:
     // Messages
     LRESULT onMessage(UINT msg, WPARAM wp, LPARAM lp);
     void queueRefresh();   // one coalesced refresh of the current tab, once no rename or load is in progress
-    void onFolderChanged();   // the folder watch reported a change
+    void onFolderChanged();   // a change in the folder shown: from its watch, or seen by its read (onLoaded)
     void onTimer(UINT_PTR id);
     void onMiddleClick(HWND from, POINT screenPt);
     LRESULT onNotify(NMHDR* nm);
@@ -97,7 +97,9 @@ private:
     void onLoaded(Listing&& listing, UINT generation);
     struct Pending;
     void onLoadFailed(const Listing& listing, const Pending& p);
-    void showLocation();   // the address bar, title, buttons and tabs, for the current tab's folder
+    // The address bar, title, buttons and tabs, for the current tab's folder. With `sameFolder` (a load that lands
+    // on the folder shown), what the user is typing in the address bar stays (5.3).
+    void showLocation(bool sameFolder = false);
     void goBack();
     void goForward();
     bool goUp();   // false: at This PC, nowhere to go
@@ -188,7 +190,7 @@ private:
     bool dragging_ = false;         // moving the tree/list splitter
     bool draggingFiles_ = false;    // a drag started from our own list is in progress
     bool refreshQueued_ = false;
-    bool refreshForWatch_ = false;   // ...and only the folder watch asked for it
+    bool refreshForWatch_ = false;   // ...and only a change in the folder shown asked for it (onFolderChanged)
     struct QueuedView {             // kept by refresh() while a load is pending: what a delete, rename or new
         std::wstring dir;           // folder wanted selected. The queued refresh applies it if 'dir' is still shown.
         ViewState view;

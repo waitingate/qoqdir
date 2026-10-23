@@ -42,8 +42,8 @@ use windows::Win32::UI::Controls::{
     TVM_GETITEMW, TVM_HITTEST, TVM_SELECTITEM, TTM_GETTOOLCOUNT,
 };
 use windows::Win32::UI::Input::KeyboardAndMouse::{
-    GetFocus, VIRTUAL_KEY, VK_BACK, VK_DELETE, VK_DOWN, VK_ESCAPE, VK_F2, VK_F5, VK_LEFT, VK_NEXT, VK_PRIOR, VK_RETURN,
-    VK_RIGHT, VK_TAB,
+    EnableWindow, GetFocus, IsWindowEnabled, VIRTUAL_KEY, VK_BACK, VK_DELETE, VK_DOWN, VK_ESCAPE, VK_F2, VK_F5,
+    VK_LEFT, VK_NEXT, VK_PRIOR, VK_RETURN, VK_RIGHT, VK_TAB,
 };
 use windows::Win32::System::Variant::VARIANT;
 use windows::Win32::UI::Accessibility::{AccessibleObjectFromWindow, IAccessible};
@@ -124,6 +124,14 @@ impl Steps {
     /// A step back to the first tab, on the test folder.
     fn first_tab(&mut self) {
         self.add("(back to the first tab)", |a| a.switch_tab(0), |a| a.at(&test_dir()) && a.active() == 0);
+    }
+
+    /// A step that leaves the address bar with Esc.
+    fn esc_back(&mut self) {
+        self.add("(Esc puts the path back and returns to the list)", |a| a.press(VK_ESCAPE, 0), |a| {
+            let location = a.location(); // not borrowed across the window call below
+            text_of(a.address) == location.text().to_string_lossy() && unsafe { GetFocus() } == a.list.hwnd()
+        });
     }
 
     fn push(&mut self, name: &'static str, act: Option<Act>, done: Check) -> &mut Step {
@@ -649,10 +657,7 @@ impl App {
                 text_of(a.address) == "D:\\my "
             },
         );
-        s.add("(Esc puts the path back and returns to the list)", |a| a.press(VK_ESCAPE, 0), |a| {
-            let location = a.location(); // not borrowed across the window call below
-            text_of(a.address) == location.text().to_string_lossy() && unsafe { GetFocus() } == a.list.hwnd()
-        });
+        s.esc_back();
         // The tree's width (96-DPI units) before a drag, and what a drag far past the window's edge left it at.
         let drag = Rc::new(Cell::new((0, 0)));
         let (drag_act, drag_done) = (drag.clone(), drag);
@@ -1156,10 +1161,29 @@ impl App {
             },
             move |a| a.at(&dir()) && text_of(a.address) == "typed meanwhile",
         );
-        s.add("(Esc puts the path back and returns to the list)", |a| a.press(VK_ESCAPE, 0), |a| {
-            let location = a.location(); // not borrowed across the window call below
-            text_of(a.address) == location.text().to_string_lossy() && unsafe { GetFocus() } == a.list.hwnd()
-        });
+        s.add(
+            "...and a Back to the folder shown still sets the Back and Forward buttons (5.1)",
+            move |a| {
+                // The history a Back that failed on a deleted folder can leave: the folder shown, once more (4.3).
+                a.with_tab(|t| {
+                    t.back = vec![Location::dir(dir())];
+                    t.forward.clear();
+                });
+                unsafe {
+                    // The buttons as they were for it.
+                    let _ = EnableWindow(a.back, true);
+                    let _ = EnableWindow(a.forward, false);
+                }
+                a.press(VK_LEFT, ALT); // in the address bar
+            },
+            move |a| {
+                a.at(&dir())
+                    && text_of(a.address) == "typed meanwhile"
+                    && !unsafe { IsWindowEnabled(a.back) }.as_bool()
+                    && unsafe { IsWindowEnabled(a.forward) }.as_bool()
+            },
+        );
+        s.esc_back();
         s.add(
             "a typed path that fails while a rename box is open leaves the box alone",
             |a| {

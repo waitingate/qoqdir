@@ -50,9 +50,7 @@ static std::wstring names(const std::vector<Item>& items) {
 
 // Runs this program again with one argument and TEMP moved to `temp` (the child inherits it); its exit code, or -1.
 static int runSelf(const wchar_t* arg, const std::wstring& temp) {
-    wchar_t exe[MAX_PATH];
-    GetModuleFileNameW(nullptr, exe, MAX_PATH);
-    std::wstring cmd = L"\"" + std::wstring(exe) + L"\" " + arg;
+    std::wstring cmd = L"\"" + exePath() + L"\" " + arg;
     SetEnvironmentVariableW(L"TEMP", temp.c_str());
     SetEnvironmentVariableW(L"TMP", temp.c_str());
     STARTUPINFOW si{};
@@ -89,9 +87,7 @@ int main(int argc, char** argv) {
         return 0;
     }
     if (argc > 1 && strcmp(argv[1], "--parent") == 0) {   // the parent-process test below: started by this program
-        wchar_t exe[MAX_PATH];
-        GetModuleFileNameW(nullptr, exe, MAX_PATH);
-        return parentProcessName() == toLower(leafName(exe)) ? 0 : 5;
+        return parentProcessName() == toLower(leafName(exePath())) ? 0 : 5;
     }
     // parentPath
     CHECK_EQ(parentPath(L"C:\\Users\\me"), L"C:\\Users");
@@ -339,9 +335,7 @@ int main(int argc, char** argv) {
         CHECK(listFolder(L"C:\\definitely\\not\\here", false).error != 0);
         CHECK(!listFolder(L"", false).items.empty());   // at least one drive
         // A path that is a file is reported as such (the app then opens the file instead).
-        wchar_t exe[MAX_PATH];
-        GetModuleFileNameW(nullptr, exe, MAX_PATH);
-        Listing asFile = listFolder(exe, false);
+        Listing asFile = listFolder(exePath(), false);
         CHECK(asFile.error != 0 && asFile.isFile);
         CHECK(!listFolder(L"C:\\definitely\\not\\here", false).isFile);
         // A read that a newer load replaced stops early, keeping nothing (System32 has hundreds of entries).

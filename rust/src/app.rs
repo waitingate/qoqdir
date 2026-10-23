@@ -162,7 +162,7 @@ pub struct Tab {
     id: u32, // stable identity; indexes shift when tabs close
     pub location: Location,
     pub back: Vec<Location>,
-    forward: Vec<Location>,
+    pub forward: Vec<Location>,
     view: ViewState,       // remembered while the tab is in the background
     pub unavailable: bool, // not loaded here yet, or failed: no drops onto it (asking Windows could freeze)
 }
@@ -221,11 +221,7 @@ pub struct NewWindow {
 struct StartAsk {
     quiet: bool, // no focus
     maximized: bool,
-    placed: bool, // a place and size on a monitor
-    x: i32,
-    y: i32,
-    width: i32,
-    height: i32,
+    place: Option<(i32, i32, i32, i32)>, // a place and size on a monitor: x, y, width, height
 }
 
 pub struct App {
@@ -257,7 +253,7 @@ pub struct App {
     pub dragging: Cell<bool>,   // moving the tree/list splitter
     dragging_files: Cell<bool>, // a drag started from our own list is in progress
     pub refresh_queued: Cell<bool>,
-    refresh_for_watch: Cell<bool>, // ...and only the folder watch asked for it
+    refresh_for_watch: Cell<bool>, // ...and only a change in the folder shown asked for it (on_folder_changed)
     // Out of `st`: a watch talks to the shell as it goes, which can call straight back into on_message, so each is
     // taken out of its cell (take, replace) before it drops.
     pub watch: RefCell<Option<FolderWatch>>,
@@ -444,16 +440,13 @@ impl App {
                 ..Default::default()
             };
             RegisterClassExW(&class);
-            // A window asked to go somewhere is made there, at that monitor's scaling: moved there from the default
-            // place on a monitor of other scaling, Windows would scale it again on the way (WM_DPICHANGED) and change
-            // its size.
+            // A window asked for a place and size is made with both, at that monitor's scaling. Made at the default
+            // size first, it could lie mostly on a monitor of other scaling, and sizing it then would make Windows
+            // scale it again (WM_DPICHANGED), to another size.
             let ask = Self::start_ask();
             let sys_dpi = GetDpiForSystem();
-            let (x, y, width, height) = if ask.placed {
-                (ask.x, ask.y, ask.width, ask.height)
-            } else {
-                (CW_USEDEFAULT, CW_USEDEFAULT, scale(1100, sys_dpi), scale(700, sys_dpi))
-            };
+            let (x, y, width, height) =
+                ask.place.unwrap_or((CW_USEDEFAULT, CW_USEDEFAULT, scale(1100, sys_dpi), scale(700, sys_dpi)));
             let wnd = CreateWindowExW(
                 WINDOW_EX_STYLE(0),
                 pcwstr(&name),
@@ -707,15 +700,12 @@ impl App {
             right: si.dwX.wrapping_add(si.dwXSize) as i32,
             bottom: si.dwY.wrapping_add(si.dwYSize) as i32,
         };
+        let placed = si.dwFlags.contains(STARTF_USEPOSITION | STARTF_USESIZE)
+            && !unsafe { MonitorFromRect(&place, MONITOR_DEFAULTTONULL) }.is_invalid();
         StartAsk {
             quiet: shown && [SW_SHOWNOACTIVATE, SW_SHOWMINNOACTIVE, SW_SHOWNA].contains(&asked),
             maximized: shown && asked == SW_SHOWMAXIMIZED,
-            placed: si.dwFlags.contains(STARTF_USEPOSITION | STARTF_USESIZE)
-                && !unsafe { MonitorFromRect(&place, MONITOR_DEFAULTTONULL) }.is_invalid(),
-            x: si.dwX as i32,
-            y: si.dwY as i32,
-            width: si.dwXSize as i32,
-            height: si.dwYSize as i32,
+            place: placed.then_some((si.dwX as i32, si.dwY as i32, si.dwXSize as i32, si.dwYSize as i32)),
         }
     }
 
@@ -1100,7 +1090,8 @@ impl App {
         }
     }
 
-    /// A refresh the folder watch alone asked for is about the folder it watches: it goes with that watch (on_loaded).
+    /// A refresh only changes in the folder shown asked for, from its watch or seen by its read, is about that folder:
+    /// it goes with the folder's watch (on_loaded).
     pub fn on_folder_changed(&self) {
         let alone = !self.refresh_queued.get() || self.refresh_for_watch.get();
         self.queue_refresh();
@@ -1612,12 +1603,12 @@ impl App {
         {
             let mut st = self.st.borrow_mut();
             let tab_id = st.tabs[st.active].id;
-            let switching = st.pending.as_ref().is_some_and(|p| p.nav == Nav::Switch && p.tab_id == tab_id);
+            let replacing = st.pending.as_ref().filter(|p| moving && p.tab_id == tab_id); // this tab's load still out
+            let switching = replacing.is_some_and(|p| p.nav == Nav::Switch);
             // A refresh of the tab's folder that a move replaces goes with it: if the move fails, it is asked for again
             // (4.5).
-            let refresh_lost = moving
-                && st.pending.as_ref().is_some_and(|p| p.tab_id == tab_id && (p.nav == Nav::Refresh || p.refresh_lost));
-            if moving && switching {
+            let refresh_lost = replacing.is_some_and(|p| p.nav == Nav::Refresh || p.refresh_lost);
+            if switching {
                 st.kept = st.pending.take();
             } else if !moving {
                 st.kept = None;
@@ -1632,7 +1623,7 @@ impl App {
         if nav == Nav::Switch {
             // Show the new tab at once; until its folder loads the list has none, so nothing acts on the old one.
             self.list.clear();
-            self.show_location();
+            self.show_location(false);
             self.show_status();
         }
         let wnd = self.wnd.0 as usize; // HWND is just a handle; the thread only posts to it
@@ -1710,6 +1701,8 @@ impl App {
             self.queue_refresh();
             return;
         }
+        // A move's hint (5.3), said once it lands; an error takes its place. A move still out keeps its own.
+        let hint = if moving { None } else { self.late_hint.take() };
 
         if let Some(error) = &listing.error {
             return self.on_load_failed(&listing, &error.message(), &pending);
@@ -1811,25 +1804,22 @@ impl App {
             self.on_folder_changed();
         }
         // A move shows where the tab is now. A tab switch showed it when it began, and the address bar may hold what
-        // the user typed since (5.3); so may it after a move to the folder already shown, while the user is typing
-        // there.
+        // the user typed since (5.3).
         if moved {
-            if !old.same(&location) || unsafe { GetFocus() } != self.address {
-                self.show_location();
-            }
-            self.set_message(self.late_hint.get().unwrap_or("")); // a navigation clears the message, or says its hint
-        }
-        if !moving {
-            self.late_hint.set(None); // a hint for the move still out waits for it
+            self.show_location(old.same(&location));
+            self.set_message(hint.unwrap_or("")); // a navigation clears the message, or says its hint
         }
         self.show_status();
     }
 
     /// The address bar, title, buttons and tabs follow the current tab's folder: shown by a tab switch at once, and by
-    /// a move once its folder is there. A load that lands or fails otherwise changes none of them.
-    fn show_location(&self) {
+    /// a move once its folder is there. A load that lands or fails otherwise changes none of them. With `same_folder`
+    /// (a load that lands on the folder shown), what the user is typing in the address bar stays (5.3).
+    fn show_location(&self, same_folder: bool) {
         let location = self.location();
-        set_text(self.address, location.text());
+        if !same_folder || unsafe { GetFocus() } != self.address {
+            set_text(self.address, location.text());
+        }
         set_text(self.wnd, location.display_name()); // the folder's name alone, as Explorer: the icon says which app
         let (can_back, can_forward) = self.with_tab(|t| (!t.back.is_empty(), !t.forward.is_empty()));
         unsafe {
@@ -1842,9 +1832,6 @@ impl App {
 
     /// The folder could not be read: decide what to show or do instead.
     fn on_load_failed(&self, listing: &Listing, error: &str, pending: &Pending) {
-        if self.st.borrow().pending.is_none() {
-            self.late_hint.set(None); // the error is what to say; a move still out keeps its hint
-        }
         if matches!(pending.nav, Nav::Refresh | Nav::Switch) {
             return self.show_unavailable(&listing.location, error);
         }
@@ -1858,19 +1845,17 @@ impl App {
                 let _ = SetTimer(Some(self.wnd), TIMER_LOADING, 250, None); // "Loading..." if it is slow (4.1)
             }
         }
+        // The refresh of the tab's folder this move replaced (open_from, 4.5), about that folder as the watch's would
+        // be: it goes if another one is shown first.
         if pending.refresh_lost {
-            self.queue_refresh(); // the refresh of the tab's folder this move replaced (open_from, 4.5)
+            self.on_folder_changed();
         }
         match (&pending.origin, &listing.location) {
             // A shortcut that leads to a file: Windows opens it (never an unreachable one: that would hang, then fail).
             (Origin::Shortcut(lnk), _) if listing.is_file => open_file(self.wnd, lnk),
             (Origin::AddressBar, Location::Dir(path)) if listing.is_file => {
                 open_file(self.wnd, path); // a file typed in the address bar: open it
-                // The tab looked up again: while Windows asks about the file, messages run that can add or close tabs.
-                // What the user types there meanwhile stays (5.3).
-                if unsafe { GetFocus() } != self.address {
-                    set_text(self.address, self.location().text());
-                }
+                self.show_location(true); // the tab stays: what the user types there meanwhile stays too (5.3)
             }
             _ => {
                 // Let the user fix what they typed (5.3), unless they moved on: a dead share fails a minute later.
@@ -2393,8 +2378,8 @@ impl App {
     }
 
     /// Open in new window (5.8): the folder in another Qoqdir, a title bar down and right of this window and the same
-    /// size, maximized if this one is. The place goes in its STARTUPINFO, which load_settings there takes over the
-    /// saved one.
+    /// size, maximized if this one is. The place goes in its STARTUPINFO, where create there makes the window instead
+    /// of at the saved place (start_ask).
     pub fn new_window(&self, dir: &Path) -> NewWindow {
         let exe = std::env::current_exe().unwrap_or_default();
         let mut command_line = OsString::from("\"");
@@ -2497,7 +2482,7 @@ impl App {
         // maximized if asked. Any other start takes the saved place.
         let (w, h) = (self.number("Width", 0), self.number("Height", 0));
         unsafe {
-            if ask.placed {
+            if ask.place.is_some() {
                 let show = if quiet {
                     SW_SHOWNOACTIVATE
                 } else if ask.maximized {

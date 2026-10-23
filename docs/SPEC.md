@@ -787,8 +787,9 @@ result:
     not read again in the move's folder, and a hint of the move still waits for
     it when that read fails first. A refresh that a failed move replaced is
     asked for again, and a move to the folder shown leaves what the user types
-    into the address bar meanwhile. A This PC tab left while its list is
-    emptied keeps its selection.
+    into the address bar meanwhile; a Back to that folder still sets the Back
+    and Forward buttons. A This PC tab left while its list is emptied keeps its
+    selection.
 67. Open in new window would start this exe on the folder, a title bar down
     and right of this window, the same size and not maximized. The self-test
     checks what it would start, without starting it: that would show a window.

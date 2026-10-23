@@ -143,12 +143,9 @@ App::StartAsk App::startAsk() {
     ask.maximized = show && si.wShowWindow == SW_SHOWMAXIMIZED;
     // Summed as DWORDs, which wrap: nonsense from the program that started this one can't trip the overflow trap.
     RECT place{LONG(si.dwX), LONG(si.dwY), LONG(si.dwX + si.dwXSize), LONG(si.dwY + si.dwYSize)};
-    ask.placed = (si.dwFlags & STARTF_USEPOSITION) && (si.dwFlags & STARTF_USESIZE) &&
-                 MonitorFromRect(&place, MONITOR_DEFAULTTONULL);
-    ask.x = int(si.dwX);
-    ask.y = int(si.dwY);
-    ask.width = int(si.dwXSize);
-    ask.height = int(si.dwYSize);
+    if ((si.dwFlags & STARTF_USEPOSITION) && (si.dwFlags & STARTF_USESIZE) &&
+        MonitorFromRect(&place, MONITOR_DEFAULTTONULL))
+        ask.place = StartAsk::Place{int(si.dwX), int(si.dwY), int(si.dwXSize), int(si.dwYSize)};
     return ask;
 }
 
@@ -163,14 +160,15 @@ bool App::create(HINSTANCE instance, const CommandLine& cmd, bool useSettings) {
     wc.lpszClassName = kAppName;
     RegisterClassExW(&wc);
 
-    // A window asked to go somewhere is made there, at that monitor's scaling: moved there from the default place on
-    // a monitor of other scaling, Windows would scale it again on the way (WM_DPICHANGED) and change its size.
+    // A window asked for a place and size is made with both, at that monitor's scaling. Made at the default size
+    // first, it could lie mostly on a monitor of other scaling, and sizing it then would make Windows scale it again
+    // (WM_DPICHANGED), to another size.
     StartAsk ask = startAsk();
     UINT sysDpi = GetDpiForSystem();
-    CreateWindowExW(0, wc.lpszClassName, kAppName, WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN,
-                    ask.placed ? ask.x : CW_USEDEFAULT, ask.placed ? ask.y : CW_USEDEFAULT,
-                    ask.placed ? ask.width : scale(1100, sysDpi), ask.placed ? ask.height : scale(700, sysDpi), nullptr,
-                    nullptr, instance, this);
+    StartAsk::Place at = ask.place.value_or(
+        StartAsk::Place{CW_USEDEFAULT, CW_USEDEFAULT, scale(1100, sysDpi), scale(700, sysDpi)});
+    CreateWindowExW(0, wc.lpszClassName, kAppName, WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN, at.x, at.y, at.width,
+                    at.height, nullptr, nullptr, instance, this);
     if (!wnd_) return false;
     dpi_ = GetDpiForWindow(wnd_);
 
@@ -563,7 +561,8 @@ void App::queueRefresh() {
     SetTimer(wnd_, kRefreshTimer, 400, nullptr);
 }
 
-// A refresh the folder watch alone asked for is about the folder it watches: it goes with that watch (onLoaded).
+// A refresh only changes in the folder shown asked for, from its watch or seen by its read, is about that folder: it
+// goes with the folder's watch (onLoaded).
 void App::onFolderChanged() {
     bool alone = !refreshQueued_ || refreshForWatch_;
     queueRefresh();
@@ -881,10 +880,10 @@ void App::open(const std::wstring& path, Nav nav, ViewState view, Origin origin)
     // A move that takes over from a tab switch lets the switch's read go on (kept_, 4.2), and so does a further move
     // on that tab; anything else makes it of no use. Set before the newest load is, so that read never stops.
     bool move = nav == Nav::New || nav == Nav::Back || nav == Nav::Forward;
+    bool replacing = move && pending_.generation && pending_.tabId == tab().id;   // this tab's load still out
     // A refresh of the tab's folder that a move replaces goes with it: if the move fails, it is asked for again (4.5).
-    bool refreshLost = move && pending_.generation && pending_.tabId == tab().id &&
-                       (pending_.nav == Nav::Refresh || pending_.refreshLost);
-    if (move && pending_.generation && pending_.nav == Nav::Switch && pending_.tabId == tab().id) {
+    bool refreshLost = replacing && (pending_.nav == Nav::Refresh || pending_.refreshLost);
+    if (replacing && pending_.nav == Nav::Switch) {
         kept_ = std::move(pending_);
     } else if (!move) {
         kept_ = {};
@@ -942,6 +941,8 @@ void App::onLoaded(Listing&& listing, UINT generation) {
         queueRefresh();
         return;
     }
+    // A move's hint (5.3), said once it lands; an error takes its place. A move still out keeps its own.
+    const wchar_t* hint = moving ? nullptr : std::exchange(lateHint_, nullptr);
     Tab& t = tab();
 
     if (listing.error) return onLoadFailed(listing, p);
@@ -1018,20 +1019,19 @@ void App::onLoaded(Listing&& listing, UINT generation) {
     FILETIME now = folderWritten(t.path);
     if (CompareFileTime(&now, &written) != 0) onFolderChanged();
     // A move shows where the tab is now. A tab switch showed it when it began, and the address bar may hold what the
-    // user typed since (5.3); so may it after a move to the folder already shown, while the user is typing there.
+    // user typed since (5.3).
     if (moved) {
-        if (!samePath(old, t.path) || GetFocus() != address_) showLocation();
-        setMessage(lateHint_ ? lateHint_ : L"");   // a navigation clears the message, or says its hint
+        showLocation(samePath(old, t.path));
+        setMessage(hint ? hint : L"");   // a navigation clears the message, or says its hint
     }
-    if (!moving) lateHint_ = nullptr;   // a hint for the move still out waits for it
     showStatus();
 }
 
 // The address bar, title, buttons and tabs follow the current tab's folder: shown by a tab switch at once, and by a
 // move once its folder is there. A load that lands or fails otherwise changes none of them.
-void App::showLocation() {
+void App::showLocation(bool sameFolder) {
     const Tab& t = tab();
-    SetWindowTextW(address_, locationText(t.path).c_str());
+    if (!sameFolder || GetFocus() != address_) SetWindowTextW(address_, locationText(t.path).c_str());
     SetWindowTextW(wnd_, displayName(t.path).c_str());   // the folder's name alone, as Explorer: the icon says which app
     EnableWindow(back_, !t.back.empty());
     EnableWindow(forward_, !t.forward.empty());
@@ -1041,7 +1041,6 @@ void App::showLocation() {
 
 // The folder could not be read: decide what to show or do instead.
 void App::onLoadFailed(const Listing& listing, const Pending& p) {
-    if (!pending_.generation) lateHint_ = nullptr;   // the error is what to say; a move still out keeps its hint
     if (p.nav == Nav::Refresh || p.nav == Nav::Switch) {
         showUnavailable(listing.path, listing.error);
         return;
@@ -1050,15 +1049,15 @@ void App::onLoadFailed(const Listing& listing, const Pending& p) {
     if (GetWindowTextLengthW(filter_) == 0) SetWindowTextW(filter_, p.filter.c_str());
     // A tab switch this move took over reads on: the tab waits for what it finds (onLoaded, 4.2).
     if (kept_.generation) SetTimer(wnd_, kLoadingTimer, 250, nullptr);   // "Loading..." if it is slow (4.1)
-    if (p.refreshLost) queueRefresh();   // the refresh of the tab's folder this move replaced (open, 4.5)
+    // The refresh of the tab's folder this move replaced (open, 4.5), about that folder as the watch's would be: it
+    // goes if another one is shown first.
+    if (p.refreshLost) onFolderChanged();
     if (!p.origin.shortcut.empty() && listing.isFile) {
         // A shortcut that leads to a file: Windows opens it (never an unreachable one: that would hang, then fail).
         openFile(wnd_, p.origin.shortcut);
     } else if (p.origin.typed && listing.isFile) {   // a file typed in the address bar: open it
         openFile(wnd_, listing.path);
-        // The tab looked up again: while Windows asks about the file, messages run that can add or close tabs. What
-        // the user types there meanwhile stays (5.3).
-        if (GetFocus() != address_) SetWindowTextW(address_, locationText(tab().path).c_str());
+        showLocation(true);   // the tab stays: what the user types there meanwhile stays too (5.3)
     } else {
         // Let the user fix what they typed (5.3), unless they moved on: a dead share fails a minute later.
         if (p.origin.typed && GetFocus() == list_.hwnd()) focusEdit(address_);
@@ -1442,7 +1441,8 @@ void App::hint(bool& said, const wchar_t* text, bool afterLoad) {
 }
 
 // Open in new window (5.8): the folder in another Qoqdir, a title bar down and right of this window and the same size,
-// maximized if this one is. The place goes in its STARTUPINFO, which loadSettings there takes over the saved one.
+// maximized if this one is. The place goes in its STARTUPINFO, where create there makes the window instead of at the
+// saved place (startAsk).
 App::NewWindow App::newWindow(const std::wstring& dir) const {
     NewWindow w;
     w.exe = exePath();
@@ -1518,7 +1518,7 @@ void App::loadSettings(const CommandLine& cmd, const StartAsk& ask) {
     // A window asked to go somewhere (Open in new window, 5.8) was made there (create), so it is only shown here,
     // maximized if asked. Any other start takes the saved place.
     int w = number(L"Width", 0), h = number(L"Height", 0);
-    if (ask.placed) {
+    if (ask.place) {
         ShowWindow(wnd_, quiet ? SW_SHOWNOACTIVATE : ask.maximized ? SW_SHOWMAXIMIZED : SW_SHOWNORMAL);
     } else if (w > 0 && h > 0) {
         WINDOWPLACEMENT wp{};

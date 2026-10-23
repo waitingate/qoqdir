@@ -123,8 +123,8 @@ instead of corrupting data, and the crash log says where.
 - `qoqdir.ini` is saved on close and at shutdown. A saved position on a monitor
   that is gone falls back to the default.
 - Open in new window starts the exe again with `--tab=` (`tabArgument`) and
-  puts the new window's place and size in its `STARTUPINFO`, which
-  `loadSettings` there takes over the saved place. `newWindow` works out what
+  puts the new window's place and size in its `STARTUPINFO`; `create` there
+  makes the window at it, not at the saved place. `newWindow` works out what
   to start, so the self-test can check it without opening a window;
   `openInNewWindow` starts it on a worker thread, as the exe may be on a server.
 - `ShellProcessRef` keeps the process alive after the window closes until

@@ -228,6 +228,10 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
     auto firstTab = [&] {   // a step back to the first tab, on the test folder
         add(L"(back to the first tab)", [=, this] { switchTab(0); }, [=, this] { return at(dir) && active_ == 0; });
     };
+    auto escBack = [&] {   // a step that leaves the address bar with Esc
+        add(L"(Esc puts the path back and returns to the list)", [=, this] { selfTestKey(VK_ESCAPE); },
+            [=, this] { return windowText(address_) == locationText(tab().path) && GetFocus() == list_.hwnd(); });
+    };
     auto oneTabHome = [=, this] { return tabs_.size() == 1 && at(dir); };   // back to the test folder's own tab
     static double t0 = 0, keyMs = 0;   // keyMs: how long a key press kept the window busy
     static int rows = 0;               // list rows before a refresh that must wait
@@ -314,8 +318,7 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
             selfTest_->note = L"address \"" + windowText(address_) + L"\"";
             return windowText(address_) == L"D:\\my ";
         });
-    add(L"(Esc puts the path back and returns to the list)", [=, this] { selfTestKey(VK_ESCAPE); },
-        [=, this] { return windowText(address_) == locationText(tab().path) && GetFocus() == list_.hwnd(); });
+    escBack();
     // The tree's width (96-DPI units) before a drag, and what a drag far past the window's edge left it at.
     auto drag = std::make_shared<std::pair<int, int>>();
     add(L"dragging the splitter past the window's edge keeps the width shown (what is saved), not one past the edge",
@@ -683,8 +686,20 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
             SetWindowTextW(address_, L"typed meanwhile");
         },
         [=, this] { return at(dir) && windowText(address_) == L"typed meanwhile"; });
-    add(L"(Esc puts the path back and returns to the list)", [=, this] { selfTestKey(VK_ESCAPE); },
-        [=, this] { return windowText(address_) == locationText(tab().path) && GetFocus() == list_.hwnd(); });
+    add(L"...and a Back to the folder shown still sets the Back and Forward buttons (5.1)",
+        [=, this] {
+            // The history a Back that failed on a deleted folder can leave: the folder shown, once more (4.3).
+            tab().back = {dir};
+            tab().forward.clear();
+            EnableWindow(back_, TRUE);   // the buttons as they were for it
+            EnableWindow(forward_, FALSE);
+            selfTestKey(VK_LEFT, false, false, true);   // Alt+Left, in the address bar
+        },
+        [=, this] {
+            return at(dir) && windowText(address_) == L"typed meanwhile" && !IsWindowEnabled(back_) &&
+                   IsWindowEnabled(forward_);
+        });
+    escBack();
     add(L"a typed path that fails while a rename box is open leaves the box alone",
         [=, this] {
             // The failure lands after the rename box opens (a dead share fails a minute later).
@@ -1995,7 +2010,8 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
         [=, this] {
             NewWindow w = newWindow(dir);
             std::vector<std::wstring> args = commandLineWords(w.commandLine);
-            bool started = args.size() == 2 && samePath(args[0], exePath()) && samePath(w.exe, exePath()) &&
+            std::wstring exe = exePath();
+            bool started = args.size() == 2 && samePath(args[0], exe) && samePath(w.exe, exe) &&
                            parseCommandLine({args[1]}).folders == std::vector<std::wstring>{dir};
             RECT r{};
             GetWindowRect(wnd_, &r);

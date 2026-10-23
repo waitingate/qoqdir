@@ -4,8 +4,6 @@
 #include "shell.h"
 #include "version.h"
 
-#include <shellapi.h>
-
 // ---------------------------------------------------------------- help
 
 namespace {

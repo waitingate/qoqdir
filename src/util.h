@@ -62,6 +62,7 @@ constexpr wchar_t kAppName[] = L"Qoqdir";
 inline std::wstring exePath() {
     std::wstring exe(32768, L'\0');   // not MAX_PATH: the app may live in a deep folder
     exe.resize(GetModuleFileNameW(nullptr, exe.data(), DWORD(exe.size())));
+    exe.shrink_to_fit();   // the path, without the 64 KB it was read into (it is kept, and handed to threads)
     return exe;
 }
 
