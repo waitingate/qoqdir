@@ -12,7 +12,7 @@ function Step([string]$name, [scriptblock]$run) {
     & $run
     if ($LASTEXITCODE) { throw "$name failed" }
 }
-$rust = '--manifest-path', 'rust\Cargo.toml'
+$rust = '--manifest-path', 'rust\Cargo.toml', '--locked'   # build the crates in Cargo.lock, don't rewrite it
 $selftest = '--features', 'selftest', '--target-dir', 'rust\target\selftest'   # its own folder: never replaces your exe
 
 Step 'C++ build' {   # any warning fails it (-Werror in CMakeLists.txt)

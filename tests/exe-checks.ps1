@@ -8,8 +8,10 @@
 #   powershell -File tests\exe-checks.ps1 -Exe build\qoqdir.exe
 #   powershell -File tests\exe-checks.ps1 -Exe rust\target\release\qoqdir.exe
 param([Parameter(Mandatory)][string]$Exe)
+# A missing exe or an unreadable one must fail the check, not let the size and user-path checks pass on a null.
+$ErrorActionPreference = 'Stop'
 
-$protected = '^(KERNEL32|USER32|GDI32|ole32|OLEAUT32|SHELL32|SHLWAPI|COMCTL32|combase|ntdll|api-ms-win-[a-z0-9-]+)\.dll$'
+$protected ='^(KERNEL32|USER32|GDI32|ole32|OLEAUT32|SHELL32|SHLWAPI|COMCTL32|combase|ntdll|api-ms-win-[a-z0-9-]+)\.dll$'
 $file = Get-Item $Exe
 $size = $file.Length
 $imports = @(objdump -p $Exe | Select-String 'DLL Name: (\S+)' | ForEach-Object { $_.Matches[0].Groups[1].Value })

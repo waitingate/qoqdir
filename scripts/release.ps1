@@ -7,6 +7,13 @@
 #     powershell -File scripts\release.ps1
 $ErrorActionPreference = 'Stop'
 Set-Location (Split-Path $PSScriptRoot)   # the repository
+# A build setting left in the environment would change the shipped exe where no check can see it: a cargo profile
+# override, or a compiler flag CMake reads. Refuse to build with any of them set.
+foreach ($name in (Get-ChildItem Env:).Name) {
+    if ($name -match '^(CARGO_PROFILE_|CARGO_BUILD_)' -or $name -in 'CC', 'CXX', 'CFLAGS', 'CXXFLAGS', 'LDFLAGS') {
+        throw "Unset $name first: it would change the shipped exe, and no check would catch it."
+    }
+}
 . "$PSScriptRoot\find-tools.ps1"
 if (git status --porcelain) { throw 'Commit your changes first: a release is built from the last commit.' }
 $header = Get-Content src\version.h -Raw
@@ -19,6 +26,13 @@ if ($numbers -ne $version -or $cargo -ne $version) {
     throw "The versions differ: version.h says $version and $numbers, rust\Cargo.toml says $cargo."
 }
 $out = Join-Path $PWD 'release'
+# Don't overwrite a version that was already built: raise the version first (a released one is tagged, or its files
+# are still in release\). Rebuilding the same number would make a different exe carry it and replace the debug copy.
+$zip = Join-Path $out "qoqdir-$version.zip"
+$tag = git tag --list "v$version"
+if ((Test-Path $zip) -or ($tag -and (git rev-parse "v$version^{commit}") -ne (git rev-parse HEAD))) {
+    throw "Version $version already built: raise it first (it is in release\, or tagged on another commit)."
+}
 $work = Join-Path $out 'work'
 if (Test-Path $work) { Remove-Item $work -Recurse -Force }
 $tests = "$work\src\tests"

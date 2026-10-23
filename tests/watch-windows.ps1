@@ -35,6 +35,7 @@ public class QoqdirWindows {
 
 $before = [QoqdirWindows]::Visible()
 $p = Start-Process $Exe -ArgumentList '--selftest' -PassThru
+if (-not $p) { "could not start $Exe"; exit 1 }   # a bad path or a quarantined exe: fail, don't spin on a null
 $seen = [ordered]@{}
 $busy = 0
 while (-not $p.HasExited) {

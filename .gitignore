@@ -1,6 +1,8 @@
 # Build output (rebuilt from source), also from a build with g++ alone (README.md)
 /build/
 /build-*/
+/cmake-build-*/   # CLion's default CMake folders
+/out/             # Visual Studio's default CMake folder
 /rust/target/
 /release/
 *.o

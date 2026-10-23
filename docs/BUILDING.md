@@ -47,14 +47,19 @@ g++ --version
 ```
 
 `scripts\build.ps1` and `scripts\release.ps1` do step 3 themselves, through
-`scripts\find-tools.ps1`: when g++ isn't on the PATH they look in
-`%LOCALAPPDATA%\Programs\mingw64`, then in `C:\mingw64`.
+`scripts\find-tools.ps1`, when g++ isn't on the PATH: they look in
+`%LOCALAPPDATA%\Programs\mingw64`.
 
-Any other folder works if its path has no spaces, which MinGW's tools dislike.
-With a space in your user name, use `C:\mingw64`: any user may create a folder
-at the root of `C:`. The Rust build needs the compiler's `windres` too: it
-builds the Rust exe's manifest, icon and version block from the same
-`res\qoqdir.rc`. MSYS2's UCRT64 GCC works too (the build on GitHub uses it).
+Any other folder works if its path has no spaces, which MinGW's tools dislike;
+put its `bin` on the PATH yourself (the scripts only reach for the per-user
+folder on their own). With a space in your user name, `C:\mingw64` avoids it,
+but a folder at the root of `C:` is writable by every account on the PC, so
+take away others' write access first (`icacls C:\mingw64 /inheritance:r /grant
+"%USERNAME%:(OI)(CI)F" "Administrators:(OI)(CI)F" "SYSTEM:(OI)(CI)F"`) before
+putting it on the PATH, or a planted `g++` or `windres` would run in your build.
+The Rust build needs the compiler's `windres` too: it builds the Rust exe's
+manifest, icon and version block from the same `res\qoqdir.rc`. MSYS2's UCRT64
+GCC works too (the build on GitHub uses it).
 
 ### Rust, for the Rust version
 
@@ -83,8 +88,9 @@ admin rights, and nothing else on the system changes.
 
 3. In each new terminal: `. $env:LOCALAPPDATA\Programs\rust\rust-env.ps1`.
    `scripts\build.ps1` and `scripts\release.ps1` do this themselves, through
-   `scripts\find-tools.ps1`: when cargo isn't on the PATH they look there, then
-   in `C:\rust`.
+   `scripts\find-tools.ps1`, when cargo isn't on the PATH: they look there. A
+   Rust kept elsewhere (`C:\rust`, say) you put on the PATH yourself, having
+   taken away other accounts' write access to a folder at the root of `C:`.
 
 The code needs Rust 1.91 or newer (`rust-version` in `Cargo.toml`, which clippy
 checks the code against). `rustup update` updates Rust; deleting the folder
@@ -110,8 +116,8 @@ powershell -File scripts\build.ps1
 ```
 
 It takes the tools from the PATH, or else from `%LOCALAPPDATA%\Programs\mingw64`
-or `C:\mingw64` and from `%LOCALAPPDATA%\Programs\rust` or `C:\rust`, and
-builds the C++ version (a compiler warning stops it) and both Rust builds.
+and `%LOCALAPPDATA%\Programs\rust`, and builds the C++ version (a compiler
+warning stops it) and both Rust builds.
 
 ### The C++ version by hand
 
@@ -327,12 +333,13 @@ PC (a warning fails the C++ build there too, `-Werror` being in
   `rust-env.ps1` (section 1); in the C++ exe, a build without CMake left out
   `-ffile-prefix-map` (section 2).
 - The Rust build fails in `dlltool` (it did on the first build machine): point
-  cargo at MinGW's, with the full path of `dlltool.exe` in your `mingw64\bin`,
-  in `cargo\config.toml` inside the Rust folder:
+  cargo at MinGW's. The build scripts set `CARGO_ENCODED_RUSTFLAGS`, which cargo
+  takes alone (`config.toml`'s `rustflags` are then ignored), so add the flag to
+  the `rust-env.ps1` line (section 1), each entry split by `0x1F`:
 
-  ```toml
-  [target.x86_64-pc-windows-gnu]
-  rustflags = ["-C", "dlltool=C:\\Users\\<you>\\AppData\\Local\\Programs\\mingw64\\bin\\dlltool.exe"]
+  ```powershell
+  $sep = [char]0x1F
+  $env:CARGO_ENCODED_RUSTFLAGS = "--remap-path-prefix=$env:CARGO_HOME=cargo$sep-Cdlltool=$env:LOCALAPPDATA\Programs\mingw64\bin\dlltool.exe"
   ```
 
 - Explorer still shows an exe's old icon: Windows keeps icons in a cache, which
