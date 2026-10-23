@@ -840,6 +840,13 @@ impl App {
 
     fn on_message(&self, msg: u32, wp: WPARAM, lp: LPARAM) -> LRESULT {
         let dpi = self.dpi.get();
+        // These carry a heap object made on a worker in lParam. Another program broadcasting one of their numbers
+        // (apps do broadcast in the WM_APP range) would hand a null or stray pointer; ignore one with no pointer.
+        if lp.0 == 0
+            && [WM_APP_LOADED, WM_APP_ICONS, WM_APP_TREE, WM_APP_TREE_ICONS, WM_APP_TABS_READ, WM_APP_DELETED].contains(&msg)
+        {
+            return LRESULT(0);
+        }
         unsafe {
             match msg {
                 WM_SIZE => {
@@ -1033,8 +1040,10 @@ impl App {
                     const DBT_DEVICEARRIVAL: usize = 0x8000;
                     const DBT_DEVICEREMOVECOMPLETE: usize = 0x8004;
                     const DBT_DEVTYP_VOLUME: u32 = 2;
-                    let volume = lp.0 != 0 && *((lp.0 as *const u32).add(1)) == DBT_DEVTYP_VOLUME;
-                    if (wp.0 == DBT_DEVICEARRIVAL || wp.0 == DBT_DEVICEREMOVECOMPLETE) && volume {
+                    // lParam is a DEV_BROADCAST_HDR only for these two events; read its device type only then, or a
+                    // broadcast of another event with a non-pointer lParam would fault reading lParam+4 (as C++ does).
+                    let arrival = wp.0 == DBT_DEVICEARRIVAL || wp.0 == DBT_DEVICEREMOVECOMPLETE;
+                    if arrival && lp.0 != 0 && *((lp.0 as *const u32).add(1)) == DBT_DEVTYP_VOLUME {
                         self.tree.refresh_drives(); // only This PC changes; the rest of the tree stays as the user left it
                         self.queue_refresh(); // This PC lists drives, and a tab's folder may be on the drive (its watch can't tell)
                     }
@@ -1506,7 +1515,9 @@ impl App {
         }
         if is(VK_TAB) && !ctrl && !alt {
             let order = [self.address, self.filter, self.tree.hwnd(), list];
-            let i = order.iter().position(|&h| h == focused).unwrap_or(3);
+            // The focus on a toolbar button (pressed, the mouse slid off): Tab goes to the filter, Shift+Tab to the
+            // list, as in the C++ build (len, not 3, so the arithmetic below matches).
+            let i = order.iter().position(|&h| h == focused).unwrap_or(order.len());
             let next = order[(i + if shift { 3 } else { 1 }) % 4];
             if next == list {
                 self.focus_list();

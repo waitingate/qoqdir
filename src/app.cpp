@@ -353,6 +353,11 @@ void App::layout() {
 // ---------------------------------------------------------------- messages
 
 LRESULT App::onMessage(UINT msg, WPARAM wp, LPARAM lp) {
+    // These carry a heap object made on a worker in lParam. Another program broadcasting one of their numbers (apps
+    // do broadcast in the WM_APP range) would hand a null or stray pointer; ignore one with no pointer (4.10).
+    if (!lp && (msg == WM_APP_LOADED || msg == WM_APP_ICONS || msg == WM_APP_TREE || msg == WM_APP_TREE_ICONS ||
+                msg == WM_APP_TABS_READ || msg == WM_APP_DELETED))
+        return 0;
     switch (msg) {
     case WM_SIZE:   // not while minimized: a list with no height loses its scroll position in a refresh (4.5)
         if (wp != SIZE_MINIMIZED) layout();
@@ -1544,7 +1549,8 @@ int App::iniNumber(const std::wstring& key, int fallback) const {
 void App::loadSettings(const CommandLine& cmd, const StartAsk& ask) {
     treeWidth_ = iniNumber(L"TreeWidth", 220);
     list_.setShowHidden(iniNumber(L"ShowHidden", 0) != 0);
-    list_.setSort(SortKey(std::clamp(iniNumber(L"SortColumn", 0), 0, 3)), iniNumber(L"SortAscending", 1) != 0);
+    int sortCol = iniNumber(L"SortColumn", 0);   // out of range falls back to Name, the default (5.11), as in Rust
+    list_.setSort(SortKey(sortCol >= 0 && sortCol <= 3 ? sortCol : 0), iniNumber(L"SortAscending", 1) != 0);
     const int defaults[] = {320, 150, 170, 90};
     std::vector<int> widths;
     for (int i = 0; i < 4; ++i)

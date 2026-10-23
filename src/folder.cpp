@@ -214,7 +214,8 @@ void listDrives(Listing& r) {
             it.icon = sfi->iIcon;
         }
         ULARGE_INTEGER freeBytes{}, total{};
-        if (GetDiskFreeSpaceExW(it.name.c_str(), nullptr, &total, &freeBytes))
+        // Free bytes available to the caller (respecting a quota), as Explorer shows and the Rust version reads.
+        if (GetDiskFreeSpaceExW(it.name.c_str(), &freeBytes, &total, nullptr))
             it.type += L"  \u00b7  " + byteSize(freeBytes.QuadPart) + L" free of " + byteSize(total.QuadPart);
         r.items.push_back(std::move(it));
     }
