@@ -545,9 +545,12 @@ LRESULT App::onMessage(UINT msg, WPARAM wp, LPARAM lp) {
     case WM_CLOSE: {
         // A window going with many tabs offers to save them, so a set isn't lost by one click (5.7). Saved here and
         // now: a worker would die with the window. A self-test never asks.
+        if (asking_) return 0;   // a second close while the question is up (a script's WinClose) would save twice
         if (tabs_.size() >= 4 && !selfTest_) {
+            asking_ = true;
             int answer = MessageBoxW(wnd_, L"Save these tabs in Bookmarks\\Tabs before closing?", kAppName,
                                      MB_YESNOCANCEL | MB_ICONQUESTION);
+            asking_ = false;
             if (answer == IDCANCEL) return 0;
             if (answer == IDYES) saveFolderShortcuts(joinPath(tree_.bookmarks(), L"Tabs"), tabFolders());
         }
@@ -1279,6 +1282,9 @@ void App::switchTab(int index) {
         showTabs();
         return;
     }
+    // The tab bar never takes the focus, so an open rename box would be cancelled and the typed name lost. Commit it
+    // first by moving the focus to the list, as a click anywhere else does (5.4).
+    if (list_.renaming()) SetFocus(list_.hwnd());
     rememberView();
     active_ = index;
     showTab();

@@ -270,6 +270,7 @@ pub struct App {
     ini: Vec<u16>, // settings file
     pub st: RefCell<State>,
     pub quiet: Cell<bool>, // no beeps (set by the self-test, which triggers errors on purpose)
+    asking: Cell<bool>,    // the "Save these tabs?" box is up: a second WM_CLOSE is ignored (5.7)
     hinted_filter: Cell<bool>, // the two things Explorer users don't expect, said once (5.3)
     hinted_up: Cell<bool>,
     pub late_hint: Cell<Option<&'static str>>, // a hint for when the folder being loaded lands (a navigation clears messages)
@@ -592,6 +593,7 @@ impl App {
                     last_focus: None,
                 }),
                 quiet: Cell::new(false),
+                asking: Cell::new(false),
                 hinted_filter: Cell::new(false),
                 hinted_up: Cell::new(false),
                 late_hint: Cell::new(None),
@@ -1064,9 +1066,14 @@ impl App {
                 WM_CLOSE => {
                     // A window going with many tabs offers to save them, so a set isn't lost by one click (5.7). Saved
                     // here and now: a worker would die with the window. A self-test never asks.
+                    if self.asking.get() {
+                        return LRESULT(0); // a second close while the question is up (a script's WinClose) would save twice
+                    }
                     if self.tabs() >= 4 && !self.quiet.get() {
                         let text = w!("Save these tabs in Bookmarks\\Tabs before closing?");
+                        self.asking.set(true);
                         let answer = MessageBoxW(Some(self.wnd), text, pcwstr(&wide(APP_NAME)), MB_YESNOCANCEL | MB_ICONQUESTION);
+                        self.asking.set(false);
                         if answer == IDCANCEL {
                             return LRESULT(0);
                         }
@@ -2158,6 +2165,11 @@ impl App {
         if index >= self.tabs() || index == self.active() {
             self.show_tabs();
             return;
+        }
+        // The tab bar never takes the focus, so an open rename box would be cancelled and the typed name lost. Commit
+        // it first by moving the focus to the list, as a click anywhere else does (5.4).
+        if self.list.renaming() {
+            focus(self.list.hwnd());
         }
         self.remember_view();
         self.st.borrow_mut().active = index;

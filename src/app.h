@@ -189,6 +189,7 @@ private:
     bool hintedFilter_ = false, hintedUp_ = false;   // the two things Explorer users don't expect, said once (5.3)
     bool dragging_ = false;         // moving the tree/list splitter
     bool draggingFiles_ = false;    // a drag started from our own list is in progress
+    bool asking_ = false;           // the "Save these tabs?" box is up: a second WM_CLOSE is ignored (5.7)
     bool refreshQueued_ = false;
     bool refreshForWatch_ = false;   // ...and only a change in the folder shown asked for it (onFolderChanged)
     struct QueuedView {             // kept by refresh() while a load is pending: what a delete, rename or new
