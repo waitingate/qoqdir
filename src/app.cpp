@@ -19,7 +19,7 @@ enum : int { ID_BACK = 100, ID_FORWARD, ID_UP, ID_ADDRESS, ID_FILTER, ID_TABS, I
 enum : UINT {
     WM_APP_LOADED = WM_APP + 1, WM_APP_CHANGED, WM_APP_CLOSETAB, WM_APP_RENAME, WM_APP_ICONS, WM_APP_TREE,
     WM_APP_MIDDLECLICK, WM_APP_TABS_SAVED, WM_APP_TABS_READ, WM_APP_PRESSTAB, WM_APP_DRAGTAB, WM_APP_TREE_ICONS,
-    WM_APP_BOOKMARKS, WM_APP_NEWWINDOW
+    WM_APP_BOOKMARKS, WM_APP_NEWWINDOW, WM_APP_BOOKMARKED, WM_APP_DELETED
 };
 
 constexpr size_t kMaxHistory = 100;
@@ -449,6 +449,16 @@ LRESULT App::onMessage(UINT msg, WPARAM wp, LPARAM lp) {
     case WM_APP_NEWWINDOW:   // the new window did not start (openInNewWindow)
         warn(L"Can't open a new window: " + errorText(DWORD(wp)));
         return 0;
+    case WM_APP_BOOKMARKED:   // the shortcut was written on a worker (bookmarkTab)
+        tree_.refreshFolder(tree_.bookmarks());
+        if (wp) setMessage(L"Bookmarked");
+        else warn(L"Can't make the bookmark");
+        return 0;
+    case WM_APP_DELETED: {   // the recycle finished on a worker (deleteSelection); select what followed (4.6)
+        std::unique_ptr<ViewState> v(reinterpret_cast<ViewState*>(lp));
+        if (wp && v) refresh(*v);   // nothing deleted (No, or it failed): the selection was already cleared
+        return 0;
+    }
     case WM_APP_TABS_READ: {
         std::unique_ptr<std::vector<std::wstring>> folders(reinterpret_cast<std::vector<std::wstring>*>(lp));
         addSavedTabs(*folders);
@@ -1339,10 +1349,11 @@ void App::showTabs() {
 
 // The tab's folder as a shortcut in Bookmarks, shown in the tree at once (5.6).
 void App::bookmarkTab(int index) {
-    bool ok = bookmarkFolder(tree_.bookmarks(), tabs_[size_t(index)].path);
-    tree_.refreshFolder(tree_.bookmarks());
-    if (ok) setMessage(L"Bookmarked");
-    else warn(L"Can't make the bookmark");
+    // On a worker: the tab's folder, and so writing the shortcut for it, may wait on a server that is off, as
+    // saveTabs does. The reply shows the tree and the message.
+    inBackground([wnd = wnd_, dir = tree_.bookmarks(), folder = tabs_[size_t(index)].path] {
+        PostMessageW(wnd, WM_APP_BOOKMARKED, bookmarkFolder(dir, folder), 0);
+    });
 }
 
 // ---------------------------------------------------------------- saved tabs (Bookmarks\Tabs)
@@ -1385,9 +1396,16 @@ void App::deleteSelection(bool permanently) {
     int next = rowAfterDeleting(rows, list_.count());
     ViewState v = next >= 0 ? ViewState::selecting(list_.at(next).name) : ViewState{};
     v.top = list_.topRow();
-    // No to Windows' question deletes nothing: the selection stays. After a delete nothing is selected until
-    // the reload lands, so a second Delete cannot hit the deleted files.
-    if (deleteItems(wnd_, list_.dir(), list_.selectedItems(), permanently)) { list_.select({}, v.focus); refresh(v); }
+    std::vector<Item> items = list_.selectedItems();
+    std::wstring dir = list_.dir();
+    // Windows recycles on a worker, so the window stays responsive for a big delete (4.7) and the hang watch stays
+    // quiet. The selection is cleared now, keeping the focus on the item that will follow the deleted ones: a second
+    // Delete meanwhile acts on nothing (4.6). The reply selects that item once the folder is read again.
+    list_.select({}, v.focus);
+    inBackground([wnd = wnd_, dir, items, permanently, v = std::move(v)]() mutable {
+        bool ok = deleteItems(wnd, dir, items, permanently);
+        post(wnd, WM_APP_DELETED, ok, std::make_unique<ViewState>(std::move(v)));
+    });
 }
 
 void App::newFolder() {

@@ -110,6 +110,8 @@ const WM_APP_DRAGTAB: u32 = WM_APP + 11;
 const WM_APP_TREE_ICONS: u32 = WM_APP + 12;
 const WM_APP_BOOKMARKS: u32 = WM_APP + 13;
 const WM_APP_NEWWINDOW: u32 = WM_APP + 14;
+const WM_APP_BOOKMARKED: u32 = WM_APP + 15;
+const WM_APP_DELETED: u32 = WM_APP + 16;
 
 pub const TIMER_REFRESH: usize = 1;
 const TIMER_STATUS: usize = 2;
@@ -941,6 +943,21 @@ impl App {
                     // the new window did not start (open_in_new_window)
                     let error = windows::core::Error::from_hresult(HRESULT(wp.0 as i32));
                     self.warn(&format!("Can't open a new window: {}", error.message()));
+                    return LRESULT(0);
+                }
+                WM_APP_BOOKMARKED => {
+                    // the shortcut was written on a worker (bookmark_tab)
+                    self.tree.refresh_folder(self.tree.bookmarks());
+                    if wp.0 != 0 { self.set_message("Bookmarked") } else { self.warn("Can't make the bookmark") }
+                    return LRESULT(0);
+                }
+                WM_APP_DELETED => {
+                    // the recycle finished on a worker (delete_selection); select what followed (4.6). A null pointer
+                    // means nothing was deleted (No, or it failed): the selection was already cleared.
+                    if lp.0 != 0 {
+                        let view = *Box::from_raw(lp.0 as *mut ViewState);
+                        self.refresh(view);
+                    }
                     return LRESULT(0);
                 }
                 WM_APP_TABS_READ => {
@@ -2232,9 +2249,13 @@ impl App {
     pub fn bookmark_tab(&self, index: usize) {
         let folder = self.st.borrow().tabs.get(index).map(|t| t.location.clone());
         let Some((folder, dir)) = folder.zip(self.tree.bookmarks().path().map(|p| p.to_path_buf())) else { return };
-        let ok = bookmark_folder(&dir, &folder);
-        self.tree.refresh_folder(self.tree.bookmarks());
-        if ok { self.set_message("Bookmarked") } else { self.warn("Can't make the bookmark") }
+        // On a worker: the tab's folder, and so writing the shortcut for it, may wait on a server that is off, as
+        // save_tabs does. The reply shows the tree and the message.
+        let wnd = self.wnd.0 as usize;
+        in_background(move || {
+            let ok = bookmark_folder(&dir, &folder);
+            let _ = unsafe { PostMessageW(Some(HWND(wnd as _)), WM_APP_BOOKMARKED, WPARAM(usize::from(ok)), LPARAM(0)) };
+        });
     }
 
     // ------------------------------------------------------------ saved tabs (Bookmarks\Tabs)
@@ -2290,12 +2311,17 @@ impl App {
         let next = row_after_deleting(&rows, self.list.count());
         let mut view = next.and_then(|r| self.list.item(r)).map(|it| ViewState::selecting(it.name)).unwrap_or_default();
         view.top = Some(self.list.top_row());
-        // No to Windows' question deletes nothing: the selection stays. After a delete nothing is selected until
-        // the reload lands, so a second Delete cannot hit the deleted files.
-        if delete_items(self.wnd, &dir, &self.list.selected_items(), permanently) {
-            self.list.select(&[], view.focus.as_deref());
-            self.refresh(view);
-        }
+        let items = self.list.selected_items();
+        // Windows recycles on a worker, so the window stays responsive for a big delete (4.7) and the hang watch
+        // stays quiet. The selection is cleared now, keeping the focus on the item that will follow the deleted ones:
+        // a second Delete meanwhile acts on nothing (4.6). The reply selects that item once the folder is read again.
+        self.list.select(&[], view.focus.as_deref());
+        let wnd = self.wnd.0 as usize;
+        in_background(move || {
+            let ok = delete_items(HWND(wnd as _), &dir, &items, permanently);
+            let view = if ok { Box::into_raw(Box::new(view)) as isize } else { 0 };
+            let _ = unsafe { PostMessageW(Some(HWND(wnd as _)), WM_APP_DELETED, WPARAM(usize::from(ok)), LPARAM(view)) };
+        });
     }
 
     fn new_folder(&self) {
