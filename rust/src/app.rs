@@ -57,7 +57,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
     SM_CYCAPTION, SM_CYSIZEFRAME, SPI_GETHIGHCONTRAST,
     SHOW_WINDOW_CMD, SPI_GETNONCLIENTMETRICS, SW_SHOWMAXIMIZED, SW_SHOWMINNOACTIVE, SW_SHOWNA, SW_SHOWNOACTIVATE,
     SW_SHOWNORMAL, SWP_NOACTIVATE, SWP_NOZORDER, SetClassLongPtrW,
-    SetCursor, SetTimer, SetWindowLongPtrW, SetWindowPlacement, SetWindowPos, ShowWindow, SystemParametersInfoW, TPM_RETURNCMD,
+    SetCursor, SetTimer, SetWindowLongPtrW, SetWindowPos, ShowWindow, SystemParametersInfoW, TPM_RETURNCMD,
     TPM_RIGHTBUTTON, TrackPopupMenuEx, WINDOW_EX_STYLE, WINDOW_STYLE, WINDOWPLACEMENT, WM_ACTIVATE, WM_APP,
     WM_APPCOMMAND, WM_CAPTURECHANGED, WM_CHAR, WM_CLOSE, WM_COMMAND, WM_CONTEXTMENU, WM_DESTROY, WM_DEVICECHANGE,
     WM_DPICHANGED, WM_DRAWITEM, WM_ENDSESSION, WM_GETMINMAXINFO, WM_INITMENUPOPUP, WM_KEYDOWN, WM_LBUTTONDBLCLK,
@@ -349,6 +349,16 @@ fn is_new_tab_verb(verb: &str) -> bool {
     ["opennewtab", "opennewwindow", "opennewprocess"].iter().any(|v| verb.eq_ignore_ascii_case(v))
 }
 
+/// A window number from qoqdir.ini (`ini` is the file path, wide): missing, not a number, or far off any screen (a
+/// damaged file: a value stays within +/-100000, so sums like x + w don't overflow) gives the fallback.
+fn ini_number(ini: &[u16], key: &str, fallback: i32) -> i32 {
+    let mut buf = [0u16; 32];
+    let k = wide(key);
+    unsafe { GetPrivateProfileStringW(w!("Window"), pcwstr(&k), w!(""), Some(&mut buf), pcwstr(ini)) };
+    let value: Option<i32> = from_wide(&buf).to_string_lossy().trim().parse().ok();
+    value.filter(|v| (-100_000..=100_000).contains(v)).unwrap_or(fallback)
+}
+
 /// A shortcut's target that opens in a tab: a folder path, or This PC. Anything else is for Windows.
 fn opens_in_tab(target: &Location) -> bool {
     target.path().is_none_or(|p| is_absolute_path(p.as_os_str()))
@@ -445,13 +455,25 @@ impl App {
                 ..Default::default()
             };
             RegisterClassExW(&class);
-            // A window asked for a place and size is made with both, at that monitor's scaling. Made at the default
-            // size first, it could lie mostly on a monitor of other scaling, and sizing it then would make Windows
-            // scale it again (WM_DPICHANGED), to another size.
             let ask = Self::start_ask();
             let sys_dpi = GetDpiForSystem();
-            let (x, y, width, height) =
-                ask.place.unwrap_or((CW_USEDEFAULT, CW_USEDEFAULT, scale(1100, sys_dpi), scale(700, sys_dpi)));
+            let exe = std::env::current_exe().unwrap_or_default();
+            // Without settings (self-test), read from a file that cannot exist: every value is then a default.
+            let ini_name = if use_settings { format!("{}.ini", APP_NAME.to_lowercase()) } else { "none?.ini".into() };
+            let ini = wide(exe.with_file_name(ini_name));
+            // Where to make the window: the asked place (Open in new window, 5.8), else the saved place when it is on
+            // a monitor, else the default. Made there and not moved after, Windows does not rescale it (WM_DPICHANGED)
+            // and change its size, which it would for a place on a monitor of other scaling (5.11).
+            let (x, y, width, height) = ask.place.unwrap_or_else(|| {
+                let (w, h) = (ini_number(&ini, "Width", 0), ini_number(&ini, "Height", 0));
+                let (x, y) = (ini_number(&ini, "X", 0), ini_number(&ini, "Y", 0));
+                let r = RECT { left: x, top: y, right: x + w, bottom: y + h };
+                if w > 0 && h > 0 && !MonitorFromRect(&r, MONITOR_DEFAULTTONULL).is_invalid() {
+                    (x, y, w, h)
+                } else {
+                    (CW_USEDEFAULT, CW_USEDEFAULT, scale(1100, sys_dpi), scale(700, sys_dpi))
+                }
+            });
             let wnd = CreateWindowExW(
                 WINDOW_EX_STYLE(0),
                 pcwstr(&name),
@@ -527,7 +549,6 @@ impl App {
                     let _ = names.SetHwndPropStr(h, OBJID_CLIENT.0 as u32, CHILDID_SELF, PROPID_ACC_NAME, pcwstr(&text));
                 }
             }
-            let exe = std::env::current_exe().unwrap_or_default();
             // Bookmarks are shortcuts in a folder next to the exe (in a self-test: in the test folder).
             let bookmarks = match (use_settings, cmd.folders.first().and_then(|f| f.path())) {
                 (false, Some(test_dir)) => test_dir.join("Bookmarks"),
@@ -539,9 +560,6 @@ impl App {
             let list = FileList::create(wnd, ID_LIST);
             const SBARS_SIZEGRIP: u32 = 0x100;
             let status = make(w!("msctls_statusbar32"), w!(""), SBARS_SIZEGRIP, 0, ID_STATUS);
-
-            // Without settings (self-test), read from a file that cannot exist: every value is a default.
-            let ini = wide(exe.with_file_name(if use_settings { format!("{}.ini", APP_NAME.to_lowercase()) } else { "none?.ini".into() }));
 
             let app = Rc::new(App {
                 wnd,
@@ -2413,14 +2431,9 @@ impl App {
         }
     }
 
-    /// A number from qoqdir.ini; missing, not a number or far off any screen (a damaged file: x + width must not
-    /// overflow): the default.
+    /// A window number from qoqdir.ini.
     fn number(&self, key: &str, fallback: i32) -> i32 {
-        let mut buf = [0u16; 32];
-        let k = wide(key);
-        unsafe { GetPrivateProfileStringW(w!("Window"), pcwstr(&k), w!(""), Some(&mut buf), pcwstr(&self.ini)) };
-        let value: Option<i32> = from_wide(&buf).to_string_lossy().trim().parse().ok();
-        value.filter(|v| (-100_000..=100_000).contains(v)).unwrap_or(fallback)
+        ini_number(&self.ini, key, fallback)
     }
 
     /// Open in new window (5.8): the folder in another Qoqdir, a title bar down and right of this window and the same
@@ -2523,44 +2536,13 @@ impl App {
             st.active = 0;
         }
 
-        let quiet = !self.use_settings || ask.quiet; // a self-test never steals the focus either
-        // A window asked to go somewhere (Open in new window, 5.8) was made there (create), so it is only shown here,
-        // maximized if asked. Any other start takes the saved place.
-        let (w, h) = (self.number("Width", 0), self.number("Height", 0));
+        // The window is already at its place and size (create). Only show it now, maximized if asked (Open in new
+        // window, 5.8) or saved. A self-test never steals the focus.
+        let quiet = !self.use_settings || ask.quiet;
+        let maximized = if ask.place.is_some() { ask.maximized } else { self.number("Maximized", 0) != 0 };
+        let show = if quiet { SW_SHOWNOACTIVATE } else if maximized { SW_SHOWMAXIMIZED } else { SW_SHOWNORMAL };
         unsafe {
-            if ask.place.is_some() {
-                let show = if quiet {
-                    SW_SHOWNOACTIVATE
-                } else if ask.maximized {
-                    SW_SHOWMAXIMIZED
-                } else {
-                    SW_SHOWNORMAL
-                };
-                let _ = ShowWindow(self.wnd, show);
-            } else if w > 0 && h > 0 {
-                let (x, y) = (self.number("X", 0), self.number("Y", 0));
-                let show = if quiet {
-                    SW_SHOWNOACTIVATE
-                } else if self.number("Maximized", 0) != 0 {
-                    SW_SHOWMAXIMIZED
-                } else {
-                    SW_SHOWNORMAL
-                };
-                let wp = WINDOWPLACEMENT {
-                    length: size_of::<WINDOWPLACEMENT>() as u32,
-                    rcNormalPosition: RECT { left: x, top: y, right: x + w, bottom: y + h },
-                    showCmd: show.0 as u32,
-                    ..Default::default()
-                };
-                // A position on a monitor that is gone (a laptop undocked) would put the window out of sight.
-                if MonitorFromRect(&wp.rcNormalPosition, MONITOR_DEFAULTTONULL).is_invalid() {
-                    let _ = ShowWindow(self.wnd, show);
-                } else {
-                    let _ = SetWindowPlacement(self.wnd, &wp);
-                }
-            } else {
-                let _ = ShowWindow(self.wnd, if quiet { SW_SHOWNOACTIVATE } else { SW_SHOWNORMAL });
-            }
+            let _ = ShowWindow(self.wnd, show);
         }
     }
 

@@ -179,6 +179,17 @@ $place = [QoqdirHelp]::Place($p.MainWindowHandle)
 Check ($place -eq "100,80,$(100 + $w),$(80 + $h)") `
   "started with a place and size, it opens there, not at the saved place (at $place)"
 
+# Started with no place, it opens at the place saved in qoqdir.ini (5.11), made there directly so a monitor of other
+# scaling does not resize it. Physical pixels, over the least size, on the primary monitor.
+$sw = [QoqdirHelp]::Scaled(820, 120, 90); $sh = [QoqdirHelp]::Scaled(540, 120, 90)
+Set-Content -Path $ini -Value "[Window]`r`nX=120`r`nY=90`r`nWidth=$sw`r`nHeight=$sh"
+$p = StartQuiet $copy '--tab=C:\Users\Public'
+[void](WaitFor { $p.Refresh(); $p.HasExited -or $p.MainWindowTitle -eq 'Public' } 5000)
+$place = [QoqdirHelp]::Place($p.MainWindowHandle)
+[void]$p.CloseMainWindow(); [void]$p.WaitForExit(5000)
+Check ($place -eq "120,90,$(120 + $sw),$(90 + $sh)") `
+  "started with no place, it opens at the place saved in qoqdir.ini (at $place)"
+
 # A folder it can't write to, as Program Files is for most users: only adding files and folders is denied
 # (to you, by your SID), so it can still start.
 $ro = Join-Path $dir 'read-only'

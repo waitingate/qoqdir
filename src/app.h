@@ -157,6 +157,7 @@ private:
     NewWindow newWindow(const std::wstring& dir) const;
     void openInNewWindow(const std::wstring& dir);
     void loadSettings(const CommandLine& cmd, const StartAsk& ask);
+    int iniNumber(const std::wstring& key, int fallback) const;   // a window number from qoqdir.ini, bounded
     void saveSettings();
 
     // Self-test (selftest.cpp)

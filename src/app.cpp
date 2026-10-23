@@ -155,6 +155,9 @@ App::StartAsk App::startAsk() {
 
 bool App::create(HINSTANCE instance, const CommandLine& cmd, bool useSettings) {
     useSettings_ = useSettings;
+    std::wstring exe = exePath();
+    // Without settings (self-test), read from a file that does not exist: every value is then a default.
+    ini_ = useSettings_ ? joinPath(parentPath(exe), toLower(kAppName) + L".ini") : L"?";
     WNDCLASSEXW wc{};
     wc.cbSize = sizeof wc;
     wc.lpfnWndProc = wndProc;
@@ -164,13 +167,19 @@ bool App::create(HINSTANCE instance, const CommandLine& cmd, bool useSettings) {
     wc.lpszClassName = kAppName;
     RegisterClassExW(&wc);
 
-    // A window asked for a place and size is made with both, at that monitor's scaling. Made at the default size
-    // first, it could lie mostly on a monitor of other scaling, and sizing it then would make Windows scale it again
-    // (WM_DPICHANGED), to another size.
+    // Where to make the window: where the program that started this one asked (Open in new window, 5.8), else the
+    // saved place when it is on a monitor, else the default. Made there and not moved after, Windows does not rescale
+    // it (WM_DPICHANGED) and change its size, which it would for a place on a monitor of other scaling (5.11).
     StartAsk ask = startAsk();
     UINT sysDpi = GetDpiForSystem();
-    StartAsk::Place at = ask.place.value_or(
-        StartAsk::Place{CW_USEDEFAULT, CW_USEDEFAULT, scale(1100, sysDpi), scale(700, sysDpi)});
+    StartAsk::Place at{CW_USEDEFAULT, CW_USEDEFAULT, scale(1100, sysDpi), scale(700, sysDpi)};
+    if (ask.place) {
+        at = *ask.place;
+    } else {
+        int w = iniNumber(L"Width", 0), h = iniNumber(L"Height", 0), x = iniNumber(L"X", 0), y = iniNumber(L"Y", 0);
+        RECT r{x, y, x + w, y + h};   // a place on a monitor that is gone (a laptop undocked) falls back to the default
+        if (w > 0 && h > 0 && MonitorFromRect(&r, MONITOR_DEFAULTTONULL)) at = {x, y, w, h};
+    }
     CreateWindowExW(0, wc.lpszClassName, kAppName, WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN, at.x, at.y, at.width,
                     at.height, nullptr, nullptr, instance, this);
     if (!wnd_) return false;
@@ -190,7 +199,6 @@ bool App::create(HINSTANCE instance, const CommandLine& cmd, bool useSettings) {
     tabBar_ = make(WC_TABCONTROLW, L"", TCS_FOCUSNEVER, 0, ID_TABS);
     plus_ = make(L"BUTTON", L"+", BS_PUSHBUTTON, 0, ID_PLUS);
     // Bookmarks are shortcuts in a folder next to the exe (in a self-test: in the test folder).
-    std::wstring exe = exePath();
     std::wstring bookmarks = joinPath(useSettings ? parentPath(exe) : cmd.folders.at(0), L"Bookmarks");
     CreateDirectoryW(bookmarks.c_str(), nullptr);   // fails harmlessly if it exists
     tree_.create(wnd_, ID_TREE, WM_APP_TREE, WM_APP_TREE_ICONS, bookmarks);
@@ -245,8 +253,6 @@ bool App::create(HINSTANCE instance, const CommandLine& cmd, bool useSettings) {
     applyFont();
     tree_.fill();
 
-    // Without settings (self-test), read from a file that does not exist: every value is a default.
-    ini_ = useSettings_ ? joinPath(parentPath(exe), toLower(kAppName) + L".ini") : L"?";
     loadSettings(cmd, ask);
     layout();
     showTab();
@@ -1525,23 +1531,24 @@ void App::openInNewWindow(const std::wstring& dir) {
     });
 }
 
-void App::loadSettings(const CommandLine& cmd, const StartAsk& ask) {
-    // Missing, not a number or far off any screen (a damaged file: x + width must not overflow): the default.
-    auto number = [&](const std::wstring& key, int fallback) {
-        wchar_t text[32] = {};
-        GetPrivateProfileStringW(L"Window", key.c_str(), L"", text, 32, ini_.c_str());
-        wchar_t* end = nullptr;
-        long value = wcstol(text, &end, 10);
-        return end != text && *end == 0 && value >= -100000 && value <= 100000 ? int(value) : fallback;
-    };
+// Missing, not a number, or far off any screen (a damaged file: a value stays within +/-100000, so sums like x + w
+// don't overflow): the fallback. The window numbers in qoqdir.ini.
+int App::iniNumber(const std::wstring& key, int fallback) const {
+    wchar_t text[32] = {};
+    GetPrivateProfileStringW(L"Window", key.c_str(), L"", text, 32, ini_.c_str());
+    wchar_t* end = nullptr;
+    long value = wcstol(text, &end, 10);
+    return end != text && *end == 0 && value >= -100000 && value <= 100000 ? int(value) : fallback;
+}
 
-    treeWidth_ = number(L"TreeWidth", 220);
-    list_.setShowHidden(number(L"ShowHidden", 0) != 0);
-    list_.setSort(SortKey(std::clamp(number(L"SortColumn", 0), 0, 3)), number(L"SortAscending", 1) != 0);
+void App::loadSettings(const CommandLine& cmd, const StartAsk& ask) {
+    treeWidth_ = iniNumber(L"TreeWidth", 220);
+    list_.setShowHidden(iniNumber(L"ShowHidden", 0) != 0);
+    list_.setSort(SortKey(std::clamp(iniNumber(L"SortColumn", 0), 0, 3)), iniNumber(L"SortAscending", 1) != 0);
     const int defaults[] = {320, 150, 170, 90};
     std::vector<int> widths;
     for (int i = 0; i < 4; ++i)
-        widths.push_back(scale(number(L"Column" + std::to_wstring(i), defaults[i]), dpi_));
+        widths.push_back(scale(iniNumber(L"Column" + std::to_wstring(i), defaults[i]), dpi_));
     list_.setColumnWidths(widths);
 
     // Tabs are not remembered: the command line's folders, or the home folder.
@@ -1549,24 +1556,11 @@ void App::loadSettings(const CommandLine& cmd, const StartAsk& ask) {
     if (tabs_.empty()) tabs_.push_back(makeTab(knownFolder(FOLDERID_Profile)));
     active_ = 0;
 
-    bool quiet = !useSettings_ || ask.quiet;   // a self-test never steals the focus either
-    // A window asked to go somewhere (Open in new window, 5.8) was made there (create), so it is only shown here,
-    // maximized if asked. Any other start takes the saved place.
-    int w = number(L"Width", 0), h = number(L"Height", 0);
-    if (ask.place) {
-        ShowWindow(wnd_, quiet ? SW_SHOWNOACTIVATE : ask.maximized ? SW_SHOWMAXIMIZED : SW_SHOWNORMAL);
-    } else if (w > 0 && h > 0) {
-        WINDOWPLACEMENT wp{};
-        wp.length = sizeof wp;
-        int x = number(L"X", 0), y = number(L"Y", 0);
-        wp.rcNormalPosition = {x, y, x + w, y + h};
-        wp.showCmd = quiet ? SW_SHOWNOACTIVATE : number(L"Maximized", 0) ? SW_SHOWMAXIMIZED : SW_SHOWNORMAL;
-        // A position on a monitor that is gone (a laptop undocked) would put the window out of sight.
-        if (MonitorFromRect(&wp.rcNormalPosition, MONITOR_DEFAULTTONULL)) SetWindowPlacement(wnd_, &wp);
-        else ShowWindow(wnd_, wp.showCmd);
-    } else {
-        ShowWindow(wnd_, quiet ? SW_SHOWNOACTIVATE : SW_SHOWNORMAL);
-    }
+    // The window is already at its place and size (create). Only show it now, maximized if asked (Open in new
+    // window, 5.8) or saved. A self-test never steals the focus.
+    bool quiet = !useSettings_ || ask.quiet;
+    bool maximized = ask.place ? ask.maximized : iniNumber(L"Maximized", 0) != 0;
+    ShowWindow(wnd_, quiet ? SW_SHOWNOACTIVATE : maximized ? SW_SHOWMAXIMIZED : SW_SHOWNORMAL);
 }
 
 void App::saveSettings() {
