@@ -281,6 +281,7 @@ void showMenu(HWND owner, IContextMenu* cm, POINT pt, const std::function<bool(c
     wchar_t verb[80] = {};
     if (FAILED(cm->GetCommandString(id - kFirstCmd, GCS_VERBW, nullptr, reinterpret_cast<LPSTR>(verb), 80)))
         verb[0] = 0;
+    verb[79] = 0;   // a handler that fills all 80 without a terminator must not run intercept()'s wcslen off the end
     if (intercept && intercept(verb)) return;
 
     CMINVOKECOMMANDINFOEX ici{};
@@ -537,8 +538,19 @@ bool saveFolderShortcuts(const std::wstring& dir, const std::vector<std::wstring
 }
 
 bool bookmarkFolder(const std::wstring& dir, const std::wstring& folder) {
-    std::wstring lnk = joinPath(dir, shortcutName(folder));
-    return exists(lnk) || writeFolderShortcut(lnk, folder);
+    // The shortcut's name comes from the folder's display name, so two folders can want the same one (D:\work\logs
+    // and E:\logs both "logs.lnk"). Keep an existing one that already points here (bookmarking again), but give a
+    // different folder the next free "name (2).lnk", as New folder numbers a clash, rather than claim it did.
+    std::wstring base = shortcutName(folder);   // "<name>.lnk"
+    std::wstring stem = base.substr(0, base.size() - 4);
+    for (int n = 1; n <= 99; ++n) {
+        std::wstring lnk = joinPath(dir, n == 1 ? base : stem + L" (" + std::to_wstring(n) + L").lnk");
+        if (!exists(lnk)) return writeFolderShortcut(lnk, folder);
+        bool isFolder = false;
+        std::optional<std::wstring> target = shortcutTarget(lnk, &isFolder);
+        if (isFolder && target && samePath(*target, folder)) return true;   // already bookmarked
+    }
+    return false;
 }
 
 std::vector<std::wstring> savedFolders(const std::wstring& dir) {

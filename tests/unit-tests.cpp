@@ -189,6 +189,10 @@ int main(int argc, char** argv) {
         CHECK_EQ(parseCommandLine({L"C:\""}).folders.at(0), L"C:\\");
         CommandLine dash = parseCommandLine({L"--tab=-h"});
         CHECK(dash.error.empty() && !dash.help && dash.folders.size() == 1 && dash.folders[0].ends_with(L"\\-h"));
+        // A trailing backslash is the same folder (one tab), and -t= takes a name starting with "-" as a folder too.
+        CHECK(parseCommandLine({L"C:\\A", L"-t=C:\\A\\"}).folders.size() == 1);
+        CommandLine td = parseCommandLine({L"-t=-h"});
+        CHECK(td.error.empty() && td.folders.size() == 1 && td.folders[0].ends_with(L"\\-h"));
         CHECK(!parseCommandLine({L"--tab=C:\\A", L"-q"}).error.empty());
         CHECK(!parseCommandLine({L"-n"}).error.empty());               // -n no longer exists
         CHECK(!parseCommandLine({L"-tC:\\A"}).error.empty());          // nor -t without "="

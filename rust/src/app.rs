@@ -254,6 +254,7 @@ pub struct App {
     pub splitter_x: Cell<i32>,
     pub dragging: Cell<bool>,   // moving the tree/list splitter
     dragging_files: Cell<bool>, // a drag started from our own list is in progress
+    drag_source: RefCell<Option<Location>>, // the folder it came from: a drop back there does nothing (even after a load)
     pub refresh_queued: Cell<bool>,
     refresh_for_watch: Cell<bool>, // ...and only a change in the folder shown asked for it (on_folder_changed)
     // Out of `st`: a watch talks to the shell as it goes, which can call straight back into on_message, so each is
@@ -588,6 +589,7 @@ impl App {
                 splitter_x: Cell::new(0),
                 dragging: Cell::new(false),
                 dragging_files: Cell::new(false),
+                drag_source: RefCell::new(None),
                 refresh_queued: Cell::new(false),
                 refresh_for_watch: Cell::new(false),
                 watch: RefCell::new(None),
@@ -647,7 +649,9 @@ impl App {
                 Box::new(move |pt| {
                     let app = weak.upgrade()?;
                     let dir = app.tree.drop_target(pt);
-                    let from_here = dir.as_ref().is_some_and(|d| app.dragging_files.get() && d.same(&app.list.location()));
+                    let from_here = dir.as_ref().is_some_and(|d| {
+                        app.dragging_files.get() && app.drag_source.borrow().as_ref().is_some_and(|s| d.same(s))
+                    });
                     // A node that refuses says why in the status bar (5.5).
                     if (dir.is_none() || from_here) && pt.is_some_and(|pt| app.tree.location_at(pt).is_some()) {
                         app.set_message(if from_here { "The files come from there" } else { "Only a folder on this PC takes a drop" });
@@ -1237,6 +1241,7 @@ impl App {
                 LVN_BEGINDRAG | LVN_BEGINRDRAG => {
                     let items = self.list.selected_items();
                     if !items.is_empty() {
+                        *self.drag_source.borrow_mut() = Some(self.list.location());
                         self.dragging_files.set(true);
                         drag_out(self.wnd, &self.list.location(), &items);
                         self.dragging_files.set(false);
@@ -1337,20 +1342,23 @@ impl App {
                 let r = window_rect(self.tree.hwnd());
                 pt = POINT { x: r.left + scale(24, self.dpi.get()), y: r.top + scale(24, self.dpi.get()) };
             }
-            let Some(cm) = item_menu_at(self.wnd, &location) else { return };
-            show_menu(self.wnd, &cm, pt, &mut |verb| {
-                if is_open_verb(verb) {
-                    self.open_node(location.clone(), false, shortcut);
-                } else if is_new_tab_verb(verb) {
-                    self.open_node(location.clone(), true, shortcut);
-                } else if verb.eq_ignore_ascii_case("rename") {
-                    self.rename_node(location.clone());
-                } else {
-                    return false;
-                }
-                true
-            }, &[]);
-            self.tree.refresh_folder(&location.parent()); // a folder deleted from its own menu leaves the tree
+            // The parent is read again whether or not the menu could be built (a node whose folder is already gone):
+            // a folder deleted from its own menu then leaves the tree, as in the C++ build.
+            if let Some(cm) = item_menu_at(self.wnd, &location) {
+                show_menu(self.wnd, &cm, pt, &mut |verb| {
+                    if is_open_verb(verb) {
+                        self.open_node(location.clone(), false, shortcut);
+                    } else if is_new_tab_verb(verb) {
+                        self.open_node(location.clone(), true, shortcut);
+                    } else if verb.eq_ignore_ascii_case("rename") {
+                        self.rename_node(location.clone());
+                    } else {
+                        return false;
+                    }
+                    true
+                }, &[]);
+            }
+            self.tree.refresh_folder(&location.parent());
         }
     }
 
@@ -2248,7 +2256,8 @@ impl App {
         }
         let (location, unavailable) = self.st.borrow().tabs.get(hover?).map(|t| (t.location.clone(), t.unavailable))?;
         // Not into This PC, not into a folder that has not loaded here, and not back where the files come from.
-        let from_here = self.dragging_files.get() && location.same(&self.list.location());
+        let from_here =
+            self.dragging_files.get() && self.drag_source.borrow().as_ref().is_some_and(|s| location.same(s));
         (matches!(location, Location::Dir(_)) && !unavailable && !from_here).then_some(location)
     }
 

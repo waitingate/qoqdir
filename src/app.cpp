@@ -241,7 +241,7 @@ bool App::create(HINSTANCE instance, const CommandLine& cmd, bool useSettings) {
     // And on a folder in the tree, in that folder; not back where they come from.
     treeDrop_ = newDropTarget(wnd_, [this](const POINT* pt) -> std::optional<std::wstring> {
         std::optional<std::wstring> dir = tree_.dropTarget(pt);
-        bool fromHere = dir && draggingFiles_ && samePath(*dir, list_.dir());
+        bool fromHere = dir && draggingFiles_ && samePath(*dir, dragSource_);
         std::wstring over;   // a node that refuses says why in the status bar (5.5)
         if ((!dir || fromHere) && pt && tree_.pathAt(*pt, &over))
             setMessage(fromHere ? L"The files come from there" : L"Only a folder on this PC takes a drop");
@@ -660,8 +660,9 @@ LRESULT App::onNotify(NMHDR* nm) {
         case LVN_BEGINRDRAG: {
             std::vector<Item> items = list_.selectedItems();
             if (!items.empty()) {
+                dragSource_ = list_.dir();
                 draggingFiles_ = true;
-                dragOut(wnd_, list_.dir(), items);
+                dragOut(wnd_, dragSource_, items);
                 draggingFiles_ = false;
             }
             break;
@@ -1334,7 +1335,7 @@ std::optional<std::wstring> App::tabDropTarget(const POINT* screenPt) {
     if (hover < 0 || hover >= int(tabs_.size())) return std::nullopt;
     const Tab& t = tabs_[size_t(hover)];
     // Not into This PC, not into a folder that has not loaded here, and not back where the files come from.
-    if (t.path.empty() || t.unavailable || (draggingFiles_ && samePath(t.path, list_.dir()))) return std::nullopt;
+    if (t.path.empty() || t.unavailable || (draggingFiles_ && samePath(t.path, dragSource_))) return std::nullopt;
     return t.path;
 }
 

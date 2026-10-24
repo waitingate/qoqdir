@@ -704,8 +704,24 @@ pub fn save_folder_shortcuts(dir: &Path, folders: &[Location]) -> bool {
 
 /// A bookmark: a shortcut to `folder` in `dir` (Bookmarks), named after the folder; one that is there already stays.
 pub fn bookmark_folder(dir: &Path, folder: &Location) -> bool {
-    let lnk = dir.join(shortcut_name(folder));
-    exists(&lnk) || write_folder_shortcut(&lnk, folder).is_ok()
+    // The shortcut's name comes from the folder's display name, so two folders can want the same one (D:\work\logs
+    // and E:\logs both "logs.lnk"). Keep an existing one that already points here (bookmarking again), but give a
+    // different folder the next free "name (2).lnk", as New folder numbers a clash, rather than claim it did.
+    let base = shortcut_name(folder);
+    let stem = Path::new(&base).file_stem().map_or_else(|| base.clone(), |s| s.to_os_string());
+    for n in 1..=99 {
+        let name = if n == 1 { base.clone() } else { OsString::from(format!("{} ({n}).lnk", stem.to_string_lossy())) };
+        let lnk = dir.join(&name);
+        if !exists(&lnk) {
+            return write_folder_shortcut(&lnk, folder).is_ok();
+        }
+        if let Some((target, true)) = shortcut_target(&lnk)
+            && target.same(folder)
+        {
+            return true; // already bookmarked
+        }
+    }
+    false
 }
 
 /// A shortcut to `folder` at `lnk`, made from the path and find data that say "folder": the shortcut then says so

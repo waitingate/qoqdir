@@ -163,15 +163,26 @@ int FileList::select(const std::vector<std::wstring>& names, const std::wstring&
     ListView_SetItemState(lv_, -1, 0, LVIS_SELECTED | LVIS_FOCUSED);
     int found = -1;
     if (!names.empty() || !focus.empty()) {
-        std::unordered_set<std::wstring> wanted;
-        for (const auto& n : names) wanted.insert(toLower(n));
+        // A wanted name takes its own exact-case row when the listing has one, so in a case-sensitive folder (WSL
+        // makes them) "readme" and "README" each take only their own, not both. A name no row matches exactly falls
+        // back to case-insensitive, needed for the folder you came from when its letter case differs (go up).
+        std::unordered_set<std::wstring> exact, loose;
+        for (const std::wstring& n : names) {
+            bool present = false;
+            for (int row = 0; row < count() && !present; ++row) present = at(row).name == n;
+            if (present) exact.insert(n);
+            else loose.insert(toLower(n));
+        }
         std::wstring focusLower = toLower(focus);
         std::vector<int> rows;
         for (int row = 0; row < count(); ++row) {
-            std::wstring name = toLower(at(row).name);
-            if (wanted.count(name)) rows.push_back(row);
-            if (found < 0 && name == focusLower) found = row;
+            const std::wstring& name = at(row).name;
+            if (exact.count(name) || loose.count(toLower(name))) rows.push_back(row);
+            if (found < 0 && at(row).name == focus) found = row;          // exact focus first
         }
+        if (found < 0 && !focus.empty())                                  // then case-insensitive
+            for (int row = 0; row < count() && found < 0; ++row)
+                if (toLower(at(row).name) == focusLower) found = row;
         // All of them (Ctrl+A, then a sort or a filter key) in one message, not one per row and its notification.
         if (!rows.empty() && int(rows.size()) == count()) selectAll();
         else for (int row : rows) ListView_SetItemState(lv_, row, LVIS_SELECTED, LVIS_SELECTED);

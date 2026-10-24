@@ -322,20 +322,34 @@ impl FileList {
         self.set_state(None, LIST_VIEW_ITEM_STATE_FLAGS(0), LIST_VIEW_ITEM_STATE_FLAGS(LVIS_SELECTED.0 | LVIS_FOCUSED.0));
         let (rows, found) = {
             let m = self.model.borrow();
-            let wanted: HashSet<Vec<u16>> = names.iter().map(|n| to_lower(n)).collect();
-            let focus = focus.map(to_lower);
+            // A wanted name takes its own exact-case row when the listing has one, so in a case-sensitive folder
+            // (WSL makes them) "readme" and "README" each take only their own, not both. A name no row matches
+            // exactly falls back to case-insensitive, needed for the folder you came from in another letter case.
+            let listed = |n: &OsStr| m.view.iter().any(|&i| m.items[i].name == *n);
+            let mut exact: HashSet<&OsStr> = HashSet::new();
+            let mut loose: HashSet<Vec<u16>> = HashSet::new();
+            for n in names {
+                if listed(n) {
+                    exact.insert(n.as_os_str());
+                } else {
+                    loose.insert(to_lower(n));
+                }
+            }
+            let focus_lower = focus.map(to_lower);
             let mut rows = Vec::new();
             let mut focus_row = None;
-            if !wanted.is_empty() || focus.is_some() {
-                for (row, &i) in m.view.iter().enumerate() {
-                    let name = to_lower(&m.items[i].name);
-                    if wanted.contains(&name) {
-                        rows.push(row);
-                    }
-                    if focus_row.is_none() && focus.as_ref() == Some(&name) {
-                        focus_row = Some(row);
-                    }
+            for (row, &i) in m.view.iter().enumerate() {
+                let name = &m.items[i].name;
+                if exact.contains(name.as_os_str()) || loose.contains(&to_lower(name)) {
+                    rows.push(row);
                 }
+                if focus_row.is_none() && focus == Some(name.as_os_str()) {
+                    focus_row = Some(row); // exact focus first
+                }
+            }
+            if focus_row.is_none() && focus.is_some() {
+                // then case-insensitive
+                focus_row = m.view.iter().position(|&i| Some(to_lower(&m.items[i].name)) == focus_lower);
             }
             (rows, focus_row)
         };

@@ -923,6 +923,11 @@ mod tests {
         assert!(parse_command_line(&args(&["--tab=C:\\A", "-q"])).error.is_some());
         assert!(parse_command_line(&args(&["-n"])).error.is_some()); // -n no longer exists
         assert!(parse_command_line(&args(&["-tC:\\A"])).error.is_some()); // nor -t without "="
+        // A trailing backslash is the same folder (one tab), and -t= takes a name that starts with "-" as a folder too.
+        assert_eq!(parse_command_line(&args(&["C:\\A", "-t=C:\\A\\"])).folders.len(), 1);
+        let td = parse_command_line(&args(&["-t=-h"]));
+        assert!(td.error.is_none() && td.folders.len() == 1);
+        assert!(td.folders[0].same(&Location::dir(std::env::current_dir().unwrap().join("-h"))));
     }
 
     #[test]
