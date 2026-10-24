@@ -960,11 +960,17 @@ impl App {
             },
         );
         s.add(
-            "the mouse wheel over the tabs shows the next tab (a touchpad's small steps add up) and stops at the last",
+            "a touchpad's small steps over the tabs add up to one wheel step",
             |a| {
                 for _ in 0..4 {
                     wheel(a, -30); // four small steps make one
                 }
+            },
+            move |a| a.active() == 1 && a.at(&dir()),
+        );
+        s.add(
+            "a wheel step shows the next tab, and past the last it stops",
+            |a| {
                 wheel(a, -120);
                 wheel(a, -120); // past the last tab: nothing
             },
@@ -992,15 +998,22 @@ impl App {
         // Keeps the test folder's own tab.
         s.add("(close the other tabs)", |a| a.close_other_tabs(1), one_tab_home);
         s.add(
-            "a double-click on a tab opens no tab; one on the empty bar right of the tabs opens one, as \"+\" does",
+            "a double-click on a tab opens no tab",
             |a| {
                 let r = tab_rect(a, 0);
-                let y = (r.top + r.bottom) / 2;
-                for x in [(r.left + r.right) / 2, r.right + scale(20, a.dpi.get())] {
-                    // on the tab, then right of it
-                    send(a.tab_bar, WM_LBUTTONDBLCLK, MK_LBUTTON.0 as usize, packed(x, y));
-                    send(a.tab_bar, WM_LBUTTONUP, 0, packed(x, y));
-                }
+                let (x, y) = ((r.left + r.right) / 2, (r.top + r.bottom) / 2);
+                send(a.tab_bar, WM_LBUTTONDBLCLK, MK_LBUTTON.0 as usize, packed(x, y));
+                send(a.tab_bar, WM_LBUTTONUP, 0, packed(x, y));
+            },
+            move |a| a.tabs() == 1 && a.active() == 0 && a.at(&dir()),
+        );
+        s.add(
+            "a double-click on the empty bar right of the tabs opens one, as \"+\" does",
+            |a| {
+                let r = tab_rect(a, 0);
+                let (x, y) = (r.right + scale(20, a.dpi.get()), (r.top + r.bottom) / 2); // right of the only tab
+                send(a.tab_bar, WM_LBUTTONDBLCLK, MK_LBUTTON.0 as usize, packed(x, y));
+                send(a.tab_bar, WM_LBUTTONUP, 0, packed(x, y));
             },
             move |a| {
                 let r = tab_rect(a, a.tabs() - 1); // a real click lands only where the bar says it is its own: right of the last tab
@@ -1483,6 +1496,33 @@ impl App {
             move |a| {
                 let last_back = a.with_tab(|t| t.back.last().cloned());
                 a.at(&dir()) && !last_back.is_some_and(|l| l.same(&Location::dir(p("temp1"))))
+            },
+        );
+        s.add(
+            "(go into a temp folder)",
+            |a| {
+                let _ = std::fs::create_dir(p("temp2"));
+                a.open(Location::dir(p("temp2")), Nav::New, ViewState::default());
+            },
+            |a| a.at(&p("temp2")),
+        );
+        s.add(
+            "(go back, so the temp folder waits ahead in the history)",
+            |a| a.press(VK_LEFT, ALT),
+            move |a| {
+                let ahead = a.with_tab(|t| t.forward.last().cloned());
+                a.at(&dir()) && ahead.is_some_and(|l| l.same(&Location::dir(p("temp2"))))
+            },
+        );
+        s.add(
+            "Forward to a deleted folder drops it from history instead of getting stuck",
+            |a| {
+                let _ = std::fs::remove_dir(p("temp2"));
+                a.press(VK_RIGHT, ALT);
+            },
+            move |a| {
+                let ahead = a.with_tab(|t| t.forward.last().cloned());
+                a.at(&dir()) && !ahead.is_some_and(|l| l.same(&Location::dir(p("temp2"))))
             },
         );
         // Enter on the selected shortcuts, once the refresh that selected them has landed.

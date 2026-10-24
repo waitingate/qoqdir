@@ -208,10 +208,14 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
         return (TreeView_GetItemState(tree_.hwnd(), node, TVIS_EXPANDED) & TVIS_EXPANDED) != 0;
     };
     auto reopenHome = [=, this] { tab().path = dir; open(dir, Nav::Refresh); };   // after a tab was made unavailable
-    // A done check that presses Enter on the list once the refresh has selected what `ready` looks for.
-    auto enterWhen = [=, this](std::function<bool()> ready) {
+    // A done check that presses Enter on the list once the refresh has selected exactly `names`, as the Rust build's.
+    auto enterWhen = [=, this](std::vector<std::wstring> names) {
         return [=, this] {
-            if (!idle() || !ready()) return false;
+            std::vector<std::wstring> sel = list_.selectedNames();
+            if (!idle() || sel.size() != names.size() ||
+                !std::all_of(names.begin(), names.end(),
+                             [&](const std::wstring& n) { return std::find(sel.begin(), sel.end(), n) != sel.end(); }))
+                return false;
             SetFocus(list_.hwnd());
             selfTestKey(VK_RETURN);
             return true;
@@ -530,9 +534,11 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
             return samePath(tabs_[1].path, dir) && tabs_[2].path.empty() && active_ == 0 &&
                    TabCtrl_GetCurSel(tabBar_) == 0 && at(path(L"sub"));
         });
-    add(L"the mouse wheel over the tabs shows the next tab (a touchpad's small steps add up) and stops at the last",
+    add(L"a touchpad's small steps over the tabs add up to one wheel step",
+        [=, this] { for (int i = 0; i < 4; ++i) wheel(-30); },   // four small steps make one
+        [=, this] { return active_ == 1 && at(dir); });
+    add(L"a wheel step shows the next tab, and past the last it stops",
         [=, this] {
-            for (int i = 0; i < 4; ++i) wheel(-30);   // four small steps make one
             wheel(-120);
             wheel(-120);   // past the last tab: nothing
         },
@@ -552,14 +558,20 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
         });
     add(L"(close the other tabs)", [=, this] { closeOtherTabs(1); },   // keeps the test folder's own tab
         oneTabHome);
-    add(L"a double-click on a tab opens no tab; one on the empty bar right of the tabs opens one, as \"+\" does",
+    add(L"a double-click on a tab opens no tab",
         [=, this] {
             RECT r = tabRect(0);
-            int y = (r.top + r.bottom) / 2;
-            for (int x : {(r.left + r.right) / 2, r.right + scale(20, dpi_)}) {   // on the tab, then right of it
-                SendMessageW(tabBar_, WM_LBUTTONDBLCLK, MK_LBUTTON, MAKELPARAM(x, y));
-                SendMessageW(tabBar_, WM_LBUTTONUP, 0, MAKELPARAM(x, y));
-            }
+            int x = (r.left + r.right) / 2, y = (r.top + r.bottom) / 2;
+            SendMessageW(tabBar_, WM_LBUTTONDBLCLK, MK_LBUTTON, MAKELPARAM(x, y));
+            SendMessageW(tabBar_, WM_LBUTTONUP, 0, MAKELPARAM(x, y));
+        },
+        [=, this] { return tabs_.size() == 1 && active_ == 0 && at(dir); });
+    add(L"a double-click on the empty bar right of the tabs opens one, as \"+\" does",
+        [=, this] {
+            RECT r = tabRect(0);
+            int x = r.right + scale(20, dpi_), y = (r.top + r.bottom) / 2;   // right of the only tab
+            SendMessageW(tabBar_, WM_LBUTTONDBLCLK, MK_LBUTTON, MAKELPARAM(x, y));
+            SendMessageW(tabBar_, WM_LBUTTONUP, 0, MAKELPARAM(x, y));
         },
         [=, this] {
             // A real click lands only where the bar says it is its own: right of the last tab.
@@ -928,12 +940,21 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
     add(L"Back to a deleted folder drops it from history instead of getting stuck",
         [=, this] { RemoveDirectoryW(path(L"temp1").c_str()); selfTestKey(VK_LEFT, false, false, true); },
         [=, this] { return at(dir) && (tab().back.empty() || !samePath(tab().back.back(), path(L"temp1"))); });
+    add(L"(go into a temp folder)",
+        [=, this] { CreateDirectoryW(path(L"temp2").c_str(), nullptr); open(path(L"temp2"), Nav::New); },
+        [=, this] { return at(path(L"temp2")); });
+    add(L"(go back, so the temp folder waits ahead in the history)",
+        [=, this] { selfTestKey(VK_LEFT, false, false, true); },
+        [=, this] { return at(dir) && !tab().forward.empty() && samePath(tab().forward.back(), path(L"temp2")); });
+    add(L"Forward to a deleted folder drops it from history instead of getting stuck",
+        [=, this] { RemoveDirectoryW(path(L"temp2").c_str()); selfTestKey(VK_RIGHT, false, false, true); },
+        [=, this] { return at(dir) && (tab().forward.empty() || !samePath(tab().forward.back(), path(L"temp2"))); });
     add(L"a shortcut to a folder opens it here",
         [=, this] {
             makeShortcut(path(L"sub-link.lnk"), path(L"sub"));
             refresh(ViewState::selecting(L"sub-link.lnk"));
         },
-        enterWhen([=, this] { return list_.focusedName() == L"sub-link.lnk"; }));
+        enterWhen({L"sub-link.lnk"}));
     add(L"(the shortcut's folder is shown)", nullptr, [=, this] { return at(path(L"sub")); });
     backHome(L"(back up to the test folder)");
     add(L"a shortcut whose target ends with a backslash opens the folder with a clean path",
@@ -956,7 +977,7 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
             makeShortcut(path(L"slash2.lnk"), path(L"sub") + L"\\");
             refresh(ViewState{{L"sub-link.lnk", L"slash2.lnk"}, L"sub-link.lnk"});
         },
-        enterWhen([=, this] { return list_.selection().size() == 2; }));
+        enterWhen({L"sub-link.lnk", L"slash2.lnk"}));
     add(L"(both are in tabs behind the test folder, with clean paths, so with captions)", nullptr, [=, this] {
         if (tabs_.size() != 3 || !at(dir)) return false;
         selfTest_->note = L"tab paths: " + tabs_[1].path + L" | " + tabs_[2].path;
@@ -1010,7 +1031,7 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
             makeShortcut(path(L"gone.lnk"), path(L"no-such-folder"));
             refresh(ViewState::selecting(L"gone.lnk"));
         },
-        enterWhen([=, this] { return list_.focusedName() == L"gone.lnk"; }));
+        enterWhen({L"gone.lnk"}));
     add(L"(the status bar names the missing folder, and the tab stays put)", nullptr,
         [=, this] { return at(dir) && statusHas(L"no-such-folder"); });
     add(L"a bookmark whose drive letter is gone (a flash drive that came back under another letter) opens its folder "
@@ -1038,7 +1059,7 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
             makeShortcut(path(L"pc.lnk"), L"");
             refresh(ViewState::selecting(L"pc.lnk"));
         },
-        enterWhen([=, this] { return list_.focusedName() == L"pc.lnk"; }));
+        enterWhen({L"pc.lnk"}));
     add(L"(This PC is shown, with its drives)", nullptr, [=, this] { return at(L"") && list_.count() > 0; });
     backHome(L"(back to the test folder)");
 
