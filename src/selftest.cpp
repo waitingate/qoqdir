@@ -786,7 +786,7 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
             keyMs = nowMs() - t0;
             selfTest_->note = L"Enter took " + std::to_wstring(int(keyMs)) + L" ms";
         },
-        [=, this] { return keyMs < 500; });
+        [=, this] { return keyMs < 100; });   // 4.1, item 15: well under 100 ms (the read is on a worker)
     add(L"...and opening another folder cancels it",
         [=, this] {
             // The network read reports back after its timeout, during a later step.
@@ -1516,8 +1516,9 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
         },
         [=, this] {
             if (!at(path(L"big")) || list_.count() != 10000) return false;
-            selfTest_->note = L"load " + std::to_wstring(int(nowMs() - t0)) + L" ms";
-            return true;
+            int ms = int(nowMs() - t0);
+            selfTest_->note = L"load " + std::to_wstring(ms) + L" ms";
+            return ms < 2000;   // 4.7: under 1 s, with a margin for a busy PC
         },
         30000);
     add(L"filters 10,000 files, showing the matches from the top even when scrolled to the bottom",
@@ -1525,12 +1526,13 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
             list_.ensureVisible(9999);
             t0 = nowMs();
             SetWindowTextW(filter_, L"99");
-            selfTest_->note = L"filter " + std::to_wstring(int(nowMs() - t0)) + L" ms";
+            keyMs = nowMs() - t0;
+            selfTest_->note = L"filter " + std::to_wstring(int(keyMs)) + L" ms";
         },
         [=, this] {
             int expected = 0;
             for (int i = 0; i < 10000; ++i) expected += std::to_wstring(i).find(L"99") != std::wstring::npos;
-            return list_.count() == expected && list_.topRow() == 0;
+            return list_.count() == expected && list_.topRow() == 0 && keyMs < 200;   // 4.7: under 0.1 s, with a margin
         });
     add(L"a run of stars in the filter does not freeze the window (\"********x\" means \"*x\")",
         [=, this] {
@@ -1543,17 +1545,20 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
     add(L"sorts 10,000 files by each column",
         [=, this] {
             SetWindowTextW(filter_, L"");
+            keyMs = 0;   // the slowest column's sort
             selfTest_->note = L"sort";
             for (auto [key, name] : {std::pair(SortKey::Name, L"name"), std::pair(SortKey::Type, L"type"),
                                       std::pair(SortKey::Modified, L"date"), std::pair(SortKey::Size, L"size")}) {
                 t0 = nowMs();
                 list_.setSort(key, false);   // descending: the list is in name order already
-                selfTest_->note += std::wstring(L" ") + name + L" " + std::to_wstring(int(nowMs() - t0));
+                double ms = nowMs() - t0;
+                keyMs = std::max(keyMs, ms);
+                selfTest_->note += std::wstring(L" ") + name + L" " + std::to_wstring(int(ms));
             }
             selfTest_->note += L" ms";
             list_.setSort(SortKey::Name, true);
         },
-        [=, this] { return list_.count() == 10000; });
+        [=, this] { return list_.count() == 10000 && keyMs < 200; });   // 4.7: each under 0.1 s, with a margin
     add(L"a refresh that asks for an item brings it on screen (as after a rename or a new folder)",
         [=, this] {
             list_.ensureVisible(9999);                       // scrolled to the bottom
@@ -1954,9 +1959,10 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
             list_.selectAll();
             t0 = nowMs();
             copyToClipboard(wnd_, list_.dir(), list_.selectedItems(), false);
-            selfTest_->note = L"copy " + std::to_wstring(int(nowMs() - t0)) + L" ms";
+            keyMs = nowMs() - t0;
+            selfTest_->note = L"copy " + std::to_wstring(int(keyMs)) + L" ms";
         },
-        [=, this] { return clipboardFiles().size() == 10000; }).copies = true;
+        [=, this] { return clipboardFiles().size() == 10000 && keyMs < 6000; }).copies = true;   // 4.7: under 3 s, margin
     // Files that exist only in the list, all selected: a copy that asked the disk about each one would find nothing.
     auto showGhosts = [=, this] {
         Listing l;

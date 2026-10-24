@@ -1291,7 +1291,7 @@ impl App {
                 KEY_MS.set(t.elapsed().as_millis());
                 note(format!("Enter took {} ms", KEY_MS.get()));
             },
-            |_| KEY_MS.get() < 500,
+            |_| KEY_MS.get() < 100, // 4.1, item 15: well under 100 ms (the read is on a worker)
         );
         s.add(
             "...and opening another folder cancels it",
@@ -2257,8 +2257,9 @@ impl App {
                 if !a.at(&p("big")) || a.list.count() != 10000 {
                     return false;
                 }
-                note(format!("load {} ms", T0.get().map_or(0, |t| t.elapsed().as_millis())));
-                true
+                let ms = T0.get().map_or(0, |t| t.elapsed().as_millis());
+                note(format!("load {ms} ms"));
+                ms < 2000 // 4.7: under 1 s, with a margin for a busy PC
             },
         )
         .wait(30000);
@@ -2268,9 +2269,14 @@ impl App {
                 a.list.ensure_visible(Some(9999));
                 let t = Instant::now();
                 set_text(a.filter, "99");
-                note(format!("filter {} ms", t.elapsed().as_millis()));
+                KEY_MS.set(t.elapsed().as_millis());
+                note(format!("filter {} ms", KEY_MS.get()));
             },
-            |a| a.list.count() == (0..10000).filter(|i: &i32| i.to_string().contains("99")).count() && a.list.top_row() == 0,
+            |a| {
+                a.list.count() == (0..10000).filter(|i: &i32| i.to_string().contains("99")).count()
+                    && a.list.top_row() == 0
+                    && KEY_MS.get() < 200 // 4.7: under 0.1 s, with a margin
+            },
         );
         s.add(
             "a run of stars in the filter does not freeze the window (\"********x\" means \"*x\")",
@@ -2287,15 +2293,19 @@ impl App {
             |a| {
                 set_text(a.filter, "");
                 let mut text = String::from("sort");
+                let mut slowest = 0u128;
                 for (key, name) in [(SortKey::Name, "name"), (SortKey::Type, "type"), (SortKey::Modified, "date"), (SortKey::Size, "size")] {
                     let t = Instant::now();
                     a.list.set_sort(key, false); // descending: the list is in name order already
-                    text += &format!(" {name} {}", t.elapsed().as_millis());
+                    let ms = t.elapsed().as_millis();
+                    slowest = slowest.max(ms);
+                    text += &format!(" {name} {ms}");
                 }
+                KEY_MS.set(slowest);
                 note(text + " ms");
                 a.list.set_sort(SortKey::Name, true);
             },
-            |a| a.list.count() == 10000,
+            |a| a.list.count() == 10000 && KEY_MS.get() < 200, // 4.7: each under 0.1 s, with a margin
         );
         s.add(
             "a refresh that asks for an item brings it on screen (as after a rename or a new folder)",
@@ -2854,9 +2864,10 @@ impl App {
                 a.list.select_all();
                 let t = Instant::now();
                 copy_to_clipboard(a.wnd, &a.list.location(), &a.list.selected_items(), false);
-                note(format!("copy {} ms", t.elapsed().as_millis()));
+                KEY_MS.set(t.elapsed().as_millis());
+                note(format!("copy {} ms", KEY_MS.get()));
             },
-            |_| clipboard_files().len() == 10000,
+            |_| clipboard_files().len() == 10000 && KEY_MS.get() < 6000, // 4.7: under 3 s, with a margin
         )
         .copies();
         s.add(
