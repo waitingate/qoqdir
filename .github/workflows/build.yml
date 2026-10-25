@@ -18,6 +18,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@v7
+        with:
+          persist-credentials: false   # nothing here pushes, so no token is left in the clone for the build to read
 
       # MinGW-w64 GCC with the UCRT runtime, as for releases (MSYS2's current release), CMake and
       # Ninja; no Visual Studio, as in the spec.

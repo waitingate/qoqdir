@@ -7,6 +7,10 @@
 #     powershell -File scripts\release.ps1
 $ErrorActionPreference = 'Stop'
 Set-Location (Split-Path $PSScriptRoot)   # the repository
+# The C++ flags and RUSTFLAGS name the build folder (release\work) in lists that are split at spaces.
+if ($PWD.Path.Contains(' ')) {
+    throw "Move the repository to a path without spaces first: the build flags name a folder in it, split at spaces."
+}
 # A build setting left in the environment would change the shipped exe where no check can see it: a cargo profile
 # override, or a compiler flag CMake reads. Refuse to build with any of them set.
 foreach ($name in (Get-ChildItem Env:).Name) {

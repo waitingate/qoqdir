@@ -5,6 +5,7 @@
 #include <shlwapi.h>
 
 #include <algorithm>
+#include <mutex>
 #include <thread>
 #include <unordered_map>
 
@@ -446,7 +447,7 @@ std::optional<std::wstring> commandProgram(const std::wstring& name) {
 bool runCommand(HWND owner, const std::wstring& command, const std::wstring& workDir) {
     SHELLEXECUTEINFOW sei{};
     sei.cbSize = sizeof sei;
-    sei.fMask = SEE_MASK_FLAG_NO_UI;
+    sei.fMask = SEE_MASK_FLAG_NO_UI | SEE_MASK_NOASYNC;   // NOASYNC: it runs on a worker that ends right after
     sei.hwnd = owner;
     sei.lpDirectory = workDir.empty() ? nullptr : workDir.c_str();
     sei.nShow = SW_SHOWNORMAL;
@@ -537,6 +538,10 @@ std::wstring shortcutName(const std::wstring& folder) {
 }  // namespace
 
 bool saveFolderShortcuts(const std::wstring& dir, const std::vector<std::wstring>& folders) {
+    // One save at a time: closing the window saves here and now while Ctrl+S's worker may still be writing (a folder
+    // on a server that is off is slow), and the two would leave a mix of both sets. The later one waits and wins.
+    static std::mutex saving;
+    std::lock_guard<std::mutex> one(saving);
     CreateDirectoryW(dir.c_str(), nullptr);   // fails harmlessly if it exists
     for (const Item& it : listFolder(dir, true).items)
         if (!it.isDir() && extensionOf(it.name) == L".lnk") DeleteFileW(joinPath(dir, it.name).c_str());

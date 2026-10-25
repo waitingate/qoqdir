@@ -19,7 +19,13 @@ enum : int { ID_BACK = 100, ID_FORWARD, ID_UP, ID_ADDRESS, ID_FILTER, ID_TABS, I
 enum : UINT {
     WM_APP_LOADED = WM_APP + 1, WM_APP_CHANGED, WM_APP_CLOSETAB, WM_APP_RENAME, WM_APP_ICONS, WM_APP_TREE,
     WM_APP_MIDDLECLICK, WM_APP_TABS_SAVED, WM_APP_TABS_READ, WM_APP_PRESSTAB, WM_APP_DRAGTAB, WM_APP_TREE_ICONS,
-    WM_APP_BOOKMARKS, WM_APP_NEWWINDOW, WM_APP_BOOKMARKED, WM_APP_DELETED
+    WM_APP_BOOKMARKS, WM_APP_NEWWINDOW, WM_APP_BOOKMARKED, WM_APP_DELETED, WM_APP_COMMAND
+};
+
+struct CommandDone {   // a typed command's reply from its worker (goToTyped)
+    UINT seq;
+    bool ran;
+    std::wstring text;   // as typed
 };
 
 constexpr size_t kMaxHistory = 100;
@@ -356,7 +362,7 @@ LRESULT App::onMessage(UINT msg, WPARAM wp, LPARAM lp) {
     // These carry a heap object made on a worker in lParam. Another program broadcasting one of their numbers (apps
     // do broadcast in the WM_APP range) would hand a null or stray pointer; ignore one with no pointer (4.10).
     if (!lp && (msg == WM_APP_LOADED || msg == WM_APP_ICONS || msg == WM_APP_TREE || msg == WM_APP_TREE_ICONS ||
-                msg == WM_APP_TABS_READ || msg == WM_APP_DELETED))
+                msg == WM_APP_TABS_READ || msg == WM_APP_DELETED || msg == WM_APP_COMMAND))
         return 0;
     switch (msg) {
     case WM_SIZE:   // not while minimized: a list with no height loses its scroll position in a refresh (4.5)
@@ -468,6 +474,20 @@ LRESULT App::onMessage(UINT msg, WPARAM wp, LPARAM lp) {
     case WM_APP_DELETED: {   // the recycle finished on a worker (deleteSelection); select what followed (4.6)
         std::unique_ptr<ViewState> v(reinterpret_cast<ViewState*>(lp));
         if (wp && v) refresh(*v);   // nothing deleted (No, or it failed): the selection was already cleared
+        return 0;
+    }
+    case WM_APP_COMMAND: {   // a typed command was looked up and started on a worker (goToTyped)
+        std::unique_ptr<CommandDone> c(reinterpret_cast<CommandDone*>(lp));
+        ++commandsDone_;
+        if (c->seq != commands_) return 0;   // one typed since decides what the address bar shows
+        bool untouched = windowText(address_) == c->text;
+        if (!c->ran) {
+            warn(L"Can't find \"" + c->text + L"\"");
+            if (untouched) focusEdit(address_);   // left selected, like a bad path, so it can be corrected (5.3)
+        } else if (untouched) {
+            SetWindowTextW(address_, locationText(tab().path).c_str());
+            if (GetFocus() == address_) focusList();
+        }
         return 0;
     }
     case WM_APP_TABS_READ: {
@@ -1178,13 +1198,18 @@ void App::goToTyped() {
     }
     // A command ("cmd", a web address...), run in the folder shown: a dead tab folder would hold up its start.
     // On This PC a relative place has no folder (Windows would open its own start folder in Explorer).
-    if ((relative && tab().path.empty()) || !runCommand(wnd_, typed, list_.dir())) {
+    if (relative && tab().path.empty()) {
         warn(L"Can't find \"" + text + L"\"");
         focusEdit(address_);   // left selected, like a bad path, so it can be corrected (5.3)
         return;
     }
-    SetWindowTextW(address_, locationText(tab().path).c_str());
-    focusList();
+    // Finding the program reads every folder on the PATH, and starting it can wait on Windows (a UAC prompt): both on
+    // a worker, so a folder on the PATH that doesn't answer can't hold the window (4.1). Its reply says Can't find, or
+    // puts the path back and goes to the list (WM_APP_COMMAND).
+    inBackground([wnd = wnd_, seq = ++commands_, typed, text, dir = list_.dir()] {
+        bool ran = runCommand(wnd, typed, dir);
+        post(wnd, WM_APP_COMMAND, 0, std::make_unique<CommandDone>(CommandDone{seq, ran, text}));
+    });
 }
 
 void App::activate(bool inNewTab) {

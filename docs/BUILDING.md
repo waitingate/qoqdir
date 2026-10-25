@@ -299,11 +299,12 @@ powershell -File scripts\release.ps1
 ```
 
 It stops if the three versions disagree (both lines of `version.h`, and
-`Cargo.toml`) and builds that commit in a clean copy, the Rust version from the
-crates in `Cargo.lock`. For each version it runs the unit tests, the exe checks
-and the command-line checks on the exe that ships, and the self-test (for C++ on
-`qoqdir-test.exe`), then compares the two self-test logs. It takes about ten
-minutes and leaves in `release\`:
+`Cargo.toml`), or if the repository's path has a space (the build flags name a
+folder in it, and they are split at spaces), and builds that commit in a clean
+copy, the Rust version from the crates in `Cargo.lock`. For each version it runs
+the unit tests, the exe checks and the command-line checks on the exe that
+ships, and the self-test (for C++ on `qoqdir-test.exe`), then compares the two
+self-test logs. It takes about ten minutes and leaves in `release\`:
 
 - `qoqdir-<version>.zip` and `qoqdir-rust-<version>.zip` to publish: the exe,
   README, LICENSE and the third-party notices. The Rust zip also holds

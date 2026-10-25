@@ -507,7 +507,7 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
         [=, this] { return at(path(L"gone")) && list_.count() == 0 && statusHas(L"not available"); });
     add(L"a command typed there still runs (the dead folder is not its working folder)",
         [=, this] { goTo(L"rundll32"); },
-        [=, this] { return at(path(L"gone")) && statusHas(L"not available"); });
+        [=, this] { return commandsDone_ == commands_ && at(path(L"gone")) && statusHas(L"not available"); });
     add(L"F5 tries again once it is back", [=, this] { CreateDirectoryW(path(L"gone").c_str(), nullptr); selfTestKey(VK_F5); },
         [=, this] { return at(path(L"gone")) && list_.shows(path(L"gone")) && !statusHas(L"not available"); });
     add(L"(back up to the test folder)", [=, this] { SetFocus(list_.hwnd()); selfTestKey(VK_BACK); }, [=, this] { return at(dir); });
@@ -784,14 +784,30 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
             SendMessageW(address_, EM_GETSEL, WPARAM(&from), LPARAM(&to));
             return at(dir) && statusHas(L"Can't find") && from == 0 && int(to) == GetWindowTextLengthW(address_);
         });
+    // The program is looked up on the PATH and started on a worker, so a folder there that doesn't answer (Windows can
+    // take 20 to 60 s to give up on one) can't hold the window (4.1). Its reply is a message, so it can't be in yet
+    // when the key press returns.
+    auto answeredAtOnce = std::make_shared<bool>(false);
+    add(L"a typed command is looked up and started on a worker, so a folder on the PATH that doesn't answer can't "
+        L"hold the window (4.1)",
+        [=, this] {
+            setMessage(L"");
+            goTo(L"no-such-program-qoqdir");
+            *answeredAtOnce = !statusMessage().empty();
+        },
+        [=, this] {
+            if (*answeredAtOnce) selfTest_->note = L"answered before the key press returned";
+            return !*answeredAtOnce && statusHas(L"Can't find");
+        });
     add(L"a program typed by name is Windows' own, not a file of that name in the folder shown",
         [=, this] {
             writeFile(path(L"rundll32.exe"));   // not a program: run from here, it would fail
             setMessage(L"");
             goTo(L"rundll32");
-            DeleteFileW(path(L"rundll32.exe").c_str());
         },
         [=, this] {
+            if (commandsDone_ != commands_) return false;   // looked up on a worker: the decoy stays until its reply
+            DeleteFileW(path(L"rundll32.exe").c_str());
             selfTest_->note = L"status: " + statusMessage();
             return at(dir) && statusMessage().empty();
         });
@@ -1361,13 +1377,10 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
     add(L"Rename on a tree folder's menu opens the rename box for it in the list",
         [=, this] { renameNode(path(L"sub")); },
         [=, this] { return at(dir) && list_.renaming() && list_.focusedName() == L"sub"; });
-    add(L"collapsing and expanding a tree folder shows its new subfolders",
+    add(L"a folder made in Bookmarks shows up in the tree by itself (5.5)",
         [=, this] {
             ListView_CancelEditLabel(list_.hwnd());   // the box from the step before
             CreateDirectoryW(path(L"Bookmarks\\two").c_str(), nullptr);
-            TreeView_SelectItem(tree_.hwnd(), TreeView_GetRoot(tree_.hwnd()));
-            SendMessageW(tree_.hwnd(), WM_KEYDOWN, VK_LEFT, 0);    // collapse, as the user would
-            SendMessageW(tree_.hwnd(), WM_KEYDOWN, VK_RIGHT, 0);   // and expand again
         },
         [=] { return bookmarkNodes() == L"one,two,sub"; });
     add(L"collapsing a node while a child is being read drops the late result",
@@ -1422,6 +1435,28 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
             return bookmarkNodes() == L"one,two,sub" && one() && TreeView_GetChild(tv, one()) &&
                    expanded(one()) && TreeView_GetChild(tv, tree_.lastRoot());
         });
+    // Made where no watch sees them (Bookmarks' watch takes only its own children, and the list shows another folder):
+    // only the read when the node opens again can show them, and never the hidden one (5.5).
+    add(L"collapsing and expanding a tree folder shows its new subfolders, and not its hidden ones",
+        [=, this] {
+            CreateDirectoryW(path(L"Bookmarks\\one\\fresh").c_str(), nullptr);
+            CreateDirectoryW(path(L"Bookmarks\\one\\hidden").c_str(), nullptr);
+            SetFileAttributesW(path(L"Bookmarks\\one\\hidden").c_str(),
+                               GetFileAttributesW(path(L"Bookmarks\\one\\hidden").c_str()) | FILE_ATTRIBUTE_HIDDEN);
+            TreeView_SelectItem(tree_.hwnd(), one());
+            SendMessageW(tree_.hwnd(), WM_KEYDOWN, VK_LEFT, 0);    // collapse, as the user would
+            SendMessageW(tree_.hwnd(), WM_KEYDOWN, VK_RIGHT, 0);   // and expand again
+        },
+        [=, this] { return nodeTexts(TreeView_GetChild(tree_.hwnd(), one())) == L"deep,fresh"; });
+    add(L"(remove them, and read the folder again)",
+        [=, this] {
+            RemoveDirectoryW(path(L"Bookmarks\\one\\fresh").c_str());
+            RemoveDirectoryW(path(L"Bookmarks\\one\\hidden").c_str());
+            TreeView_SelectItem(tree_.hwnd(), one());
+            SendMessageW(tree_.hwnd(), WM_KEYDOWN, VK_LEFT, 0);
+            SendMessageW(tree_.hwnd(), WM_KEYDOWN, VK_RIGHT, 0);
+        },
+        [=, this] { return nodeTexts(TreeView_GetChild(tree_.hwnd(), one())) == L"deep"; });
     add(L"F5 reads the folders open in the tree again: one that is the same stays as it is (\"one\" stays open), one "
         L"that changed shows its new subfolder (5.5)",
         [=, this] {
@@ -1578,6 +1613,38 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
             deleteTree(path(L"Bookmarks\\Tabs"));
         },
         oneTabHome);
+    // Two saves at once, as Ctrl+S on a worker and then closing with "Save these tabs?" answered Yes: the later one
+    // waits for the first and then replaces what it wrote, so none of the first's shortcuts are left over (5.7).
+    auto saves = std::make_shared<std::atomic<int>>(0);   // saves finished
+    auto overlap = std::make_shared<int>(-1);             // -1: the second not started yet; 1: while the first wrote
+    add(L"a save of the tabs that starts while another is still writing waits for it, and replaces all it wrote",
+        [=, this] {
+            std::vector<std::wstring> many(300, path(L"sub"));   // long enough to still be writing when the next starts
+            inBackground([dir = path(L"tabsrace"), many, saves] {
+                saveFolderShortcuts(dir, many);
+                ++*saves;
+            });
+        },
+        [=, this] {
+            if (*overlap < 0) {   // the second save starts once the first is writing
+                if (!exists(path(L"tabsrace\\1 sub.lnk"))) return false;
+                *overlap = *saves == 0;
+                inBackground([dir = path(L"tabsrace"), made = path(L"made"), saves] {
+                    saveFolderShortcuts(dir, {made});
+                    ++*saves;
+                });
+                return false;
+            }
+            if (*saves < 2) return false;
+            std::vector<std::wstring> left;
+            for (const Item& it : listFolder(path(L"tabsrace"), true).items) left.push_back(it.name);
+            selfTest_->note = *overlap ? std::to_wstring(left.size()) + L" shortcut(s) left"
+                                       : L"the first save ended before the second started";
+            return *overlap && left == std::vector<std::wstring>{L"1 made.lnk"};
+        },
+        30000);
+    add(L"(remove them)", [=, this] { deleteTree(path(L"tabsrace")); },
+        [=, this] { return !exists(path(L"tabsrace")); });
     add(L"Bookmark this folder on a tab's menu writes a shortcut to the tab's folder in Bookmarks and shows it in the "
         L"tree (5.6)",
         [=, this] { bookmarkTab(active_); },

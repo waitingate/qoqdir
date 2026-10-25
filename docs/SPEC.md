@@ -98,9 +98,10 @@ These describe what the user sees. Each must hold in every situation.
   USB disk, a slow NAS, a network share that doesn't answer at all (Windows can
   take 20 to 60 s to give up). A key press or click reacts at once (well under
   100 ms), including Enter on such a path.
-- That goes for every place a path is touched: opening a folder, the address bar,
-  expanding the tree, a shortcut to a network folder, icons of files on a slow
-  disk, refreshes.
+- That goes for every place a path is touched: opening a folder, the address bar
+  (a command typed there too, whose program is looked up on the PATH), expanding
+  the tree, a shortcut to a network folder, icons of files on a slow disk,
+  refreshes.
 - If a load takes more than about a quarter second, the status bar says
   "Loading…" until the folder arrives or the load is replaced.
 - The shell is asked about the file types in a folder (their names and icons) on
@@ -427,7 +428,8 @@ readers read the same as the button's name.
   shows the first new one. Renaming the folder keeps a set. Both work on a worker
   thread, since a folder may be on a server that is off.
 - Closing a Qoqdir window with four or more tabs open asks "Save these tabs in
-  Bookmarks\Tabs before closing?": Yes saves them (here and now) and closes, No
+  Bookmarks\Tabs before closing?": Yes saves them (here and now, after any save
+  Ctrl+S still has going, so this set is all that is left) and closes, No
   closes, Cancel keeps the window. With fewer tabs it closes at once; a shutdown
   never asks (5.11). A window closed while others stay open asks too: the set in
   it would be lost all the same. The self-test never shows a box that waits
@@ -708,8 +710,10 @@ result:
 34. With a subfolder `one` and a shortcut `sub.lnk` in Bookmarks, rebuilding the
     tree as at startup: Bookmarks is open and lists "one", then "sub" (no `.lnk`).
 35. Moving to the "sub" bookmark with the keyboard opens the `sub` folder.
-36. After creating `Bookmarks\two`, collapsing and expanding Bookmarks with the
-    Left and Right keys shows "one", "two", "sub".
+36. Creating `Bookmarks\two` shows "one", "two", "sub" in the tree by itself. Of
+    a subfolder and a hidden one made in `Bookmarks\one`, which no watch sees,
+    collapsing and expanding it with the Left and Right keys shows the new one
+    and not the hidden one.
 37. A 10,000-file folder loads within the target of 4.7.
 38. Filtering while scrolled to the bottom shows the matches from the top.
 39. Filtering and sorting 10,000 files are within the targets of 4.7.
@@ -718,7 +722,9 @@ result:
 41. With three tabs (the test folder, `sub`, This PC), Ctrl+S leaves one shortcut
     per tab in `Bookmarks\Tabs`, in tab order: an old shortcut there is gone and a
     text file there stays. After closing two tabs, Ctrl+O opens `sub` and This PC
-    after the test folder (which is open already) and shows `sub`.
+    after the test folder (which is open already) and shows `sub`. A second save
+    that starts while one is still writing waits for it, and leaves only its own
+    shortcuts.
 42. With a second tab (`sub`) right of the current one, Ctrl+Shift+PgDn twice
     moves the current tab to the end, and it stays the current tab; Ctrl+Shift+PgUp
     twice moves it back to the start.
@@ -754,7 +760,8 @@ result:
 53. A word an input method types at once (its letters queued for the list
     together) goes into the filter box whole.
 54. With a broken `rundll32.exe` in the shown folder, typing `rundll32` runs
-    Windows' own program: no `Can't find`.
+    Windows' own program: no `Can't find`. A typed command's program is looked
+    up and started on a worker: the key press returns before its reply.
 55. Expanding a tree folder with 10,000 subfolders: all are shown, and the window
     never waits a second.
 56. The colours for a high-contrast theme (applied directly: the test never

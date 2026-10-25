@@ -41,7 +41,8 @@ use windows::Win32::UI::Shell::{
     GCS_VERBW, IContextMenu, IContextMenu2, IContextMenu3, IDropTargetHelper, IFileOperation,
     IFileOperationProgressSink, IFileSystemBindData, IFileSystemBindData_Impl, ILFindLastID, ILIsEqual, IShellFolder,
     IShellItem, IShellLinkW, KF_FLAG_DEFAULT, STR_FILE_SYS_BIND_DATA, SLR_NO_UI, SLR_NOLINKINFO, SLR_NOSEARCH,
-    SLR_NOTRACK, SLR_NOUPDATE, SEE_MASK_FLAG_NO_UI, SHBindToParent, SHCNE_ATTRIBUTES, SHCNE_CREATE, SHCNE_DELETE, SHCNE_DRIVEADD,
+    SLR_NOTRACK, SLR_NOUPDATE, SEE_MASK_FLAG_NO_UI, SEE_MASK_NOASYNC,
+    SHBindToParent, SHCNE_ATTRIBUTES, SHCNE_CREATE, SHCNE_DELETE, SHCNE_DRIVEADD,
     SHCNE_DRIVEREMOVED, SHCNE_MEDIAINSERTED, SHCNE_MEDIAREMOVED, SHCNE_MKDIR, SHCNE_RENAMEFOLDER,
     SHCNE_RENAMEITEM, SHCNE_RMDIR, SHCNE_UPDATEDIR, SHCNE_UPDATEITEM, SHCNRF_InterruptLevel, SHCNRF_NewDelivery,
     SHCNRF_ShellLevel, SHChangeNotification_Lock, SHChangeNotification_Unlock, SHChangeNotifyDeregister,
@@ -633,7 +634,7 @@ pub fn run_command(owner: HWND, command: &OsStr, work_dir: Option<&Path>) -> boo
         let Some(file) = file else { return false }; // on neither PATH nor App Paths: not run from the folder (5.3)
         let mut sei = SHELLEXECUTEINFOW {
             cbSize: size_of::<SHELLEXECUTEINFOW>() as u32,
-            fMask: SEE_MASK_FLAG_NO_UI,
+            fMask: SEE_MASK_FLAG_NO_UI | SEE_MASK_NOASYNC, // NOASYNC: it runs on a worker that ends right after
             hwnd: owner,
             lpFile: pcwstr(&file),
             lpParameters: args.map_or(PCWSTR::null(), pcwstr),
@@ -702,6 +703,10 @@ pub fn shortcut_target(lnk: &Path) -> Option<(Location, bool)> {
 /// Saving replaces the shortcuts there and leaves anything else. Worker thread: a folder may be on a server
 /// that is off.
 pub fn save_folder_shortcuts(dir: &Path, folders: &[Location]) -> bool {
+    // One save at a time: closing the window saves here and now while Ctrl+S's worker may still be writing (a folder
+    // on a server that is off is slow), and the two would leave a mix of both sets. The later one waits and wins.
+    static SAVING: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    let _one = SAVING.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     let _ = std::fs::create_dir(dir); // fails harmlessly if it exists
     for it in list_folder(&Location::dir(dir), true, None).items {
         if !it.is_dir() && extension_of(&it.name) == ".lnk" {

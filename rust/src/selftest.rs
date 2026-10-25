@@ -68,8 +68,8 @@ use crate::folder::{
     list_folder, parse_command_line, sort_items, system_dir,
 };
 use crate::shell::{
-    can_paste, command_program, copy_to_clipboard, data_object_at, file_info, item_menu_at, known_folder, paste_into,
-    pidl_from, shortcut_target, type_name,
+    can_paste, command_program, copy_to_clipboard, data_object_at, file_info, in_background, item_menu_at, known_folder,
+    paste_into, pidl_from, save_folder_shortcuts, shortcut_target, type_name,
 };
 use windows::core::{Interface, w};
 
@@ -900,7 +900,9 @@ impl App {
         // The tab keeps its gone folder (4.3), which a command must not get as its working folder.
         s.add("(F5 while it is still gone keeps it shown as not available)", |a| a.press(VK_F5, 0), gone_shown);
         s.add("a command typed there still runs (the dead folder is not its working folder)", |a| a.go_to("rundll32"), |a| {
-            a.at(&p("gone")) && a.status_message().contains("not available")
+            a.commands_done.get() == a.commands.get()
+                && a.at(&p("gone"))
+                && a.status_message().contains("not available")
         });
         s.add(
             "F5 tries again once it is back",
@@ -1279,15 +1281,38 @@ impl App {
                 && from == 0
                 && to as i32 == unsafe { GetWindowTextLengthW(a.address) }
         });
+        // The program is looked up on the PATH and started on a worker, so a folder there that doesn't answer
+        // (Windows can take 20 to 60 s to give up on one) can't hold the window (4.1). Its reply is a message, so it
+        // can't be in yet when the key press returns.
+        let answered = Rc::new(Cell::new(false));
+        let (answered_act, answered_done) = (answered.clone(), answered);
+        s.add(
+            "a typed command is looked up and started on a worker, so a folder on the PATH that doesn't answer can't \
+             hold the window (4.1)",
+            move |a| {
+                a.set_message("");
+                a.go_to("no-such-program-qoqdir");
+                answered_act.set(!a.status_message().is_empty());
+            },
+            move |a| {
+                if answered_done.get() {
+                    note("answered before the key press returned".into());
+                }
+                !answered_done.get() && a.status_message().contains("Can't find")
+            },
+        );
         s.add(
             "a program typed by name is Windows' own, not a file of that name in the folder shown",
             |a| {
                 write_file(&p("rundll32.exe")); // not a program: run from here, it would fail
                 a.set_message("");
                 a.go_to("rundll32");
-                let _ = std::fs::remove_file(p("rundll32.exe"));
             },
             move |a| {
+                if a.commands_done.get() != a.commands.get() {
+                    return false; // looked up on a worker: the decoy stays until its reply
+                }
+                let _ = std::fs::remove_file(p("rundll32.exe"));
                 note(format!("status: {}", a.status_message()));
                 a.at(&dir()) && a.status_message().is_empty()
             },
@@ -2071,13 +2096,10 @@ impl App {
             move |a| a.at(&dir()) && a.list.renaming() && a.focused_is("sub"),
         );
         s.add(
-            "collapsing and expanding a tree folder shows its new subfolders",
+            "a folder made in Bookmarks shows up in the tree by itself (5.5)",
             |a| {
                 a.cancel_rename(); // the box from the step before
                 let _ = std::fs::create_dir(p("Bookmarks\\two"));
-                a.tree_select(a.tree.root());
-                a.tree_key(VK_LEFT); // collapse, as the user would
-                a.tree_key(VK_RIGHT); // and expand again
             },
             |a| a.bookmark_nodes() == "one,two,sub",
         );
@@ -2141,6 +2163,36 @@ impl App {
                 let expanded = a.expanded(one);
                 a.bookmark_nodes() == "one,two,sub" && one != 0 && a.tree.child(one) != 0 && expanded && a.tree.child(a.tree.last_root()) != 0
             },
+        );
+        // Made where no watch sees them (Bookmarks' watch takes only its own children, and the list shows another
+        // folder): only the read when the node opens again can show them, and never the hidden one (5.5).
+        s.add(
+            "collapsing and expanding a tree folder shows its new subfolders, and not its hidden ones",
+            |a| {
+                let _ = std::fs::create_dir(p("Bookmarks\\one\\fresh"));
+                let _ = std::fs::create_dir(p("Bookmarks\\one\\hidden"));
+                let hidden = wide(p("Bookmarks\\one\\hidden"));
+                unsafe {
+                    let attrs = GetFileAttributesW(pcwstr(&hidden));
+                    let with_hidden = FILE_FLAGS_AND_ATTRIBUTES(attrs | FILE_ATTRIBUTE_HIDDEN.0);
+                    let _ = SetFileAttributesW(pcwstr(&hidden), with_hidden);
+                }
+                a.tree_select(a.tree_one());
+                a.tree_key(VK_LEFT); // collapse, as the user would
+                a.tree_key(VK_RIGHT); // and expand again
+            },
+            |a| a.node_texts(a.tree.child(a.tree_one())) == "deep,fresh",
+        );
+        s.add(
+            "(remove them, and read the folder again)",
+            |a| {
+                let _ = std::fs::remove_dir(p("Bookmarks\\one\\fresh"));
+                let _ = std::fs::remove_dir(p("Bookmarks\\one\\hidden"));
+                a.tree_select(a.tree_one());
+                a.tree_key(VK_LEFT);
+                a.tree_key(VK_RIGHT);
+            },
+            |a| a.node_texts(a.tree.child(a.tree_one())) == "deep",
         );
         s.add(
             "F5 reads the folders open in the tree again: one that is the same stays as it is (\"one\" stays open), one \
@@ -2354,6 +2406,51 @@ impl App {
             },
             one_tab_home,
         );
+        // Two saves at once, as Ctrl+S on a worker and then closing with "Save these tabs?" answered Yes: the later
+        // one waits for the first and then replaces what it wrote, so none of the first's shortcuts are left (5.7).
+        let saves = Arc::new(AtomicUsize::new(0)); // saves finished
+        let overlap = Rc::new(Cell::new(None::<bool>)); // whether the second started while the first was writing
+        let saves_act = saves.clone();
+        s.add(
+            "a save of the tabs that starts while another is still writing waits for it, and replaces all it wrote",
+            move |_| {
+                // Long enough to still be writing when the next starts.
+                let (dir, many, saves) = (p("tabsrace"), vec![Location::dir(p("sub")); 300], saves_act.clone());
+                in_background(move || {
+                    save_folder_shortcuts(&dir, &many);
+                    saves.fetch_add(1, Ordering::SeqCst);
+                });
+            },
+            move |_| {
+                let Some(overlapped) = overlap.get() else {
+                    // The second save starts once the first is writing.
+                    if !exists(&p("tabsrace\\1 sub.lnk")) {
+                        return false;
+                    }
+                    overlap.set(Some(saves.load(Ordering::SeqCst) == 0));
+                    let (dir, made, saves) = (p("tabsrace"), Location::dir(p("made")), saves.clone());
+                    in_background(move || {
+                        save_folder_shortcuts(&dir, &[made]);
+                        saves.fetch_add(1, Ordering::SeqCst);
+                    });
+                    return false;
+                };
+                if saves.load(Ordering::SeqCst) < 2 {
+                    return false;
+                }
+                let left: Vec<OsString> = std::fs::read_dir(p("tabsrace"))
+                    .map(|d| d.filter_map(|e| e.ok().map(|e| e.file_name())).collect())
+                    .unwrap_or_default();
+                note(if overlapped {
+                    format!("{} shortcut(s) left", left.len())
+                } else {
+                    "the first save ended before the second started".into()
+                });
+                overlapped && left == [OsString::from("1 made.lnk")]
+            },
+        )
+        .wait(30000);
+        s.add("(remove them)", |_| { let _ = std::fs::remove_dir_all(p("tabsrace")); }, |_| !exists(&p("tabsrace")));
         s.add(
             "Bookmark this folder on a tab's menu writes a shortcut to the tab's folder in Bookmarks and shows it in the \
              tree (5.6)",

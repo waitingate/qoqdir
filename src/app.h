@@ -230,6 +230,8 @@ private:
     Pending kept_;
     std::wstring keptSaid_;   // what "Loading..." covered while the tab waited for that read: back with the folder
     UINT generation_ = 0;
+    UINT commands_ = 0;       // commands typed in the address bar: an older one's reply leaves the box alone
+    UINT commandsDone_ = 0;   // ...whose replies came back (self-test)
     int loadsDone_ = 0;     // folder reads that reported back (self-test)
     int loadsWasted_ = 0;   // ...of which a newer load had replaced, yet they read the whole folder (self-test)
     UINT uncountedLoad_ = 0;   // a read the self-test leaves stuck on a network timeout: in neither count

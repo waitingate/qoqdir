@@ -111,6 +111,14 @@ const WM_APP_BOOKMARKS: u32 = WM_APP + 13;
 const WM_APP_NEWWINDOW: u32 = WM_APP + 14;
 const WM_APP_BOOKMARKED: u32 = WM_APP + 15;
 const WM_APP_DELETED: u32 = WM_APP + 16;
+const WM_APP_COMMAND: u32 = WM_APP + 17;
+
+/// A typed command's reply from its worker (go_to_typed).
+struct CommandDone {
+    seq: u32,
+    ran: bool,
+    text: OsString, // as typed
+}
 
 pub const TIMER_REFRESH: usize = 1;
 const TIMER_STATUS: usize = 2;
@@ -263,6 +271,8 @@ pub struct App {
     kept_said: RefCell<String>, // what "Loading..." covered while the tab waited for State::kept: back with the folder
     load_message_shown: Cell<bool>, // the status bar says "Loading..." or "not available" (set_message clears it)
     pub generation: Cell<u32>,
+    pub commands: Cell<u32>,      // commands typed in the address bar: an older one's reply leaves the box alone
+    pub commands_done: Cell<u32>, // ...whose replies came back (self-test)
     pub loads_done: Cell<u32>,   // folder reads that reported back (self-test)
     pub loads_wasted: Cell<u32>, // ...of which a newer load had replaced, yet they read the whole folder (self-test)
     pub uncounted_load: Cell<u32>, // a read the self-test leaves stuck on a network timeout: in neither count
@@ -605,6 +615,8 @@ impl App {
                 kept_said: RefCell::new(String::new()),
                 load_message_shown: Cell::new(false),
                 generation: Cell::new(0),
+                commands: Cell::new(0),
+                commands_done: Cell::new(0),
                 loads_done: Cell::new(0),
                 loads_wasted: Cell::new(0),
                 uncounted_load: Cell::new(0),
@@ -855,7 +867,11 @@ impl App {
         // These carry a heap object made on a worker in lParam. Another program broadcasting one of their numbers
         // (apps do broadcast in the WM_APP range) would hand a null or stray pointer; ignore one with no pointer.
         if lp.0 == 0
-            && [WM_APP_LOADED, WM_APP_ICONS, WM_APP_TREE, WM_APP_TREE_ICONS, WM_APP_TABS_READ, WM_APP_DELETED].contains(&msg)
+            && [
+                WM_APP_LOADED, WM_APP_ICONS, WM_APP_TREE, WM_APP_TREE_ICONS, WM_APP_TABS_READ, WM_APP_DELETED,
+                WM_APP_COMMAND,
+            ]
+            .contains(&msg)
         {
             return LRESULT(0);
         }
@@ -996,6 +1012,27 @@ impl App {
                     if lp.0 != 0 {
                         let view = *Box::from_raw(lp.0 as *mut ViewState);
                         self.refresh(view);
+                    }
+                    return LRESULT(0);
+                }
+                WM_APP_COMMAND => {
+                    // A typed command was looked up and started on a worker (go_to_typed).
+                    let done = *Box::from_raw(lp.0 as *mut CommandDone);
+                    self.commands_done.set(self.commands_done.get() + 1);
+                    if done.seq != self.commands.get() {
+                        return LRESULT(0); // one typed since decides what the address bar shows
+                    }
+                    let untouched = window_text(self.address) == done.text;
+                    if !done.ran {
+                        self.warn(&format!("Can't find \"{}\"", done.text.to_string_lossy()));
+                        if untouched {
+                            focus_edit(self.address); // left selected, like a bad path, so it can be corrected (5.3)
+                        }
+                    } else if untouched {
+                        set_text(self.address, self.location().text());
+                        if GetFocus() == self.address {
+                            self.focus_list();
+                        }
                     }
                     return LRESULT(0);
                 }
@@ -2054,14 +2091,21 @@ impl App {
         }
         // A command ("cmd", a web address...), run in the folder shown: a dead tab folder would hold up its start.
         // On This PC a relative place has no folder (Windows would open its own start folder in Explorer).
-        let shown = self.list.location();
-        if (relative && matches!(here, Location::ThisPc)) || !run_command(self.wnd, &typed, shown.path()) {
+        if relative && matches!(here, Location::ThisPc) {
             self.warn(&format!("Can't find \"{}\"", text.to_string_lossy()));
             focus_edit(self.address); // left selected, like a bad path, so it can be corrected (5.3)
             return;
         }
-        set_text(self.address, here.text());
-        self.focus_list();
+        // Finding the program reads every folder on the PATH, and starting it can wait on Windows (a UAC prompt): both
+        // on a worker, so a folder on the PATH that doesn't answer can't hold the window (4.1). Its reply says Can't
+        // find, or puts the path back and goes to the list (WM_APP_COMMAND).
+        let seq = self.commands.get() + 1;
+        self.commands.set(seq);
+        let (wnd, dir) = (self.wnd.0 as usize, self.list.location().path().map(Path::to_path_buf));
+        in_background(move || {
+            let ran = run_command(HWND(wnd as _), &typed, dir.as_deref());
+            post(wnd, WM_APP_COMMAND, 0, Box::new(CommandDone { seq, ran, text }));
+        });
     }
 
     /// Enter / double-click on the selection.
