@@ -465,6 +465,42 @@ bool runCommand(HWND owner, const std::wstring& command, const std::wstring& wor
     return run(commandProgram(command.substr(0, space)), args.c_str());
 }
 
+std::optional<Terminal> terminalProgram() {
+    if (std::optional<std::wstring> wt = commandProgram(L"wt")) return Terminal{*wt, L"-d ."};   // "." is its folder
+    if (std::optional<std::wstring> cmd = commandProgram(L"cmd")) return Terminal{*cmd, L""};
+    return std::nullopt;
+}
+
+bool startTerminal(HWND owner, const Terminal& terminal, const std::wstring& dir) {
+    SHELLEXECUTEINFOW sei{};
+    sei.cbSize = sizeof sei;
+    sei.fMask = SEE_MASK_FLAG_NO_UI | SEE_MASK_NOASYNC;   // NOASYNC: it runs on a worker that ends right after
+    sei.hwnd = owner;
+    sei.lpFile = terminal.program.c_str();
+    sei.lpParameters = terminal.args.empty() ? nullptr : terminal.args.c_str();
+    sei.lpDirectory = dir.c_str();
+    sei.nShow = SW_SHOWNORMAL;
+    return ShellExecuteExW(&sei) != FALSE;
+}
+
+bool copyText(HWND owner, const std::wstring& text) {
+    HGLOBAL h = GlobalAlloc(GMEM_MOVEABLE, (text.size() + 1) * sizeof(wchar_t));
+    auto* p = h ? static_cast<wchar_t*>(GlobalLock(h)) : nullptr;
+    if (!p) {
+        if (h) GlobalFree(h);
+        return false;
+    }
+    std::copy(text.c_str(), text.c_str() + text.size() + 1, p);
+    GlobalUnlock(h);
+    bool ok = OpenClipboard(owner);   // another program can hold it for a moment: then it fails, as Ctrl+C would
+    if (ok) {
+        ok = EmptyClipboard() && SetClipboardData(CF_UNICODETEXT, h);
+        CloseClipboard();
+    }
+    if (!ok) GlobalFree(h);   // once set, the clipboard owns it
+    return ok;
+}
+
 void dragOut(HWND owner, const std::wstring& dir, const std::vector<Item>& items) {
     Com<IDataObject> obj = shellObject<IDataObject>(owner, dir, items);
     if (!obj) return;

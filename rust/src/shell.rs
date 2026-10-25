@@ -8,8 +8,8 @@ use std::mem::ManuallyDrop;
 use std::path::{Path, PathBuf};
 
 use windows::Win32::Foundation::{
-    CloseHandle, E_FAIL, E_INVALIDARG, ERROR_CANCELLED, FILETIME, HANDLE, HWND, LPARAM, LRESULT, MAX_PATH, POINT, POINTL,
-    WPARAM,
+    CloseHandle, E_FAIL, E_INVALIDARG, ERROR_CANCELLED, FILETIME, GlobalFree, HANDLE, HWND, LPARAM, LRESULT, MAX_PATH,
+    POINT, POINTL, WPARAM,
 };
 use windows::Win32::Storage::FileSystem::{
     FILE_ATTRIBUTE_DIRECTORY, FILE_ATTRIBUTE_NORMAL, FILE_FLAGS_AND_ATTRIBUTES, GetDriveTypeW, SearchPathW,
@@ -20,12 +20,15 @@ use windows::Win32::System::Com::{
     CoInitializeEx, CoTaskMemFree, CoUninitialize, CreateBindCtx, DVASPECT_CONTENT, FORMATETC, IBindCtx, IDataObject,
     IPersistFile, STGM_CREATE, STGM_READ, STGMEDIUM, STGMEDIUM_0, TYMED_HGLOBAL,
 };
-use windows::Win32::System::DataExchange::{IsClipboardFormatAvailable, RegisterClipboardFormatW};
+use windows::Win32::System::DataExchange::{
+    CloseClipboard, EmptyClipboard, IsClipboardFormatAvailable, OpenClipboard, RegisterClipboardFormatW,
+    SetClipboardData,
+};
 use windows::Win32::System::LibraryLoader::{GetProcAddress, LOAD_LIBRARY_SEARCH_SYSTEM32, LoadLibraryExW};
 use windows::Win32::System::Memory::{GMEM_MOVEABLE, GlobalAlloc, GlobalLock, GlobalUnlock};
 use windows::Win32::System::Ole::{
-    CF_HDROP, DROPEFFECT, DROPEFFECT_COPY, DROPEFFECT_LINK, DROPEFFECT_MOVE, DROPEFFECT_NONE, IDropSource, IDropTarget,
-    IDropTarget_Impl, OleSetClipboard, ReleaseStgMedium,
+    CF_HDROP, CF_UNICODETEXT, DROPEFFECT, DROPEFFECT_COPY, DROPEFFECT_LINK, DROPEFFECT_MOVE, DROPEFFECT_NONE,
+    IDropSource, IDropTarget, IDropTarget_Impl, OleSetClipboard, ReleaseStgMedium,
 };
 use windows::Win32::System::SystemServices::MODIFIERKEYS_FLAGS;
 use windows::Win32::System::Threading::{CreateEventW, INFINITE, SetEvent};
@@ -651,6 +654,60 @@ pub fn run_command(owner: HWND, command: &OsStr, work_dir: Option<&Path>) -> boo
     match text.split_once(' ') {
         Some((file, args)) => run(command_program(OsStr::new(file)), Some(&wide(args))),
         None => false,
+    }
+}
+
+/// What Ctrl+` starts in a folder (5.3): Windows Terminal ("wt -d ."), found as a typed name is, or else cmd. Finding
+/// it reads the PATH, so both run on a worker.
+pub struct Terminal {
+    pub program: Vec<u16>, // wide, as command_program gives it
+    pub args: &'static str,
+}
+
+pub fn terminal_program() -> Option<Terminal> {
+    if let Some(wt) = command_program(OsStr::new("wt")) {
+        return Some(Terminal { program: wt, args: "-d ." }); // "." is its folder
+    }
+    command_program(OsStr::new("cmd")).map(|cmd| Terminal { program: cmd, args: "" })
+}
+
+pub fn start_terminal(owner: HWND, terminal: &Terminal, dir: &Path) -> bool {
+    let (args, dir) = (wide(terminal.args), wide(dir));
+    let mut sei = SHELLEXECUTEINFOW {
+        cbSize: size_of::<SHELLEXECUTEINFOW>() as u32,
+        fMask: SEE_MASK_FLAG_NO_UI | SEE_MASK_NOASYNC, // NOASYNC: it runs on a worker that ends right after
+        hwnd: owner,
+        lpFile: pcwstr(&terminal.program),
+        lpParameters: if terminal.args.is_empty() { PCWSTR::null() } else { pcwstr(&args) },
+        lpDirectory: pcwstr(&dir),
+        nShow: SW_SHOWNORMAL.0,
+        ..Default::default()
+    };
+    unsafe { ShellExecuteExW(&mut sei).is_ok() }
+}
+
+/// The clipboard then holds just this text.
+pub fn copy_text(owner: HWND, text: &str) -> bool {
+    let text: Vec<u16> = text.encode_utf16().chain(std::iter::once(0)).collect();
+    unsafe {
+        let Ok(h) = GlobalAlloc(GMEM_MOVEABLE, text.len() * size_of::<u16>()) else { return false };
+        let p = GlobalLock(h) as *mut u16;
+        if p.is_null() {
+            let _ = GlobalFree(Some(h));
+            return false;
+        }
+        std::ptr::copy_nonoverlapping(text.as_ptr(), p, text.len());
+        let _ = GlobalUnlock(h);
+        // Another program can hold it for a moment: then it fails, as Ctrl+C would.
+        let mut ok = OpenClipboard(Some(owner)).is_ok();
+        if ok {
+            ok = EmptyClipboard().is_ok() && SetClipboardData(u32::from(CF_UNICODETEXT.0), Some(HANDLE(h.0))).is_ok();
+            let _ = CloseClipboard();
+        }
+        if !ok {
+            let _ = GlobalFree(Some(h)); // once set, the clipboard owns it
+        }
+        ok
     }
 }
 

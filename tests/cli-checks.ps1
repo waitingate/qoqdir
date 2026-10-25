@@ -148,6 +148,8 @@ Check (Test-Path (Join-Path $dir 'Bookmarks') -PathType Container) 'a Bookmarks 
 $homeName = Split-Path ([Environment]::GetFolderPath('UserProfile')) -Leaf
 $r = TitleAfterStart @() $homeName
 Check ($r.Title -eq $homeName) "no folders opens the home folder$(if ($r.Title -ne $homeName) { ": '$($r.Title)'" })"   # the name stays out of a log that passes
+$r = TitleAfterStart @("`"$env:WINDIR\win.ini`"") 'Windows'
+Check ($r.Title -eq 'Windows') "a file opens its folder, as explorer /select, does: '$($r.Title)'"
 $r = HelpOutput '--help'   # the switch F1's help names (-h and -? are the same: unit tests)
 Check ($r.Code -eq 0 -and $r.Text -match '^Qoqdir \d' -and $r.Text -match 'Usage: qoqdir \[options\]' -and $r.Text -match '--tab="folder path"') `
   "--help writes the command-line help where its output goes (a pipe here) and exits with 0 (exit code $($r.Code))"

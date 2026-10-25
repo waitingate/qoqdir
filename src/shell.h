@@ -68,6 +68,14 @@ void openFile(HWND owner, const std::wstring& path);
 // inside subfolders).
 void openInExplorer(HWND owner, const std::wstring& dir, bool search);
 bool runCommand(HWND owner, const std::wstring& command, const std::wstring& workDir);
+// What Ctrl+` starts in a folder (5.3): Windows Terminal ("wt -d ."), found as a typed name is, or else cmd. Finding
+// it reads the PATH, so both run on a worker.
+struct Terminal {
+    std::wstring program, args;
+};
+std::optional<Terminal> terminalProgram();
+bool startTerminal(HWND owner, const Terminal& terminal, const std::wstring& dir);
+bool copyText(HWND owner, const std::wstring& text);   // the clipboard then holds just this text
 // The full path a typed program name runs (PATH, then App Paths), nothing when it is on neither (so a file of
 // that name in the folder shown is never run, 5.3); a path or a document name comes back unchanged. For runCommand
 // and the self-test.

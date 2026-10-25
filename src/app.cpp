@@ -19,7 +19,7 @@ enum : int { ID_BACK = 100, ID_FORWARD, ID_UP, ID_ADDRESS, ID_FILTER, ID_TABS, I
 enum : UINT {
     WM_APP_LOADED = WM_APP + 1, WM_APP_CHANGED, WM_APP_CLOSETAB, WM_APP_RENAME, WM_APP_ICONS, WM_APP_TREE,
     WM_APP_MIDDLECLICK, WM_APP_TABS_SAVED, WM_APP_TABS_READ, WM_APP_PRESSTAB, WM_APP_DRAGTAB, WM_APP_TREE_ICONS,
-    WM_APP_BOOKMARKS, WM_APP_NEWWINDOW, WM_APP_BOOKMARKED, WM_APP_DELETED, WM_APP_COMMAND
+    WM_APP_BOOKMARKS, WM_APP_NEWWINDOW, WM_APP_BOOKMARKED, WM_APP_DELETED, WM_APP_COMMAND, WM_APP_TERMINAL
 };
 
 struct CommandDone {   // a typed command's reply from its worker (goToTyped)
@@ -476,6 +476,9 @@ LRESULT App::onMessage(UINT msg, WPARAM wp, LPARAM lp) {
         if (wp && v) refresh(*v);   // nothing deleted (No, or it failed): the selection was already cleared
         return 0;
     }
+    case WM_APP_TERMINAL:   // Ctrl+`'s terminal was looked for and started on a worker (openTerminal)
+        if (!wp) warn(L"Can't start a terminal");
+        return 0;
     case WM_APP_COMMAND: {   // a typed command was looked up and started on a worker (goToTyped)
         std::unique_ptr<CommandDone> c(reinterpret_cast<CommandDone*>(lp));
         ++commandsDone_;
@@ -846,6 +849,7 @@ bool App::onKey(const Key& key) {
     if ((ctrl && k == 'L') || (alt && k == 'D') || (k == VK_F4 && !alt)) { focusEdit(address_); return true; }
     if ((ctrl && k == 'F') || k == VK_F3) { focusEdit(filter_); return true; }
     if (k == VK_F5 || (ctrl && k == 'R')) { refreshAll(); return true; }
+    if (ctrl && k == VK_OEM_3) { openTerminal(); return true; }   // Ctrl+`, the key left of 1
     if (k == VK_F1) { showKeys(wnd_); return true; }
     if (ctrl && k == 'H') {   // hidden items are always read: the list just shows or hides them
         list_.setShowHidden(!list_.showHidden());
@@ -911,6 +915,7 @@ bool App::onKey(const Key& key) {
         if (k == VK_ESCAPE && GetWindowTextLengthW(filter_) > 0) { SetWindowTextW(filter_, L""); return true; }
         if (ctrl && shift && k == 'N') { newFolder(); return true; }
         if (ctrl && k == 'A') { list_.selectAll(); return true; }
+        if (ctrl && shift && k == 'C') { copyPaths(); return true; }
         if (ctrl && (k == 'C' || k == 'X')) {
             std::vector<Item> items = list_.selectedItems();
             if (items.empty()) return true;
@@ -1082,10 +1087,12 @@ void App::onLoaded(Listing&& listing, UINT generation) {
     FILETIME now = folderWritten(t.path);
     if (CompareFileTime(&now, &written) != 0) onFolderChanged();
     // A move shows where the tab is now. A tab switch showed it when it began, and the address bar may hold what the
-    // user typed since (5.3).
+    // user typed since (5.3), unless it landed elsewhere: a tab made on a file shows the file's folder (5.10).
     if (moved) {
         showLocation(samePath(old, t.path));
         setMessage(hint ? hint : L"");   // a navigation clears the message, or says its hint
+    } else if (!samePath(old, t.path)) {
+        showLocation();
     }
     showStatus();
 }
@@ -1105,6 +1112,12 @@ void App::showLocation(bool sameFolder) {
 // The folder could not be read: decide what to show or do instead.
 void App::onLoadFailed(const Listing& listing, const Pending& p) {
     if (p.nav == Nav::Refresh || p.nav == Nav::Switch) {
+        // A tab made on a file (qoqdir C:\src\main.cpp) shows the file's folder with the file selected, as explorer
+        // /select does (5.10). The switch's read gives the tab that folder, with no history entry for the file.
+        if (listing.isFile && samePath(tab().path, listing.path) && !parentPath(listing.path).empty()) {
+            open(parentPath(listing.path), Nav::Switch, ViewState::selecting(leafName(listing.path)));
+            return;
+        }
         showUnavailable(listing.path, listing.error);
         return;
     }
@@ -1489,6 +1502,32 @@ void App::newFolder() {
     ViewState v = ViewState::selecting(name);
     v.rename = true;
     refresh(v);
+}
+
+// Ctrl+Shift+C (5.4): the selection's full paths as text, quoted and one per line as Explorer's Copy as path puts
+// them; with nothing selected, the folder's own (none for This PC or a folder that isn't available).
+void App::copyPaths() {
+    std::vector<std::wstring> paths;
+    for (const std::wstring& name : list_.selectedNames()) paths.push_back(joinPath(list_.dir(), name));
+    if (paths.empty() && !list_.dir().empty()) paths.push_back(list_.dir());
+    if (paths.empty()) return;
+    std::wstring text;
+    for (const std::wstring& p : paths) text += (text.empty() ? L"\"" : L"\r\n\"") + p + L"\"";
+    if (copyText(wnd_, text)) setMessage(std::to_wstring(paths.size()) + L" path(s) copied");
+    else warn(L"Can't put the paths on the clipboard");
+}
+
+// Ctrl+` (5.3): a terminal in the folder shown. Finding the program reads the PATH, so it is found and started on a
+// worker, as a typed command is (4.1).
+void App::openTerminal() {
+    inBackground([wnd = wnd_, dir = terminalFolder()] {
+        std::optional<Terminal> t = terminalProgram();
+        PostMessageW(wnd, WM_APP_TERMINAL, t && startTerminal(wnd, *t, dir), 0);
+    });
+}
+
+std::wstring App::terminalFolder() const {
+    return list_.dir().empty() ? knownFolder(FOLDERID_Profile) : list_.dir();   // This PC, or a folder not available
 }
 
 // ---------------------------------------------------------------- status and settings

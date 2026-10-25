@@ -26,13 +26,15 @@ which `Get-FileHash` on the zip you got should match.
 qoqdir [options] [folder ...]
 
   {folder}           open the folder in a tab (qoqdir . works too)
+  {file}             open its folder, with the file selected
   --tab="{folder}"   the same: --tab="D:\logs"
   -t="{folder}"      short for --tab=: -t="D:\logs" -t="C:\My Files"
   -h, --help, -?     print the help: options, examples, notes for scripts
 ```
 
 Each folder opens once, and the first one is shown. With no folders you get the
-home folder. `D:` means `D:\`. A folder that can't be opened yet, like a network
+home folder. `D:` means `D:\`. A file opens its folder with the file selected,
+as `explorer /select,` does. A folder that can't be opened yet, like a network
 drive that isn't connected, still gets its tab. All after `-t=` or `--tab=` is
 the folder, even a name that starts with `-`. Quote the folder after `-t=`:
 PowerShell reads an unquoted `-t=` as a switch of its own and splits
@@ -101,6 +103,7 @@ save them first.
 | Ctrl+F, F3 | filter box (or just start typing in the list) |
 | F5, Ctrl+R | refresh the list and the tree (or the Refresh button) |
 | Ctrl+H | show or hide hidden files |
+| Ctrl+` | a terminal in the folder (Windows Terminal, or cmd without it) |
 | Alt+Left / Alt+Right / Alt+Up | back / forward / up |
 | Tab, Shift+Tab | move between the address bar, filter, tree and list |
 | Enter / Ctrl+Enter | open / open in a background tab |
@@ -110,6 +113,7 @@ save them first.
 | Ctrl+Shift+N | new folder |
 | Ctrl+A | select all |
 | Ctrl+C / Ctrl+X / Ctrl+V | copy / cut / paste |
+| Ctrl+Shift+C | copy as path (of the folder when nothing is selected) |
 | Alt+Enter | properties (of the folder when nothing is selected) |
 | Esc | clear the filter |
 | Ctrl+Backspace | delete the word before the cursor (address bar, filter) |

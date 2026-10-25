@@ -286,6 +286,10 @@ readers read the same as the button's name.
   when the tab goes to another folder, another tab is shown, or Esc is pressed.
 - Ctrl+Backspace deletes the word before the cursor, in the address bar and the
   filter box.
+- Ctrl+` opens a terminal in the folder shown: Windows Terminal when it is
+  installed, else cmd. On This PC, or in a tab whose folder isn't available, it
+  opens in the home folder. Like a typed command, it is found and started on a
+  worker (4.1).
 
 ### 5.4 File list
 - Detail view with Name, Date modified, Type and Size (size right aligned, empty
@@ -324,6 +328,9 @@ readers read the same as the button's name.
 - Middle-click on a folder opens it in a new background tab.
 - The status bar shows `N items` (`N items (of M)` when filtered) and, with a
   selection, `K selected  <total size of the selected files>`.
+- Ctrl+Shift+C copies the full paths of the selection as text, each in quotes,
+  one per line, as Explorer's Copy as path does; with nothing selected, the
+  folder's own path. The status bar says "N path(s) copied".
 
 ### 5.5 Folder tree
 - Roots, in order:
@@ -479,6 +486,7 @@ Anywhere in the window:
 | Ctrl+F, F3 | filter box |
 | F5, Ctrl+R | refresh the list and the tree (5.5); the status bar says "Refreshed" |
 | Ctrl+H | show or hide hidden files |
+| Ctrl+` | a terminal in the folder shown (5.3) |
 | Alt+Left / Alt+Right / Alt+Up | back / forward / up |
 | Mouse back and forward buttons | back / forward |
 | F1 | the keys help (5.10) |
@@ -495,6 +503,7 @@ In the file list:
 | Ctrl+Shift+N | new folder |
 | Ctrl+A | select all |
 | Ctrl+C / Ctrl+X / Ctrl+V | copy / cut / paste |
+| Ctrl+Shift+C | copy the paths of the selection, or of the folder (5.4) |
 | Alt+Enter | properties of the selection, or of the folder when nothing is selected |
 | Esc | clear the filter |
 | any character | start filtering |
@@ -510,6 +519,7 @@ No console window appears.
 qoqdir [options] [folder ...]
 
   {folder}           open the folder in a tab (relative paths work: qoqdir .)
+  {file}             open the file's folder in a tab, with the file selected
   --tab="{folder}"   the same: --tab="D:\logs"
   -t="{folder}"      short for --tab=: -t="D:\logs"  -t="C:\My Files"
   -h, --help, -?     print the command-line help
@@ -527,6 +537,9 @@ qoqdir [options] [folder ...]
 - Each folder opens once, in the given order (the same folder twice, in any
   letter case or with a trailing backslash, gives one tab). The first is shown.
 - With no folders, the home folder opens.
+- A file opens its folder with the file selected, as `explorer /select,` does.
+  That it is a file is found when its tab loads, so a path on a server that is
+  off still never holds the start (4.1).
 - `qoqdir .` opens the terminal's current folder, and `D:` means `D:\`.
 - A folder that can't be opened still gets its tab, in the "not available" state
   (4.3). That helps with network drives that connect later.
@@ -657,7 +670,8 @@ result:
    Explorer).
 4. Filter "sub", then Enter: `sub` opens.
 5. Ctrl+V in `sub`: Windows' copy engine pastes the file, and it shows up in the
-   list by itself.
+   list by itself. Ctrl+Shift+C there copies the selected items' paths, quoted,
+   one per line, and with nothing selected the folder's path.
 6. Backspace goes up and selects `sub`. Alt+Left goes back, Alt+Right forward.
 7. Ctrl+Shift+N creates "New folder" in rename mode. Typing a name and Enter
    renames it, and the new name is selected.
@@ -698,7 +712,9 @@ result:
     Open file location (picked as its menu would pick it) shows the target's
     folder in this tab with the target selected, from the list and from a
     bookmark in the tree. With This PC copied (an item with no file path, as a
-    zip's or a phone's items are), empty space offers Paste.
+    zip's or a phone's items are), empty space offers Paste. A tab made on a
+    file, as `qoqdir <file>` makes one, shows the file's folder with the file
+    selected.
 29. Dropping a file (a drag simulated inside the process) on a second tab copies
     it into that tab's folder. While the file is over that tab, it shows as the
     current one; afterwards the real current tab does again.
@@ -814,6 +830,8 @@ result:
 67. Open in new window would start this exe on the folder, a title bar down
     and right of this window, the same size and not maximized. The self-test
     checks what it would start, without starting it: that would show a window.
+    The same for Ctrl+`: Windows Terminal (or cmd) in the folder shown, and in
+    the home folder on This PC; the key itself is checked by hand.
 68. Last, a window thread stuck for 7 s leaves a line in the crash log naming
     where it is (the self-test's crash log is in its own folder).
 

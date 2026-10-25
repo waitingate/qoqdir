@@ -85,6 +85,19 @@ std::vector<std::wstring> clipboardFiles() {
     return files;
 }
 
+std::wstring clipboardText() {   // empty when the clipboard holds no text
+    std::wstring text;
+    if (!OpenClipboard(nullptr)) return text;
+    if (HANDLE data = GetClipboardData(CF_UNICODETEXT)) {
+        if (auto* p = static_cast<const wchar_t*>(GlobalLock(data))) {
+            text = p;
+            GlobalUnlock(data);
+        }
+    }
+    CloseClipboard();
+    return text;
+}
+
 void makeShortcut(const std::wstring& lnk, const std::wstring& target) {   // target "": This PC, which has no path
     Com<IShellLinkW> link;
     if (FAILED(CoCreateInstance(CLSID_ShellLink, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(link.put()))))
@@ -409,6 +422,31 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
                     return true;
             return false;
         }, 10000);
+    // Ctrl+Shift+C: the paths as text, each quoted, one per line, as Explorer's Copy as path (5.4).
+    auto quotedPaths = [=, this] {
+        std::wstring text;
+        for (const std::wstring& name : list_.selectedNames())
+            text += (text.empty() ? L"\"" : L"\r\n\"") + joinPath(list_.dir(), name) + L"\"";
+        return text;
+    };
+    add(L"Ctrl+Shift+C copies the selection's full paths, quoted and one per line, as Explorer's Copy as path",
+        [=, this] {
+            SetFocus(list_.hwnd());
+            list_.selectAll();
+            selfTestKey('C', true, true);
+        },
+        [=, this] {
+            size_t n = list_.selectedNames().size();
+            return n >= 2 && clipboardText() == quotedPaths() &&
+                   statusMessage() == std::to_wstring(n) + L" path(s) copied";
+        }).copies = true;
+    add(L"with nothing selected, it copies the folder's own path",
+        [=, this] {
+            list_.select({}, L"");
+            selfTestKey('C', true, true);
+        },
+        [=, this] { return clipboardText() == L"\"" + path(L"sub") + L"\"" && statusMessage() == L"1 path(s) copied"; })
+        .copies = true;
     add(L"Backspace goes up and selects the folder you came from, and the status bar says so the first time",
         [=, this] { selfTestKey(VK_BACK); },
         [=, this] {
@@ -1234,6 +1272,13 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
     };
     add(L"Paste on empty space is offered for items without a file path, as copied from a zip or a phone",
         pcOnClipboard, [=, this] { pcOnClipboard(); return canPaste(); });
+    add(L"a tab made on a file, as qoqdir <file> makes one, shows the file's folder with the file selected",
+        [=, this] { newTab(path(L"file1.txt"), true); },
+        [=, this] {
+            return tabs_.size() == 2 && at(dir) && list_.selectedNames() == std::vector<std::wstring>{L"file1.txt"} &&
+                   windowText(address_) == locationText(dir) && windowText(wnd_) == displayName(dir);
+        });
+    add(L"(close it)", [=, this] { closeTab(active_); }, oneTabHome);
     add(L"a drag over a tab whose folder was never shown is refused at once (nobody has checked that folder)",
         [=, this] {
             newTab(path(L"made"), false);   // a second tab, right of the current one, as from --tab= or a middle-click
@@ -2215,6 +2260,25 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
                             w.place.bottom - w.place.top == r.bottom - r.top;
             return started && moved && sameSize && !w.maximized;
         });
+    // The same for Ctrl+` (5.3): what it would start, and in which folder. The key itself is checked by hand.
+    add(L"Ctrl+` would start Windows Terminal (or cmd where it isn't installed) in the folder shown (5.3)",
+        [=, this] { open(dir, Nav::New); },
+        [=, this] {
+            if (!at(dir)) return false;
+            std::optional<Terminal> term = terminalProgram();
+            std::optional<std::wstring> wt = commandProgram(L"wt");
+            // The name only: the path of wt.exe has the user name in it.
+            selfTest_->note = term ? leafName(term->program) : L"(none)";
+            auto isCmd = [](const std::wstring& exe) {
+                return exe.size() > 8 && _wcsicmp(exe.substr(exe.size() - 8).c_str(), L"\\cmd.exe") == 0;
+            };
+            bool program = term && (wt ? term->program == *wt && term->args == L"-d ."
+                                       : isCmd(term->program) && term->args.empty());
+            return program && samePath(terminalFolder(), dir);
+        });
+    add(L"(on This PC, in the home folder)", [=, this] { open(L"", Nav::New); },
+        [=, this] { return at(L"") && samePath(terminalFolder(), knownFolder(FOLDERID_Profile)); });
+    backHome(L"(back to the test folder)");
     // 4.10: a window that answers nothing for 5 s gets a line in the crash log saying where its thread is. Last: a
     // hung window gets a ghost window from Windows meanwhile, which can take the focus from the steps after it.
     // The test's own long steps (making and removing 10,000 files) leave such lines too: a new one must appear.

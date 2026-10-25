@@ -52,6 +52,7 @@ const KEYS: &str = "Navigation
   Up: Backspace
   Bookmark a folder: right-click its tab, or Alt+drag it onto Bookmarks
   Address bar: Ctrl+L
+  Open a terminal here: Ctrl+`
   Back: Alt+Left
   Forward: Alt+Right
   Refresh: F5
@@ -72,10 +73,12 @@ Files
   Delete: Delete (to the Recycle Bin)
   Delete permanently: Shift+Delete
   Properties: Alt+Enter
+  Copy as path: Ctrl+Shift+C
 
 Command line
   Open folders in tabs: qoqdir -t=\"D:\\logs\" -t=\"D:\\My Files\"
   Or: qoqdir --tab=\"D:\\logs\"
+  Show a file in its folder: qoqdir \"D:\\logs\\today.txt\"
   More detail: type qoqdir --help in a terminal";
 
 // qoqdir --help, -h, -?: printed in a terminal, so the columns line up.
@@ -88,6 +91,7 @@ Usage: qoqdir [options] [folder path ...]
 
 Opens each folder in a tab and shows the first one.
 With no folder, opens your home folder.
+A file opens its folder, with the file selected.
 
 Options:
   -t=\"folder path\", --tab=\"folder path\"   open the folder in a tab
@@ -98,6 +102,7 @@ Examples:
   qoqdir -t=\"D:\\logs\"                    open D:\\logs
   qoqdir -t=\"D:\\logs\" -t=\"D:\\My Files\"   open two tabs
   qoqdir \"D:\\logs\"                       same as -t=\"D:\\logs\"
+  qoqdir \"D:\\logs\\today.txt\"             open D:\\logs with today.txt selected
 
 Notes:
   Always quote folders. PowerShell needs the quotes after -t=.

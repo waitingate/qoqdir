@@ -42,8 +42,8 @@ use windows::Win32::UI::Controls::{
 use windows::Win32::UI::HiDpi::{GetDpiForSystem, GetDpiForWindow, GetSystemMetricsForDpi, SystemParametersInfoForDpi};
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     EnableWindow, GetCapture, GetFocus, ReleaseCapture, SetCapture, VIRTUAL_KEY, VK_BACK, VK_CONTROL, VK_DELETE,
-    VK_DOWN, VK_ESCAPE, VK_F1, VK_F2, VK_F3, VK_F4, VK_F5, VK_LEFT, VK_MENU, VK_NEXT, VK_PRIOR, VK_RETURN, VK_RIGHT,
-    VK_SHIFT, VK_TAB, VK_UP,
+    VK_DOWN, VK_ESCAPE, VK_F1, VK_F2, VK_F3, VK_F4, VK_F5, VK_LEFT, VK_MENU, VK_NEXT, VK_OEM_3, VK_PRIOR, VK_RETURN,
+    VK_RIGHT, VK_SHIFT, VK_TAB, VK_UP,
 };
 use windows::Win32::UI::Shell::{DefSubclassProc, FOLDERID_Profile, SHACF_FILESYS_DIRS, SHAutoComplete, SetWindowSubclass};
 use windows::Win32::UI::WindowsAndMessaging::{
@@ -75,7 +75,8 @@ use crate::folder::{
 use crate::shell::{
     FolderWatch, IconBatch, OwnItem, acknowledge_change, fill_types, has_own_icon, read_own_icons, background_menu, bookmark_folder, copy_to_clipboard, delete_items, drag_out, open_in_explorer,
     shortcut_target, forward_menu_message, in_background, invoke_verb, item_menu, item_menu_at, known_folder, new_drop_target, open_file,
-    can_paste, paste_into, post, rename_item, run_command, save_folder_shortcuts, saved_folders, show_menu,
+    can_paste, copy_text, paste_into, post, rename_item, run_command, save_folder_shortcuts, saved_folders, show_menu,
+    start_terminal, terminal_program,
 };
 use crate::tree::{FolderTree, TreeBatch};
 use crate::util::{
@@ -112,6 +113,7 @@ const WM_APP_NEWWINDOW: u32 = WM_APP + 14;
 const WM_APP_BOOKMARKED: u32 = WM_APP + 15;
 const WM_APP_DELETED: u32 = WM_APP + 16;
 const WM_APP_COMMAND: u32 = WM_APP + 17;
+const WM_APP_TERMINAL: u32 = WM_APP + 18;
 
 /// A typed command's reply from its worker (go_to_typed).
 struct CommandDone {
@@ -1015,6 +1017,13 @@ impl App {
                     }
                     return LRESULT(0);
                 }
+                WM_APP_TERMINAL => {
+                    // Ctrl+`'s terminal was looked for and started on a worker (open_terminal).
+                    if wp.0 == 0 {
+                        self.warn("Can't start a terminal");
+                    }
+                    return LRESULT(0);
+                }
                 WM_APP_COMMAND => {
                     // A typed command was looked up and started on a worker (go_to_typed).
                     let done = *Box::from_raw(lp.0 as *mut CommandDone);
@@ -1549,6 +1558,10 @@ impl App {
             self.refresh_all();
             return true;
         }
+        if ctrl && is(VK_OEM_3) {
+            self.open_terminal(); // Ctrl+`, the key left of 1
+            return true;
+        }
         if is(VK_F1) {
             crate::show_keys(self.wnd);
             return true;
@@ -1672,6 +1685,10 @@ impl App {
             }
             if ctrl && letter(b'A') {
                 self.list.select_all();
+                return true;
+            }
+            if ctrl && shift && letter(b'C') {
+                self.copy_paths();
                 return true;
             }
             if ctrl && (letter(b'C') || letter(b'X')) {
@@ -1928,10 +1945,12 @@ impl App {
             self.on_folder_changed();
         }
         // A move shows where the tab is now. A tab switch showed it when it began, and the address bar may hold what
-        // the user typed since (5.3).
+        // the user typed since (5.3), unless it landed elsewhere: a tab made on a file shows the file's folder (5.10).
         if moved {
             self.show_location(old.same(&location));
             self.set_message(hint.unwrap_or("")); // a navigation clears the message, or says its hint
+        } else if !old.same(&location) {
+            self.show_location(false);
         }
         self.show_status();
     }
@@ -1957,6 +1976,12 @@ impl App {
     /// The folder could not be read: decide what to show or do instead.
     fn on_load_failed(&self, listing: &Listing, error: &str, pending: &Pending) {
         if matches!(pending.nav, Nav::Refresh | Nav::Switch) {
+            // A tab made on a file (qoqdir C:\src\main.cpp) shows the file's folder with the file selected, as explorer
+            // /select does (5.10). The switch's read gives the tab that folder, with no history entry for the file.
+            let parent = listing.location.parent();
+            if listing.is_file && self.location().same(&listing.location) && matches!(parent, Location::Dir(_)) {
+                return self.open(parent, Nav::Switch, ViewState::selecting(listing.location.display_name()));
+            }
             return self.show_unavailable(&listing.location, error);
         }
         // A move that fails or opens a file leaves the tab where it was: its filter comes back, unless retyped.
@@ -2479,6 +2504,46 @@ impl App {
         let mut view = ViewState::selecting(name);
         view.rename = true;
         self.refresh(view);
+    }
+
+    /// Ctrl+Shift+C (5.4): the selection's full paths as text, quoted and one per line as Explorer's Copy as path puts
+    /// them; with nothing selected, the folder's own (none for This PC or a folder that isn't available).
+    fn copy_paths(&self) {
+        let dir = self.list.location();
+        let mut paths: Vec<PathBuf> = self.list.selected_names().iter().map(|n| dir.join(n)).collect();
+        if paths.is_empty()
+            && let Some(folder) = dir.path()
+        {
+            paths.push(folder.to_path_buf());
+        }
+        if paths.is_empty() {
+            return;
+        }
+        let text = paths.iter().map(|p| format!("\"{}\"", p.display())).collect::<Vec<_>>().join("\r\n");
+        if copy_text(self.wnd, &text) {
+            self.set_message(&format!("{} path(s) copied", paths.len()));
+        } else {
+            self.warn("Can't put the paths on the clipboard");
+        }
+    }
+
+    /// Ctrl+` (5.3): a terminal in the folder shown. Finding the program reads the PATH, so it is found and started on
+    /// a worker, as a typed command is (4.1).
+    fn open_terminal(&self) {
+        let (wnd, dir) = (self.wnd.0 as usize, self.terminal_folder());
+        in_background(move || {
+            let ok = terminal_program().is_some_and(|t| start_terminal(HWND(wnd as _), &t, &dir));
+            let _ = unsafe { PostMessageW(Some(HWND(wnd as _)), WM_APP_TERMINAL, WPARAM(usize::from(ok)), LPARAM(0)) };
+        });
+    }
+
+    /// ...the folder it opens in.
+    pub fn terminal_folder(&self) -> PathBuf {
+        match self.list.location() {
+            Location::Dir(dir) => dir,
+            // This PC, or a folder not available.
+            Location::ThisPc => known_folder(&FOLDERID_Profile).unwrap_or_default(),
+        }
     }
 
     // ------------------------------------------------------------ status and settings

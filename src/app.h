@@ -151,6 +151,9 @@ private:
     // File commands
     void deleteSelection(bool permanently);
     void newFolder();
+    void copyPaths();                 // Ctrl+Shift+C (5.4)
+    void openTerminal();              // Ctrl+` (5.3)
+    std::wstring terminalFolder() const;   // ...the folder it opens in
 
     // Status and settings
     void showStatus();

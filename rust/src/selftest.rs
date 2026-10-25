@@ -52,7 +52,8 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
 use windows::Win32::System::Variant::VARIANT;
 use windows::Win32::UI::Accessibility::{AccessibleObjectFromWindow, IAccessible};
 use windows::Win32::UI::Shell::{
-    DROPFILES, FOLDERID_Desktop, SHGFI_DISPLAYNAME, SHGFI_SMALLICON, SHGFI_SYSICONINDEX, StrCmpLogicalW,
+    DROPFILES, FOLDERID_Desktop, FOLDERID_Profile, SHGFI_DISPLAYNAME, SHGFI_SMALLICON, SHGFI_SYSICONINDEX,
+    StrCmpLogicalW,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     BM_CLICK, CHILDID_SELF, EnumWindows, FindWindowExW, HTCLIENT, OBJID_CLIENT, GCLP_HBRBACKGROUND, GWLP_USERDATA, GetClassLongPtrW, GetWindowLongPtrW, GetWindowTextLengthW, IsWindowVisible,
@@ -68,8 +69,8 @@ use crate::folder::{
     list_folder, parse_command_line, sort_items, system_dir,
 };
 use crate::shell::{
-    can_paste, command_program, copy_to_clipboard, data_object_at, file_info, in_background, item_menu_at, known_folder,
-    paste_into, pidl_from, save_folder_shortcuts, shortcut_target, type_name,
+    Terminal, can_paste, command_program, copy_to_clipboard, data_object_at, file_info, in_background, item_menu_at,
+    known_folder, paste_into, pidl_from, save_folder_shortcuts, shortcut_target, terminal_program, type_name,
 };
 use windows::core::{Interface, w};
 
@@ -285,6 +286,28 @@ fn clipboard_files() -> Vec<PathBuf> {
         let _ = CloseClipboard();
     }
     files
+}
+
+/// The clipboard's text: empty when it holds none.
+fn clipboard_text() -> String {
+    const CF_UNICODETEXT: u32 = 13;
+    let mut text = String::new();
+    unsafe {
+        if OpenClipboard(None).is_err() {
+            return text;
+        }
+        if let Ok(data) = GetClipboardData(CF_UNICODETEXT) {
+            let global = HGLOBAL(data.0);
+            let p = GlobalLock(global) as *const u16;
+            if !p.is_null() {
+                let len = (0..).take_while(|&i| *p.add(i) != 0).count();
+                text = String::from_utf16_lossy(std::slice::from_raw_parts(p, len));
+            }
+            let _ = GlobalUnlock(global);
+        }
+        let _ = CloseClipboard();
+    }
+    text
 }
 
 /// Paste only the test's own file: after a failed Ctrl+C, pasting would move files the user cut.
@@ -758,6 +781,36 @@ impl App {
             },
         )
         .wait(10000);
+        // Ctrl+Shift+C: the paths as text, each quoted, one per line, as Explorer's Copy as path (5.4).
+        fn quoted_paths(a: &App) -> String {
+            let dir = a.list.location();
+            let names = a.list.selected_names();
+            names.iter().map(|n| format!("\"{}\"", dir.join(n).display())).collect::<Vec<_>>().join("\r\n")
+        }
+        s.add(
+            "Ctrl+Shift+C copies the selection's full paths, quoted and one per line, as Explorer's Copy as path",
+            |a| {
+                focus(a.list.hwnd());
+                a.list.select_all();
+                a.press(letter(b'C'), CTRL | SHIFT);
+            },
+            |a| {
+                let n = a.list.selected_names().len();
+                n >= 2 && clipboard_text() == quoted_paths(a) && a.status_message() == format!("{n} path(s) copied")
+            },
+        )
+        .copies();
+        s.add(
+            "with nothing selected, it copies the folder's own path",
+            |a| {
+                a.list.select(&[], None);
+                a.press(letter(b'C'), CTRL | SHIFT);
+            },
+            |a| {
+                clipboard_text() == format!("\"{}\"", p("sub").display()) && a.status_message() == "1 path(s) copied"
+            },
+        )
+        .copies();
         s.add(
             "Backspace goes up and selects the folder you came from, and the status bar says so the first time",
             |a| a.press(VK_BACK, 0),
@@ -1926,6 +1979,19 @@ impl App {
                 can_paste()
             },
         );
+        s.add(
+            "a tab made on a file, as qoqdir <file> makes one, shows the file's folder with the file selected",
+            |a| a.new_tab(Location::dir(p("file1.txt")), true),
+            move |a| {
+                let here = Location::dir(dir());
+                a.tabs() == 2
+                    && a.at(&dir())
+                    && a.list.selected_names() == [OsString::from("file1.txt")]
+                    && text_of(a.address) == here.text().to_string_lossy()
+                    && text_of(a.wnd) == here.display_name().to_string_lossy()
+            },
+        );
+        s.add("(close it)", |a| a.close_tab(a.active()), one_tab_home);
         s.add(
             "a drag over a tab whose folder was never shown is refused at once (nobody has checked that folder)",
             |a| {
@@ -3229,6 +3295,33 @@ impl App {
                 w.place.right - w.place.left == r.right - r.left && w.place.bottom - w.place.top == r.bottom - r.top;
             started && moved && same_size && !w.maximized
         });
+        // The same for Ctrl+` (5.3): what it would start, and in which folder. The key itself is checked by hand.
+        let name = "Ctrl+` would start Windows Terminal (or cmd where it isn't installed) in the folder shown (5.3)";
+        s.add(name, move |a| a.open(Location::dir(dir()), Nav::New, ViewState::default()), move |a| {
+            if !a.at(&dir()) {
+                return false;
+            }
+            let program = |t: &Terminal| String::from_utf16_lossy(&t.program).trim_end_matches('\0').to_string();
+            let t = terminal_program();
+            let wt = command_program(OsStr::new("wt"));
+            // The name only: the path of wt.exe has the user name in it.
+            let leaf = |t: &Terminal| program(t).rsplit('\\').next().unwrap_or_default().to_string();
+            note(t.as_ref().map_or("(none)".into(), leaf));
+            let right = t.as_ref().is_some_and(|t| match &wt {
+                Some(wt) => t.program == *wt && t.args == "-d .",
+                None => program(t).to_lowercase().ends_with("\\cmd.exe") && t.args.is_empty(),
+            });
+            right && Location::dir(a.terminal_folder()).same(&Location::dir(dir()))
+        });
+        s.add(
+            "(on This PC, in the home folder)",
+            |a| a.open(Location::ThisPc, Nav::New, ViewState::default()),
+            |a| {
+                let home = known_folder(&FOLDERID_Profile).map(Location::dir);
+                a.at_pc() && home.is_some_and(|home| Location::dir(a.terminal_folder()).same(&home))
+            },
+        );
+        s.home("(back to the test folder)");
         // 4.10: a window that answers nothing for 5 s gets a line in the crash log saying where its thread is. Last: a
         // hung window gets a ghost window from Windows meanwhile, which can take the focus from the steps after it.
         // The test's own long steps (making and removing 10,000 files) leave such lines too: a new one must appear.

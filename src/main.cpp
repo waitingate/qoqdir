@@ -20,6 +20,7 @@ const wchar_t kKeys[] =
     L"  Up: Backspace\n"
     L"  Bookmark a folder: right-click its tab, or Alt+drag it onto Bookmarks\n"
     L"  Address bar: Ctrl+L\n"
+    L"  Open a terminal here: Ctrl+`\n"
     L"  Back: Alt+Left\n"
     L"  Forward: Alt+Right\n"
     L"  Refresh: F5\n"
@@ -40,10 +41,12 @@ const wchar_t kKeys[] =
     L"  Delete: Delete (to the Recycle Bin)\n"
     L"  Delete permanently: Shift+Delete\n"
     L"  Properties: Alt+Enter\n"
+    L"  Copy as path: Ctrl+Shift+C\n"
     L"\n"
     L"Command line\n"
     L"  Open folders in tabs: qoqdir -t=\"D:\\logs\" -t=\"D:\\My Files\"\n"
     L"  Or: qoqdir --tab=\"D:\\logs\"\n"
+    L"  Show a file in its folder: qoqdir \"D:\\logs\\today.txt\"\n"
     L"  More detail: type qoqdir --help in a terminal";
 
 // qoqdir --help, -h, -?: printed in a terminal, so the columns line up.
@@ -54,6 +57,7 @@ const wchar_t kCommandLine[] =
     L"\n"
     L"Opens each folder in a tab and shows the first one.\n"
     L"With no folder, opens your home folder.\n"
+    L"A file opens its folder, with the file selected.\n"
     L"\n"
     L"Options:\n"
     L"  -t=\"folder path\", --tab=\"folder path\"   open the folder in a tab\n"
@@ -64,6 +68,7 @@ const wchar_t kCommandLine[] =
     L"  qoqdir -t=\"D:\\logs\"                    open D:\\logs\n"
     L"  qoqdir -t=\"D:\\logs\" -t=\"D:\\My Files\"   open two tabs\n"
     L"  qoqdir \"D:\\logs\"                       same as -t=\"D:\\logs\"\n"
+    L"  qoqdir \"D:\\logs\\today.txt\"             open D:\\logs with today.txt selected\n"
     L"\n"
     L"Notes:\n"
     L"  Always quote folders. PowerShell needs the quotes after -t=.\n"
