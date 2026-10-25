@@ -35,6 +35,7 @@ std::atomic<UINT> g_newestLoad{0};
 std::atomic<UINT> g_keptLoad{0};   // a tab switch's load a move took over: it reads on all the same (App::kept_)
 
 constexpr COLORREF kBackground = RGB(235, 235, 235);   // soft gray: less glare than white
+constexpr COLORREF kHint = RGB(160, 160, 160);         // the empty filter box's funnel: there, but quiet (5.1)
 
 bool highContrastOn() {
     HIGHCONTRASTW hc{sizeof hc, 0, nullptr};
@@ -135,6 +136,26 @@ LRESULT CALLBACK middleClickProc(HWND h, UINT msg, WPARAM wp, LPARAM lp, UINT_PT
     return DefSubclassProc(h, msg, wp, lp);
 }
 
+// While the filter box is empty, a small pale funnel at its right end says what it is, quieter than a word (5.1). It
+// is the Back button's icon font's, drawn over what the box paints, and for WM_PRINTCLIENT too.
+LRESULT CALLBACK filterProc(HWND h, UINT msg, WPARAM wp, LPARAM lp, UINT_PTR, DWORD_PTR) {
+    LRESULT r = DefSubclassProc(h, msg, wp, lp);
+    if ((msg == WM_PAINT || msg == WM_PRINTCLIENT) && GetWindowTextLengthW(h) == 0) {
+        HDC dc = msg == WM_PAINT ? GetDC(h) : reinterpret_cast<HDC>(wp);
+        int saved = SaveDC(dc);
+        RECT rc;
+        GetClientRect(h, &rc);
+        rc.right -= scale(4, GetDpiForWindow(h));
+        SelectObject(dc, reinterpret_cast<HGDIOBJ>(SendMessageW(GetDlgItem(GetParent(h), ID_BACK), WM_GETFONT, 0, 0)));
+        SetTextColor(dc, highContrastOn() ? GetSysColor(COLOR_GRAYTEXT) : kHint);
+        SetBkMode(dc, TRANSPARENT);
+        DrawTextW(dc, L"\uE71C", 1, &rc, DT_RIGHT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);   // the funnel
+        RestoreDC(dc, saved);
+        if (msg == WM_PAINT) ReleaseDC(h, dc);
+    }
+    return r;
+}
+
 }  // namespace
 
 // ---------------------------------------------------------------- setup
@@ -211,14 +232,16 @@ bool App::create(HINSTANCE instance, const CommandLine& cmd, bool useSettings) {
     bookmarksWatch_ = FolderWatch(wnd_, WM_APP_BOOKMARKS, bookmarks);
     list_.create(wnd_, ID_LIST);
     status_ = make(STATUSCLASSNAMEW, L"", SBARS_SIZEGRIP, 0, ID_STATUS);
-    // Each button's tooltip says what it does and its key, and screen readers read the same as its name (5.1).
+    // Each button's tooltip, and the filter box's, says what it does and its key, and screen readers read the same as
+    // its name (5.1).
     tips_ = CreateWindowExW(0, TOOLTIPS_CLASSW, nullptr, WS_POPUP | TTS_ALWAYSTIP, CW_USEDEFAULT, CW_USEDEFAULT,
                             CW_USEDEFAULT, CW_USEDEFAULT, wnd_, nullptr, instance, nullptr);
     Com<IAccPropServices> names;   // its IID by hand: MinGW's oleacc.h gives it no __uuidof for IID_PPV_ARGS
     CoCreateInstance(CLSID_AccPropServices, nullptr, CLSCTX_INPROC_SERVER, IID_IAccPropServices,
                      reinterpret_cast<void**>(names.put()));
     const std::pair<HWND, const wchar_t*> named[] = {{back_, L"Back (Alt+Left)"}, {forward_, L"Forward (Alt+Right)"},
-                                                      {up_, L"Up (Backspace)"}, {refresh_, L"Refresh (F5)"}};
+                                                      {up_, L"Up (Backspace)"}, {refresh_, L"Refresh (F5)"},
+                                                      {filter_, L"Filter (Ctrl+F)"}};
     for (auto [h, text] : named) {
         TTTOOLINFOW ti{};
         ti.cbSize = sizeof ti;
@@ -230,9 +253,9 @@ bool App::create(HINSTANCE instance, const CommandLine& cmd, bool useSettings) {
         if (names) names->SetHwndPropStr(h, OBJID_CLIENT, CHILDID_SELF, PROPID_ACC_NAME, text);
     }
 
-    SendMessageW(filter_, EM_SETCUEBANNER, TRUE, reinterpret_cast<LPARAM>(L"Filter"));
     SHAutoComplete(address_, SHACF_FILESYS_DIRS);
     SetWindowSubclass(tabBar_, tabBarProc, 1, 0);
+    SetWindowSubclass(filter_, filterProc, 1, 0);
     SetWindowSubclass(list_.hwnd(), middleClickProc, 1, 0);
     SetWindowSubclass(tree_.hwnd(), middleClickProc, 1, 0);
     // Drops land in the current folder; never in This PC, and never back onto our own drag.
@@ -404,6 +427,10 @@ LRESULT App::onMessage(UINT msg, WPARAM wp, LPARAM lp) {
         int id = LOWORD(wp), code = HIWORD(wp);
         if (id == ID_FILTER && code == EN_CHANGE) {
             list_.setFilter(windowText(filter_));
+            // The funnel shows only in the empty box, which repaints just its text as that changes: all of it when it
+            // empties or fills.
+            if (bool empty = GetWindowTextLengthW(filter_) == 0; std::exchange(filterEmpty_, empty) != empty)
+                InvalidateRect(filter_, nullptr, TRUE);
             return 0;
         }
         if (code != BN_CLICKED) return 0;

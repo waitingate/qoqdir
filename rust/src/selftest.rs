@@ -19,7 +19,8 @@ use windows::Win32::Foundation::{
 };
 use windows::Win32::Graphics::Gdi::{
     COLOR_WINDOW, ClientToScreen, GetMonitorInfoW, GetSysColor, GetSysColorBrush, MONITOR_DEFAULTTONEAREST, MONITORINFO,
-    MonitorFromWindow,
+    MonitorFromWindow, CreateCompatibleBitmap, CreateCompatibleDC, DeleteDC, DeleteObject, FillRect, GetDC, GetPixel,
+    ReleaseDC, SelectObject,
 };
 use windows::Win32::Storage::FileSystem::{
     DDD_EXACT_MATCH_ON_REMOVE, DDD_NO_BROADCAST_SYSTEM, DDD_REMOVE_DEFINITION, DefineDosDeviceW, FILE_ATTRIBUTE_ARCHIVE,
@@ -36,6 +37,7 @@ use windows::Win32::System::Memory::{GlobalLock, GlobalUnlock};
 use windows::Win32::System::Ole::{DROPEFFECT_COPY, DROPEFFECT_NONE, OleSetClipboard};
 use windows::Win32::System::SystemServices::MK_LBUTTON;
 use windows::Win32::UI::Controls::{
+    EM_GETCUEBANNER,
     EM_SETSEL, EM_GETSEL, EM_REPLACESEL, HTREEITEM, LVIF_IMAGE, LVIR_LABEL, LVITEMW, LVM_CANCELEDITLABEL, LVM_GETBKCOLOR, LVM_GETCOUNTPERPAGE,
     LVM_GETTEXTBKCOLOR, TVM_GETBKCOLOR,
     LVM_GETITEMRECT, LVM_GETITEMW, TCIF_TEXT, TCITEMW,
@@ -61,7 +63,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
     MSG, PM_NOREMOVE, PeekMessageW,
     KillTimer, PostMessageW, SW_SHOWMINNOACTIVE, SW_SHOWNOACTIVATE, SetTimer, ShowWindow, WM_CHAR, WM_CLOSE,
     WM_DEVICECHANGE, WM_DPICHANGED, WM_KEYDOWN, WM_LBUTTONDBLCLK, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONUP, WM_MOUSEMOVE, WM_MOUSEWHEEL,
-    WM_NCHITTEST, WM_SYSKEYDOWN, WM_TIMER,
+    WM_NCHITTEST, WM_SYSKEYDOWN, WM_TIMER, PRF_CLIENT, WM_PRINTCLIENT,
 };
 
 use crate::app::{App, Key, Nav, TIMER_LOADING, TIMER_REFRESH, ViewState};
@@ -576,6 +578,32 @@ impl App {
         from_wide(&text).to_string_lossy().into_owned()
     }
 
+    /// The filter box drawn into a bitmap: whether its right third has anything on it but the box's own paper, as the
+    /// funnel the empty box shows does (5.1). A bitmap, so a window over this one on screen makes no difference.
+    fn funnel_shown(&self) -> bool {
+        unsafe {
+            let rc = client_rect(self.filter);
+            let screen = GetDC(Some(self.filter));
+            let dc = CreateCompatibleDC(Some(screen));
+            let bitmap = CreateCompatibleBitmap(screen, rc.right, rc.bottom);
+            let old = SelectObject(dc, bitmap.into());
+            FillRect(dc, &rc, GetSysColorBrush(COLOR_WINDOW));
+            send(self.filter, WM_PRINTCLIENT, dc.0 as usize, PRF_CLIENT as isize);
+            let paper = GetSysColor(COLOR_WINDOW);
+            let mut marks = 0;
+            for x in rc.right * 2 / 3..rc.right {
+                for y in 0..rc.bottom {
+                    marks += usize::from(GetPixel(dc, x, y).0 != paper);
+                }
+            }
+            SelectObject(dc, old);
+            let _ = DeleteObject(bitmap.into());
+            let _ = DeleteDC(dc);
+            ReleaseDC(Some(self.filter), screen);
+            marks > 0
+        }
+    }
+
     /// The texts of a node and its next siblings, comma-separated.
     fn node_texts(&self, first: isize) -> String {
         self.tree.siblings(first).map(|n| self.node_text(n)).collect::<Vec<_>>().join(",")
@@ -612,15 +640,39 @@ impl App {
             let mode = unsafe { GetErrorMode() };
             mode & SEM_FAILCRITICALERRORS.0 != 0
         });
-        // Screen readers read a button's accessible name; a tooltip shows it to everyone else (5.1).
-        s.check("the toolbar buttons say what they do and their keys, to screen readers and in tooltips", |a| {
-            let named = [(a.back, "Back (Alt+Left)"), (a.forward, "Forward (Alt+Right)"), (a.up, "Up (Backspace)"), (a.refresh, "Refresh (F5)")];
+        // Screen readers read a button's accessible name, and the filter box's; a tooltip shows it to everyone else
+        // (5.1).
+        let name = "the toolbar buttons and the filter box say what they do and their keys, to screen readers and in \
+                    tooltips";
+        s.check(name, |a| {
+            let named = [
+                (a.back, "Back (Alt+Left)"),
+                (a.forward, "Forward (Alt+Right)"),
+                (a.up, "Up (Backspace)"),
+                (a.refresh, "Refresh (F5)"),
+                (a.filter, "Filter (Ctrl+F)"),
+            ];
             let name_of = |h: HWND| unsafe {
                 let mut acc: Option<IAccessible> = None;
                 AccessibleObjectFromWindow(h, OBJID_CLIENT.0 as u32, &IAccessible::IID, &mut acc as *mut _ as *mut _).ok()?;
                 acc?.get_accName(&VARIANT::from(CHILDID_SELF as i32)).ok().map(|n| n.to_string())
             };
-            named.iter().all(|&(h, text)| name_of(h).as_deref() == Some(text)) && send(a.tips, TTM_GETTOOLCOUNT, 0, 0) == 4
+            let all_named = named.iter().all(|&(h, text)| name_of(h).as_deref() == Some(text));
+            all_named && send(a.tips, TTM_GETTOOLCOUNT, 0, 0) == 5
+        });
+        // The empty filter box draws a pale funnel at its right end instead of a word, and text in it hides the funnel
+        // (5.1).
+        s.check("the empty filter box shows a small funnel at its right end, not a word (5.1)", |a| {
+            let mut cue = [0u16; 8];
+            let asked = send(a.filter, EM_GETCUEBANNER, cue.as_mut_ptr() as usize, cue.len() as isize);
+            let word = asked != 0 && cue[0] != 0;
+            !word && a.funnel_shown()
+        });
+        s.add("(text in it hides the funnel)", |a| set_text(a.filter, "zzz"), |a| {
+            a.list.count() == 0 && !a.funnel_shown()
+        });
+        s.add("(empty again, it shows the funnel)", |a| set_text(a.filter, ""), |a| {
+            a.list.count() == 6 && a.funnel_shown()
         });
         s.add(
             "typing in the list filters it, and the status bar says so the first time",

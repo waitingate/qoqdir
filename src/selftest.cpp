@@ -285,23 +285,55 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
         });
     add(L"a drive without a disk fails quietly, without Windows' \"No Disk\" box", nullptr,
         [] { return (GetErrorMode() & SEM_FAILCRITICALERRORS) != 0; });
-    // Screen readers read a button's accessible name; a tooltip shows it to everyone else (5.1).
-    add(L"the toolbar buttons say what they do and their keys, to screen readers and in tooltips", nullptr, [this] {
-        const std::pair<HWND, const wchar_t*> named[] = {{back_, L"Back (Alt+Left)"}, {forward_, L"Forward (Alt+Right)"},
-                                                          {up_, L"Up (Backspace)"}, {refresh_, L"Refresh (F5)"}};
-        for (auto [h, text] : named) {
-            Com<IAccessible> acc;
-            if (FAILED(AccessibleObjectFromWindow(h, OBJID_CLIENT, IID_PPV_ARGS(acc.put())))) return false;
-            VARIANT self{};
-            self.vt = VT_I4;
-            self.lVal = CHILDID_SELF;
-            BSTR name = nullptr;
-            bool ok = SUCCEEDED(acc->get_accName(self, &name)) && name && std::wstring(name) == text;
-            SysFreeString(name);
-            if (!ok) return false;
-        }
-        return SendMessageW(tips_, TTM_GETTOOLCOUNT, 0, 0) == 4;
+    // Screen readers read a button's accessible name, and the filter box's; a tooltip shows it to everyone else (5.1).
+    add(L"the toolbar buttons and the filter box say what they do and their keys, to screen readers and in tooltips",
+        nullptr, [this] {
+            const std::pair<HWND, const wchar_t*> named[] = {
+                {back_, L"Back (Alt+Left)"}, {forward_, L"Forward (Alt+Right)"}, {up_, L"Up (Backspace)"},
+                {refresh_, L"Refresh (F5)"}, {filter_, L"Filter (Ctrl+F)"}};
+            for (auto [h, text] : named) {
+                Com<IAccessible> acc;
+                if (FAILED(AccessibleObjectFromWindow(h, OBJID_CLIENT, IID_PPV_ARGS(acc.put())))) return false;
+                VARIANT self{};
+                self.vt = VT_I4;
+                self.lVal = CHILDID_SELF;
+                BSTR name = nullptr;
+                bool ok = SUCCEEDED(acc->get_accName(self, &name)) && name && std::wstring(name) == text;
+                SysFreeString(name);
+                if (!ok) return false;
+            }
+            return SendMessageW(tips_, TTM_GETTOOLCOUNT, 0, 0) == 5;
+        });
+    // The empty filter box draws a pale funnel at its right end instead of a word, and text in it hides the funnel
+    // (5.1). Drawn into a bitmap here, so a window over this one on screen makes no difference.
+    auto funnelShown = [this] {
+        RECT rc;
+        GetClientRect(filter_, &rc);
+        HDC screen = GetDC(filter_);
+        HDC dc = CreateCompatibleDC(screen);
+        HBITMAP bitmap = CreateCompatibleBitmap(screen, rc.right, rc.bottom);
+        HGDIOBJ old = SelectObject(dc, bitmap);
+        FillRect(dc, &rc, GetSysColorBrush(COLOR_WINDOW));
+        SendMessageW(filter_, WM_PRINTCLIENT, reinterpret_cast<WPARAM>(dc), PRF_CLIENT);
+        COLORREF paper = GetSysColor(COLOR_WINDOW);
+        int marks = 0;   // pixels in the right third that are not the box's own paper
+        for (int x = rc.right * 2 / 3; x < rc.right; ++x)
+            for (int y = 0; y < rc.bottom; ++y) marks += GetPixel(dc, x, y) != paper;
+        SelectObject(dc, old);
+        DeleteObject(bitmap);
+        DeleteDC(dc);
+        ReleaseDC(filter_, screen);
+        return marks > 0;
+    };
+    add(L"the empty filter box shows a small funnel at its right end, not a word (5.1)", nullptr, [=, this] {
+        wchar_t cue[8] = L"";
+        bool word = SendMessageW(filter_, EM_GETCUEBANNER, reinterpret_cast<WPARAM>(cue), 8) && cue[0];
+        return !word && funnelShown();
     });
+    add(L"(text in it hides the funnel)", [=, this] { SetWindowTextW(filter_, L"zzz"); },
+        [=, this] { return list_.count() == 0 && !funnelShown(); });
+    add(L"(empty again, it shows the funnel)", [=, this] { SetWindowTextW(filter_, L""); },
+        [=, this] { return list_.count() == 6 && funnelShown(); });
     add(L"typing in the list filters it, and the status bar says so the first time",
         [=, this] { SetFocus(list_.hwnd()); selfTestType(L"file"); },
         [=, this] {

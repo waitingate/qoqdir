@@ -206,6 +206,7 @@ private:
     bool draggingFiles_ = false;    // a drag started from our own list is in progress
     std::wstring dragSource_;        // the folder it came from: a drop back there does nothing, even if a load landed meanwhile
     bool asking_ = false;           // the "Save these tabs?" box is up: a second WM_CLOSE is ignored (5.7)
+    bool filterEmpty_ = true;       // the filter box is empty, so it shows its funnel (filterProc)
     bool refreshQueued_ = false;
     bool refreshForWatch_ = false;   // ...and only a change in the folder shown asked for it (onFolderChanged)
     struct QueuedView {             // kept by refresh() while a load is pending: what a delete, rename or new

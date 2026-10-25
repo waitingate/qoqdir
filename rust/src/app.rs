@@ -19,6 +19,8 @@ use windows::Win32::Graphics::Gdi::{
     GetSysColor, GetSysColorBrush, GetTextExtentExPointW, GetTextExtentPoint32W, GetTextMetricsW, HBRUSH, HDC,
     MONITOR_DEFAULTTONEAREST, MONITOR_DEFAULTTONULL, MONITORINFO, MonitorFromRect, MonitorFromWindow, PtInRect,
     ReleaseDC, ScreenToClient, SelectObject, TEXTMETRICW,
+    COLOR_GRAYTEXT, DT_NOPREFIX, DT_RIGHT, DT_SINGLELINE, DT_VCENTER, DrawTextW, HGDIOBJ, RestoreDC, SaveDC, SetBkMode,
+    SetTextColor, TRANSPARENT,
 };
 use windows::Win32::Storage::FileSystem::CreateDirectoryW;
 use windows::Win32::System::Diagnostics::Debug::MessageBeep;
@@ -32,7 +34,7 @@ use windows::Win32::System::Threading::{
 use windows::Win32::System::WindowsProgramming::{GetPrivateProfileStringW, WritePrivateProfileStringW};
 use windows::Win32::UI::Accessibility::{CLSID_AccPropServices, IAccPropServices, PROPID_ACC_NAME};
 use windows::Win32::UI::Controls::{
-    EM_GETSEL, EM_REPLACESEL, EM_SETCUEBANNER, EM_SETSEL, LVIR_LABEL, LVIS_SELECTED, LVM_CANCELEDITLABEL,
+    EM_GETSEL, EM_REPLACESEL, EM_SETSEL, LVIR_LABEL, LVIS_SELECTED, LVM_CANCELEDITLABEL,
     LVHITTESTINFO, LVM_GETITEMRECT, LVM_HITTEST, LVN_BEGINDRAG, LVN_BEGINRDRAG, LVN_ENDLABELEDITW, LVN_ITEMACTIVATE,
     LVM_SETBKCOLOR, LVM_SETTEXTBKCOLOR, TVM_SETBKCOLOR, LVN_ITEMCHANGED, LVN_ODSTATECHANGED, NM_RCLICK, NMHDR, NMLVDISPINFOW, SB_GETTEXTLENGTHW, SB_GETTEXTW, SB_SETPARTS, SB_SETTEXTW,
     TCHITTESTINFO, TCIF_TEXT, TCITEMW, TCM_DELETEALLITEMS, TCM_GETCURSEL, TCM_GETITEMRECT, TCM_HITTEST, TCM_INSERTITEMW,
@@ -63,6 +65,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
     WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONUP, WM_MEASUREITEM, WM_MENUCHAR, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_NCHITTEST, WM_NOTIFY, WM_SETCURSOR, WM_SETFONT, WM_SIZE,
     WM_SYSCOLORCHANGE, WM_SYSKEYDOWN, WM_TIMER, WNDCLASSEXW, WS_CHILD, WS_CLIPCHILDREN, WS_EX_CLIENTEDGE, WS_OVERLAPPEDWINDOW,
     WS_POPUP, WS_TABSTOP, WS_VISIBLE,
+    GetDlgItem, GetWindowTextLengthW, WM_GETFONT, WM_PAINT, WM_PRINTCLIENT,
 };
 use windows::core::{HRESULT, PCWSTR, PWSTR, w};
 
@@ -129,6 +132,7 @@ pub const TIMER_LOADING: usize = 3;
 const MAX_HISTORY: usize = 100;
 /// Soft gray (#EBEBEB): less glare than white.
 const BACKGROUND: COLORREF = COLORREF(0x00EBEBEB);
+const HINT: COLORREF = COLORREF(0x00A0A0A0); // the empty filter box's funnel: there, but quiet (5.1)
 const SPLITTER_WIDTH: i32 = 5; // in 96-DPI units
 const EN_CHANGE: u32 = 0x0300;
 const BN_CLICKED: u32 = 0;
@@ -283,6 +287,7 @@ pub struct App {
     pub st: RefCell<State>,
     pub quiet: Cell<bool>, // no beeps (set by the self-test, which triggers errors on purpose)
     asking: Cell<bool>,    // the "Save these tabs?" box is up: a second WM_CLOSE is ignored (5.7)
+    filter_empty: Cell<bool>, // the filter box is empty, so it shows its funnel (filter_proc)
     hinted_filter: Cell<bool>, // the two things Explorer users don't expect, said once (5.3)
     hinted_up: Cell<bool>,
     first_folder: Cell<bool>, // no folder shown yet: the first says "F1 shows the keys" (5.10)
@@ -459,6 +464,31 @@ unsafe extern "system" fn middle_click_proc(h: HWND, msg: u32, wp: WPARAM, lp: L
     unsafe { DefSubclassProc(h, msg, wp, lp) }
 }
 
+/// While the filter box is empty, a small pale funnel at its right end says what it is, quieter than a word (5.1). It
+/// is the Back button's icon font's, drawn over what the box paints, and for WM_PRINTCLIENT too.
+unsafe extern "system" fn filter_proc(h: HWND, msg: u32, wp: WPARAM, lp: LPARAM, _: usize, _: usize) -> LRESULT {
+    let result = unsafe { DefSubclassProc(h, msg, wp, lp) };
+    if (msg == WM_PAINT || msg == WM_PRINTCLIENT) && unsafe { GetWindowTextLengthW(h) } == 0 {
+        unsafe {
+            let dc = if msg == WM_PAINT { GetDC(Some(h)) } else { HDC(wp.0 as _) };
+            let saved = SaveDC(dc);
+            let mut rc = client_rect(h);
+            rc.right -= scale(4, GetDpiForWindow(h));
+            let back = GetDlgItem(GetParent(h).ok(), ID_BACK).unwrap_or_default();
+            SelectObject(dc, HGDIOBJ(send(back, WM_GETFONT, 0, 0) as _));
+            SetTextColor(dc, if high_contrast_on() { COLORREF(GetSysColor(COLOR_GRAYTEXT)) } else { HINT });
+            SetBkMode(dc, TRANSPARENT);
+            let mut funnel = [0xE71C];
+            DrawTextW(dc, &mut funnel, &mut rc, DT_RIGHT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+            let _ = RestoreDC(dc, saved);
+            if msg == WM_PAINT {
+                ReleaseDC(Some(h), dc);
+            }
+        }
+    }
+    result
+}
+
 impl App {
     // ------------------------------------------------------------ setup
 
@@ -539,7 +569,8 @@ impl App {
             // Windows' plain tabs, as in its dialogs (the current one white and taller), all one width (show_tabs).
             let tab_bar = make(w!("SysTabControl32"), w!(""), TCS_FOCUSNEVER, 0, ID_TABS);
             let plus = make(w!("BUTTON"), w!("+"), 0, 0, ID_PLUS);
-            // Each button's tooltip says what it does and its key, and screen readers read the same as its name (5.1).
+            // Each button's tooltip, and the filter box's, says what it does and its key, and screen readers read
+            // the same as its name (5.1).
             let tips = CreateWindowExW(
                 WINDOW_EX_STYLE(0),
                 TOOLTIPS_CLASSW,
@@ -556,7 +587,14 @@ impl App {
             )
             .unwrap_or_default();
             let names: Option<IAccPropServices> = CoCreateInstance(&CLSID_AccPropServices, None, CLSCTX_INPROC_SERVER).ok();
-            for (h, text) in [(back, "Back (Alt+Left)"), (forward, "Forward (Alt+Right)"), (up, "Up (Backspace)"), (refresh, "Refresh (F5)")] {
+            let named = [
+                (back, "Back (Alt+Left)"),
+                (forward, "Forward (Alt+Right)"),
+                (up, "Up (Backspace)"),
+                (refresh, "Refresh (F5)"),
+                (filter, "Filter (Ctrl+F)"),
+            ];
+            for (h, text) in named {
                 let text = wide(text);
                 let info = TTTOOLINFOW {
                     cbSize: size_of::<TTTOOLINFOW>() as u32,
@@ -637,6 +675,7 @@ impl App {
                 }),
                 quiet: Cell::new(false),
                 asking: Cell::new(false),
+                filter_empty: Cell::new(true),
                 hinted_filter: Cell::new(false),
                 hinted_up: Cell::new(false),
                 first_folder: Cell::new(true),
@@ -645,9 +684,9 @@ impl App {
             });
             SetWindowLongPtrW(wnd, GWLP_USERDATA, Rc::as_ptr(&app) as isize);
 
-            send(filter, EM_SETCUEBANNER, 1, w!("Filter").0 as isize);
             let _ = SHAutoComplete(address, SHACF_FILESYS_DIRS);
             let _ = SetWindowSubclass(tab_bar, Some(tab_bar_proc), 1, 0);
+            let _ = SetWindowSubclass(filter, Some(filter_proc), 1, 0);
             let _ = SetWindowSubclass(app.list.hwnd(), Some(middle_click_proc), 1, 0);
             let _ = SetWindowSubclass(app.tree.hwnd(), Some(middle_click_proc), 1, 0);
             // Drops land in the current folder; never in This PC, and never back onto our own drag.
@@ -928,6 +967,12 @@ impl App {
                     let (id, code) = (loword(wp.0) as i32, hiword(wp.0));
                     if id == ID_FILTER && code == EN_CHANGE {
                         self.list.set_filter(&window_text(self.filter));
+                        // The funnel shows only in the empty box, which repaints just its text as that changes: all
+                        // of it when it empties or fills.
+                        let empty = GetWindowTextLengthW(self.filter) == 0;
+                        if self.filter_empty.replace(empty) != empty {
+                            let _ = InvalidateRect(Some(self.filter), None, true);
+                        }
                         return LRESULT(0);
                     }
                     if code != BN_CLICKED {

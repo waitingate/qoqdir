@@ -225,7 +225,8 @@ Targets on an ordinary SSD laptop with a folder of 10,000 files (faster is fine)
 1. Toolbar: Back, Forward, Up and Refresh buttons (Explorer's own icons, from
    Windows' icon font, as tall as the text; Refresh does what F5 does), the
    address bar (it stretches), and the filter box, 120 pixels wide at 100%
-   scaling, with the hint "Filter".
+   scaling. While empty, the filter box shows a small pale funnel from the same
+   icon font at its right end, quieter than a word; typing hides it.
 2. The tabs, with a "+" button at the right for a new tab (a double-click on the
    empty part of the bar does the same).
 3. The folder tree on the left, a splitter, the file list on the right.
@@ -234,8 +235,8 @@ Targets on an ordinary SSD laptop with a folder of 10,000 files (faster is fine)
 The window title is the folder's name alone (`This PC` for This PC), as in
 Explorer; the window's icon says which program it is.
 Back, Forward and Up are disabled when they can't do anything. Each of the four
-buttons has a tooltip that names it with its key ("Back (Alt+Left)"), and screen
-readers read the same as the button's name.
+buttons, and the filter box, has a tooltip that names it with its key ("Back
+(Alt+Left)", "Filter (Ctrl+F)"), and screen readers read the same as its name.
 
 ### 5.2 Look
 - Window, list and tree have a soft gray background, RGB(235, 235, 235)
@@ -814,7 +815,9 @@ result:
     by another program while another folder is shown appears in the tree, and
     leaves it when deleted. A drag held over This PC in the tree is refused, and
     the status bar says only a folder on this PC takes a drop.
-65. The four toolbar buttons carry the tooltips and accessible names of 5.1.
+65. The four toolbar buttons and the filter box carry the tooltips and
+    accessible names of 5.1. Drawn into a bitmap, the empty filter box shows its
+    funnel at its right end and no word; with text in it, no funnel.
 66. Shown by a tab switch, This PC gets its own change watch and the folder shown
     before loses its, with a refresh only its changes asked for: This PC loads
     once, and a file made in that folder reloads nothing. A drive that comes
