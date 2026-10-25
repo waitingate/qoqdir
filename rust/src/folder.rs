@@ -790,6 +790,12 @@ mod tests {
         assert_eq!(photo.display_name(), "\u{1F600}.JPG");
         assert_eq!(text(&photo.parent()), "C:\\\u{5831}\u{544A}");
         assert_eq!(dir("C:\\\u{5831}\u{544A}").join(OsStr::new("\u{1F600}.JPG")), PathBuf::from("C:\\\u{5831}\u{544A}\\\u{1F600}.JPG"));
+        // A name from the root, as typed ("\Windows"): on the folder's drive or share, as joinPath in C++ (5.3).
+        assert_eq!(dir("C:\\x\\y").join(OsStr::new("\\Windows")), PathBuf::from("C:\\Windows"));
+        assert_eq!(dir("C:\\").join(OsStr::new("\\Windows")), PathBuf::from("C:\\Windows"));
+        assert_eq!(dir("C:\\x").join(OsStr::new("\\")), PathBuf::from("C:\\"));
+        assert_eq!(dir("\\\\server\\share\\dir").join(OsStr::new("\\x")), PathBuf::from("\\\\server\\share\\x"));
+        assert_eq!(dir("\\\\server\\share").join(OsStr::new("\\x")), PathBuf::from("\\\\server\\share\\x"));
         assert_eq!(extension_of(OsStr::new("\u{1F600}.JPG")), ".jpg");
         assert_eq!(text(&normalize(OsStr::new("c:/\u{5831}\u{544A}/"))), "C:\\\u{5831}\u{544A}");
         let deep = format!("C:\\{}\\b", "a".repeat(300)); // 305 characters, far beyond MAX_PATH

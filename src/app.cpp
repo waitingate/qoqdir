@@ -695,13 +695,11 @@ void App::onContextMenu(HWND from, POINT pt) {
             else pt = {0, 0};
             ClientToScreen(list_.hwnd(), &pt);
         }
-        std::vector<int> rows = list_.selection();
-        // The menu is modal and a load can land meanwhile: then the app's own commands do nothing.
-        const std::wstring dir = list_.dir();
-        const std::vector<std::wstring> names = list_.selectedNames();
-        if (rows.empty()) {
+        const MenuItems m = menuItems();
+        if (m.rows.empty()) {
+            const std::wstring& dir = m.dir;
             if (!dir.empty()) {
-                bool copied = IsClipboardFormatAvailable(CF_HDROP) != 0;   // else Paste is greyed
+                bool copied = canPaste();   // else Paste is greyed
                 auto paste = [&](bool shortcuts) { if (list_.shows(dir)) pasteInto(wnd_, dir, shortcuts); };
                 showMenu(wnd_, backgroundMenu(wnd_, dir).get(), pt, nullptr,
                          {{L"Paste\tCtrl+V", copied, [&] { paste(false); }},
@@ -712,19 +710,8 @@ void App::onContextMenu(HWND from, POINT pt) {
             }
             return;
         }
-        // With a folder or shortcut among them, activate opens them all (folders here, files with Windows).
-        bool opensHere = std::any_of(rows.begin(), rows.end(), [&](int r) {
-            return list_.at(r).isDir() || isShortcut(list_.at(r).name);
-        });
-        showMenu(wnd_, itemMenu(wnd_, dir, list_.selectedItems()).get(), pt, [&](const std::wstring& verb) {
-            bool open = isOpenVerb(verb), inNewTab = isNewTabVerb(verb);
-            if (!is(verb, L"rename") && !is(verb, L"delete") && !(opensHere && (open || inNewTab))) return false;
-            if (!list_.shows(dir) || list_.selectedNames() != names) return true;   // changed: do nothing
-            if (is(verb, L"rename")) list_.rename(list_.focused() >= 0 ? list_.focused() : rows[0]);
-            else if (is(verb, L"delete")) deleteSelection(GetKeyState(VK_SHIFT) < 0);   // like the Delete key (4.6)
-            else activate(inNewTab);
-            return true;
-        });
+        showMenu(wnd_, itemMenu(wnd_, m.dir, list_.selectedItems()).get(), pt,
+                 [&](const std::wstring& verb) { return itemVerb(verb, m); });
         return;
     }
     if (from == tree_.hwnd()) {
@@ -736,15 +723,40 @@ void App::onContextMenu(HWND from, POINT pt) {
             GetWindowRect(tree_.hwnd(), &r);
             pt = {r.left + scale(24, dpi_), r.top + scale(24, dpi_)};
         }
-        showMenu(wnd_, itemMenu(wnd_, path).get(), pt, [&](const std::wstring& verb) {
-            if (isOpenVerb(verb)) openNode(path, false, shortcut);
-            else if (isNewTabVerb(verb)) openNode(path, true, shortcut);
-            else if (is(verb, L"rename")) renameNode(path);
-            else return false;
-            return true;
-        });
+        showMenu(wnd_, itemMenu(wnd_, path).get(), pt,
+                 [&](const std::wstring& verb) { return nodeVerb(verb, path, shortcut); });
         tree_.refreshFolder(parentPath(path));   // a folder deleted from its own menu leaves the tree
     }
+}
+
+App::MenuItems App::menuItems() const {
+    MenuItems m{list_.dir(), list_.selectedNames(), list_.selection()};
+    // With a folder or shortcut among them, activate opens them all (folders here, files with Windows).
+    m.opensHere = std::any_of(m.rows.begin(), m.rows.end(), [&](int r) {
+        return list_.at(r).isDir() || isShortcut(list_.at(r).name);
+    });
+    return m;
+}
+
+bool App::itemVerb(const std::wstring& verb, const MenuItems& m) {
+    bool open = isOpenVerb(verb), inNewTab = isNewTabVerb(verb), location = is(verb, L"opencontaining");
+    if (!is(verb, L"rename") && !is(verb, L"delete") && !location && !(m.opensHere && (open || inNewTab))) return false;
+    if (!list_.shows(m.dir) || list_.selectedNames() != m.names) return true;   // changed: do nothing
+    int row = list_.focused() >= 0 ? list_.focused() : m.rows[0];
+    if (is(verb, L"rename")) list_.rename(row);
+    else if (is(verb, L"delete")) deleteSelection(GetKeyState(VK_SHIFT) < 0);   // like the Delete key (4.6)
+    else if (location) openTargetLocation(list_.pathAt(row));                   // a shortcut's Open file location
+    else activate(inNewTab);
+    return true;
+}
+
+bool App::nodeVerb(const std::wstring& verb, const std::wstring& path, bool shortcut) {
+    if (isOpenVerb(verb)) openNode(path, false, shortcut);
+    else if (isNewTabVerb(verb)) openNode(path, true, shortcut);
+    else if (is(verb, L"rename")) renameNode(path);
+    else if (is(verb, L"opencontaining")) openTargetLocation(path);   // a bookmark's Open file location
+    else return false;
+    return true;
 }
 
 void App::onTabMenu() {
@@ -1217,6 +1229,16 @@ void App::openShortcut(const std::wstring& path, bool inNewTab) {
     }
     if (inNewTab && folder) newTab(*target, false);
     else open(*target, Nav::New, {}, Origin::fromShortcut(path));
+}
+
+// A shortcut's Open file location (the menu's opencontaining): the folder its target is in, shown here with the target
+// selected, where Windows would show it in Explorer (4.4).
+void App::openTargetLocation(const std::wstring& lnk) {
+    bool folder = false;
+    std::optional<std::wstring> target = shortcutTarget(lnk, &folder);
+    if (!opensInTab(target)) warn(L"Can't show where \"" + leafName(lnk) + L"\" points");   // a web link, a library...
+    else if (target->empty()) open(L"", Nav::New);   // This PC: in no folder here
+    else open(parentPath(*target), Nav::New, ViewState::selecting(leafName(*target)));
 }
 
 // Rename on a tree node's menu happens in the file list, in the node's parent folder.

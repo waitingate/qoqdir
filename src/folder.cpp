@@ -36,6 +36,14 @@ const wchar_t* extPtr(const std::wstring& name) {
 
 std::wstring joinPath(const std::wstring& dir, const std::wstring& name) {
     if (dir.empty()) return name;
+    // A name from the root ("\Windows", as typed): on the folder's own drive or share, as Explorer takes it and as
+    // the Rust build's Path::join does.
+    if (!name.empty() && isSep(name[0]) && !isUnc(name)) {
+        std::wstring root = dir;
+        while (!parentPath(root).empty()) root = parentPath(root);   // "C:\" or "\\server\share"
+        if (isSep(root.back())) root.pop_back();
+        return root + name;
+    }
     if (isSep(dir.back())) return dir + name;
     return dir + L'\\' + name;
 }

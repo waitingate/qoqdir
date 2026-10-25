@@ -81,6 +81,16 @@ private:
     LRESULT onNotify(NMHDR* nm);
     void onContextMenu(HWND from, POINT pt);
     void onTabMenu();
+    // Item menus: the verbs Qoqdir does itself instead of handing them to Windows (4.4). False: Windows does it.
+    struct MenuItems {            // what the list's menu was opened on: it is modal, and a load can land meanwhile
+        std::wstring dir;
+        std::vector<std::wstring> names;
+        std::vector<int> rows;
+        bool opensHere = false;   // a folder or shortcut among them: Open and the new-tab verbs open them here
+    };
+    MenuItems menuItems() const;
+    bool itemVerb(const std::wstring& verb, const MenuItems& m);
+    bool nodeVerb(const std::wstring& verb, const std::wstring& path, bool shortcut);   // a tree node's menu
 
     // Keyboard
     struct Key {
@@ -114,6 +124,7 @@ private:
     void goToTyped();
     void activate(bool inNewTab);   // Enter / double-click on the selection
     void openShortcut(const std::wstring& path, bool inNewTab);
+    void openTargetLocation(const std::wstring& lnk);   // a shortcut's Open file location: its target's folder, here
     void renameNode(const std::wstring& path);                // a tree node's Rename, done in the file list
     void openNode(const std::wstring& path, bool inNewTab, bool shortcut);   // a tree node: folder or shortcut
     ViewState currentView() const;

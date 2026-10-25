@@ -33,6 +33,9 @@ struct App::SelfTest {
     ULONGLONG heldTick = 0;   // since when only a folder load still out has held the next step back
     std::wstring dir, logPath, note;
     int failures = 0;
+    // What `sub` held before the paste step, and anything the paste brought in that isn't the test's file (a cut made
+    // elsewhere just as it started): then the test folder is kept, not deleted (7.2).
+    std::set<std::wstring> subBefore, foreign;
 };
 
 namespace {
@@ -208,16 +211,27 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
         return (TreeView_GetItemState(tree_.hwnd(), node, TVIS_EXPANDED) & TVIS_EXPANDED) != 0;
     };
     auto reopenHome = [=, this] { tab().path = dir; open(dir, Nav::Refresh); };   // after a tab was made unavailable
+    // The refresh has landed with exactly `names` selected.
+    auto selectedExactly = [=, this](const std::vector<std::wstring>& names) {
+        std::vector<std::wstring> sel = list_.selectedNames();
+        return idle() && sel.size() == names.size() &&
+               std::all_of(names.begin(), names.end(),
+                           [&](const std::wstring& n) { return std::find(sel.begin(), sel.end(), n) != sel.end(); });
+    };
     // A done check that presses Enter on the list once the refresh has selected exactly `names`, as the Rust build's.
     auto enterWhen = [=, this](std::vector<std::wstring> names) {
         return [=, this] {
-            std::vector<std::wstring> sel = list_.selectedNames();
-            if (!idle() || sel.size() != names.size() ||
-                !std::all_of(names.begin(), names.end(),
-                             [&](const std::wstring& n) { return std::find(sel.begin(), sel.end(), n) != sel.end(); }))
-                return false;
+            if (!selectedExactly(names)) return false;
             SetFocus(list_.hwnd());
             selfTestKey(VK_RETURN);
+            return true;
+        };
+    };
+    // The same for one of an item menu's own verbs, picked as the menu would pick it (no menu is shown).
+    auto verbWhen = [=, this](std::wstring verb, std::vector<std::wstring> names) {
+        return [=, this] {
+            if (!selectedExactly(names)) return false;
+            itemVerb(verb, menuItems());
             return true;
         };
     };
@@ -366,8 +380,24 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
         holdsTestFile).copies = true;
     add(L"filter + Enter opens a folder", [=, this] { selfTestType(L"sub"); selfTestKey(VK_RETURN); },
         [=, this] { return at(path(L"sub")); });
-    add(L"Ctrl+V pastes with the Windows copy engine", [=, this] { if (testFileOnClipboard()) selfTestKey('V', true); },
-        [=, this] { return exists(path(L"sub\\file1.txt")); }, 10000);
+    add(L"Ctrl+V pastes with the Windows copy engine",
+        [=, this] {
+            for (const Item& it : listFolder(path(L"sub"), true).items) selfTest_->subBefore.insert(it.name);
+            if (testFileOnClipboard()) selfTestKey('V', true);
+        },
+        [=, this] {
+            // Only the test's file comes in. A cut made elsewhere just as the paste starts would bring someone's files
+            // instead: they are named here, and the test folder is kept at the end (7.2).
+            for (const Item& it : listFolder(path(L"sub"), true).items)
+                if (it.name != L"file1.txt" && !selfTest_->subBefore.count(it.name)) selfTest_->foreign.insert(it.name);
+            if (!selfTest_->foreign.empty()) {
+                std::wstring names;
+                for (const std::wstring& n : selfTest_->foreign) names += (names.empty() ? L"" : L", ") + n;
+                selfTest_->note = L"not the test's: " + names;
+                return false;
+            }
+            return exists(path(L"sub\\file1.txt"));
+        }, 10000);
     add(L"pasted file appears in the list by itself", nullptr, [=, this] { return idle() && listed(L"file1.txt"); });
     add(L"Paste shortcut makes a shortcut to the copied file",
         [=, this] { if (testFileOnClipboard()) pasteInto(wnd_, list_.dir(), true); },
@@ -823,6 +853,15 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
     add(L"typing ..\\ goes up", [=, this] { goTo(L"..\\"); }, [=, this] { return at(dir); });
     add(L"typing .\\sub opens it here (not in Explorer)", [=, this] { goTo(L".\\sub"); },
         [=, this] { return at(path(L"sub")); });
+    // A path from the root without a drive ("\Users\...\qoqdir-selftest", as a script or another program can give one):
+    // on the folder's own drive or share, as Explorer takes it (5.3).
+    add(L"typing a path that starts at the root, without a drive, opens it on the folder's own drive",
+        [=, this] {
+            std::wstring root = dir;
+            while (!parentPath(root).empty()) root = parentPath(root);   // "C:\" or "\\server\share"
+            goTo(dir.substr(root.size() - (root.back() == L'\\' ? 1 : 0)));
+        },
+        [=, this] { return at(dir); });
     add(L"a long folder name of emojis is cut to fit its tab, ending in an ellipsis, with no broken character",
         [=, this] {
             std::wstring name;
@@ -1146,6 +1185,39 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
     add(L"right-click menus can be built for This PC, a drive and a file", nullptr, [=, this] {
         return itemMenu(wnd_, L"") && itemMenu(wnd_, L"C:\\") && itemMenu(wnd_, path(L"file1.txt"));
     });
+    // An item menu's own verbs, picked as the menu would pick them (no menu is shown). A shortcut's Open file location
+    // shows the folder its target is in, here, where Windows would open an Explorer window (4.4).
+    add(L"a shortcut's Open file location shows the target's folder here, with the target selected (not in Explorer)",
+        [=, this] {
+            writeFile(path(L"sub\\target.txt"));
+            makeShortcut(path(L"far.lnk"), path(L"sub\\target.txt"));
+            open(dir, Nav::New, ViewState::selecting(L"far.lnk"));
+        },
+        verbWhen(L"opencontaining", {L"far.lnk"}));
+    auto targetShown = [=, this] {
+        return at(path(L"sub")) && list_.selectedNames() == std::vector<std::wstring>{L"target.txt"};
+    };
+    add(L"(the target's folder is shown, with the target selected)", nullptr, targetShown);
+    backHome(L"(back to the test folder)");
+    add(L"the same on a bookmark's menu in the tree",
+        [=, this] { nodeVerb(L"opencontaining", path(L"far.lnk"), true); }, targetShown);
+    backHome(L"(back to the test folder)");
+    add(L"(remove them)",
+        [=, this] {
+            DeleteFileW(path(L"far.lnk").c_str());
+            DeleteFileW(path(L"sub\\target.txt").c_str());
+            refresh();
+        },
+        [=, this] { return idle() && !listed(L"far.lnk"); });
+    // This PC on the clipboard, put there again if another program took it: a shell item with no file path, as a
+    // zip's or a phone's items are.
+    auto pcOnClipboard = [=, this] {
+        UINT items = RegisterClipboardFormatW(CFSTR_SHELLIDLIST);
+        if (IsClipboardFormatAvailable(items) && !IsClipboardFormatAvailable(CF_HDROP)) return;
+        if (Com<IDataObject> pc = dataObject(wnd_, L"")) OleSetClipboard(pc.get());
+    };
+    add(L"Paste on empty space is offered for items without a file path, as copied from a zip or a phone",
+        pcOnClipboard, [=, this] { pcOnClipboard(); return canPaste(); });
     add(L"a drag over a tab whose folder was never shown is refused at once (nobody has checked that folder)",
         [=, this] {
             newTab(path(L"made"), false);   // a second tab, right of the current one, as from --tab= or a middle-click
@@ -2155,7 +2227,25 @@ void App::selfTestTick() {
 
     KillTimer(wnd_, kSelfTestTimer);
     selfTestLog(t.failures ? std::to_wstring(t.failures) + L" step(s) FAILED\n" : L"all steps passed\n");
-    deleteTree(t.dir);
+    // Files that aren't the test's came in with its paste (a cut made elsewhere just then): they go to a folder of
+    // their own next to the test folder before it is deleted, so they can be put back. The test folder itself can't
+    // be moved aside: the window still watches folders in it.
+    size_t moved = 0;
+    if (!t.foreign.empty()) {
+        std::wstring kept;
+        for (int n = 1; n <= 99 && kept.empty(); ++n) {
+            std::wstring name = t.dir + L" kept" + (n == 1 ? L"" : L" (" + std::to_wstring(n) + L")");
+            if (CreateDirectoryW(name.c_str(), nullptr)) kept = name;
+        }
+        for (const std::wstring& name : t.foreign)
+            if (!kept.empty() && MoveFileW(joinPath(t.dir, L"sub\\" + name).c_str(), joinPath(kept, name).c_str()))
+                ++moved;
+        selfTestLog(moved == t.foreign.size()
+                        ? L"files that aren't the test's came in with its paste: they are in " + kept + L"\n"
+                        : L"files that aren't the test's came in with its paste and could not all be moved out: the "
+                          L"test folder is left in place, and the next run deletes it\n");
+    }
+    if (moved == t.foreign.size()) deleteTree(t.dir);
     exitCode_ = t.failures ? 1 : 0;
     PostMessageW(wnd_, WM_CLOSE, 0, 0);
 }

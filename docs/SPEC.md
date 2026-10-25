@@ -156,8 +156,9 @@ These describe what the user sees. Each must hold in every situation.
   a folder on a server that is off, for example, gives the status message; it is
   not handed to Windows.
 - Folders always open inside Qoqdir, never in an Explorer window. That includes
-  folders opened with the context menu's Open or Open in new window, and through
-  shortcuts.
+  folders opened with the context menu's Open or Open in new window, through
+  shortcuts, and with a shortcut's Open file location (the target's folder, with
+  the target selected).
 
 ### 4.5 Live but calm
 - Changes made by other programs (files created, deleted, renamed, changed) show
@@ -265,6 +266,8 @@ readers read the same as the button's name.
     `D:\`), "This PC", and `..` inside a path;
   - `..` (up, like the Up button) or the name of a subfolder of the current
     folder: opened in this tab;
+  - a path from the root without a drive (`\Windows`): on the current folder's
+    own drive or share, as in Explorer;
   - anything else runs as a command, the way the Windows Run box (Win+R) would:
     `cmd`, `notepad file.txt`, a web address. It runs in the current folder,
     with its `%VARIABLES%` expanded as the Run box does. If Windows can't run
@@ -632,7 +635,9 @@ and exits with code 0 only if every step passed. It must:
   paste step first puts its file back if another program took the clipboard.
   Windows reads the clipboard a moment after a paste starts, so a copy at that
   moment can still fail a paste step, as it would make Explorer's paste do
-  nothing;
+  nothing. A cut at that moment would bring someone's files in instead: the step
+  fails, and at the end those files go to a folder next to the test folder (its
+  name plus " kept") instead of being deleted with it;
 - leave nothing behind but the test folder and log in `%TEMP%` (one small file in
   the Recycle Bin from the delete test is fine). It may replace the clipboard.
 
@@ -667,7 +672,8 @@ result:
 15. Typing `\\192.0.2.1\share` and Enter returns within 100 ms. Opening another
     folder right away cancels it, and that folder is shown.
 16. Typing `sub` and Enter opens `sub` in this tab; `..` and Enter goes back up.
-    No Explorer window.
+    No Explorer window. The test folder's path without its drive (`\Users\...`)
+    opens the test folder, on its own drive.
 17. Open a folder, go back, delete that folder, then press Forward and Back onto
     it: the dead entry is dropped from history and the tab doesn't get stuck.
 18. Enter on a shortcut to a folder opens that folder in this tab.
@@ -686,7 +692,11 @@ result:
 26. Sorting by Type puts the Type column in order.
 27. The Bookmarks folder exists and is the first tree root, labelled "Bookmarks".
     While it is empty it keeps its arrow, and F5 lists a folder made in it.
-28. Context menus can be built for This PC, a drive and a file.
+28. Context menus can be built for This PC, a drive and a file. A shortcut's
+    Open file location (picked as its menu would pick it) shows the target's
+    folder in this tab with the target selected, from the list and from a
+    bookmark in the tree. With This PC copied (an item with no file path, as a
+    zip's or a phone's items are), empty space offers Paste.
 29. Dropping a file (a drag simulated inside the process) on a second tab copies
     it into that tab's folder. While the file is over that tab, it shows as the
     current one; afterwards the real current tab does again.

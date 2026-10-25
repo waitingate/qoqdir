@@ -59,6 +59,7 @@ void invokeVerb(HWND owner, IContextMenu* menu, const char* verb);
 // False when the clipboard could not be set: a path too long for the shell, or another program holds it.
 bool copyToClipboard(HWND owner, const std::wstring& dir, const std::vector<Item>& items, bool cut);
 void pasteInto(HWND owner, const std::wstring& dir, bool shortcuts = false);   // shortcuts: "Paste shortcut"
+bool canPaste();   // the clipboard holds something Paste puts in a folder
 // False when nothing was deleted: the user said No to Windows' question, or it failed.
 bool deleteItems(HWND owner, const std::wstring& dir, const std::vector<Item>& items, bool permanently);
 HRESULT renameItem(HWND owner, const std::wstring& path, const std::wstring& newName);

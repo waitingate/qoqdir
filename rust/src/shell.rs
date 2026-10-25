@@ -20,11 +20,11 @@ use windows::Win32::System::Com::{
     CoInitializeEx, CoTaskMemFree, CoUninitialize, CreateBindCtx, DVASPECT_CONTENT, FORMATETC, IBindCtx, IDataObject,
     IPersistFile, STGM_CREATE, STGM_READ, STGMEDIUM, STGMEDIUM_0, TYMED_HGLOBAL,
 };
-use windows::Win32::System::DataExchange::RegisterClipboardFormatW;
+use windows::Win32::System::DataExchange::{IsClipboardFormatAvailable, RegisterClipboardFormatW};
 use windows::Win32::System::LibraryLoader::{GetProcAddress, LOAD_LIBRARY_SEARCH_SYSTEM32, LoadLibraryExW};
 use windows::Win32::System::Memory::{GMEM_MOVEABLE, GlobalAlloc, GlobalLock, GlobalUnlock};
 use windows::Win32::System::Ole::{
-    DROPEFFECT, DROPEFFECT_COPY, DROPEFFECT_LINK, DROPEFFECT_MOVE, DROPEFFECT_NONE, IDropSource, IDropTarget,
+    CF_HDROP, DROPEFFECT, DROPEFFECT_COPY, DROPEFFECT_LINK, DROPEFFECT_MOVE, DROPEFFECT_NONE, IDropSource, IDropTarget,
     IDropTarget_Impl, OleSetClipboard, ReleaseStgMedium,
 };
 use windows::Win32::System::SystemServices::MODIFIERKEYS_FLAGS;
@@ -493,6 +493,21 @@ pub fn copy_to_clipboard(owner: HWND, dir: &Location, items: &[Item], cut: bool)
 pub fn paste_into(owner: HWND, dir: &Location, shortcuts: bool) {
     if matches!(dir, Location::Dir(_)) {
         invoke_verb(owner, background_menu(owner, dir), if shortcuts { "pastelink" } else { "paste" });
+    }
+}
+
+/// The clipboard holds something Paste puts in a folder.
+pub fn can_paste() -> bool {
+    // Files, or items with no file path that Windows' Paste takes too: from inside a zip, on a phone, or attachments
+    // another program offers as files.
+    unsafe {
+        [
+            u32::from(CF_HDROP.0),
+            RegisterClipboardFormatW(w!("Shell IDList Array")),
+            RegisterClipboardFormatW(w!("FileGroupDescriptorW")),
+        ]
+        .into_iter()
+        .any(|format| IsClipboardFormatAvailable(format).is_ok())
     }
 }
 

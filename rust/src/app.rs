@@ -23,8 +23,7 @@ use windows::Win32::Graphics::Gdi::{
 use windows::Win32::Storage::FileSystem::CreateDirectoryW;
 use windows::Win32::System::Diagnostics::Debug::MessageBeep;
 use windows::Win32::System::Com::{CLSCTX_INPROC_SERVER, CoCreateInstance};
-use windows::Win32::System::DataExchange::IsClipboardFormatAvailable;
-use windows::Win32::System::Ole::{CF_HDROP, IDropTarget, RegisterDragDrop, RevokeDragDrop};
+use windows::Win32::System::Ole::{IDropTarget, RegisterDragDrop, RevokeDragDrop};
 use windows::Win32::System::SystemServices::MK_LBUTTON;
 use windows::Win32::System::Threading::{
     CreateProcessW, GetStartupInfoW, PROCESS_CREATION_FLAGS, PROCESS_INFORMATION, STARTF_USEPOSITION,
@@ -76,7 +75,7 @@ use crate::folder::{
 use crate::shell::{
     FolderWatch, IconBatch, OwnItem, acknowledge_change, fill_types, has_own_icon, read_own_icons, background_menu, bookmark_folder, copy_to_clipboard, delete_items, drag_out, open_in_explorer,
     shortcut_target, forward_menu_message, in_background, invoke_verb, item_menu, item_menu_at, known_folder, new_drop_target, open_file,
-    paste_into, post, rename_item, run_command, save_folder_shortcuts, saved_folders, show_menu,
+    can_paste, paste_into, post, rename_item, run_command, save_folder_shortcuts, saved_folders, show_menu,
 };
 use crate::tree::{FolderTree, TreeBatch};
 use crate::util::{
@@ -348,6 +347,15 @@ fn is_open_verb(verb: &str) -> bool {
 // window (4.4).
 fn is_new_tab_verb(verb: &str) -> bool {
     ["opennewtab", "opennewwindow", "opennewprocess"].iter().any(|v| verb.eq_ignore_ascii_case(v))
+}
+
+/// Item menus: the verbs Qoqdir does itself instead of handing them to Windows (4.4); false: Windows does it. This is
+/// what the list's menu was opened on: it is modal, and a load can land meanwhile.
+pub struct MenuItems {
+    dir: Location,
+    names: Vec<OsString>,
+    rows: Vec<usize>,
+    opens_here: bool, // a folder or shortcut among them: Open and the new-tab verbs open them here
 }
 
 /// A window number from qoqdir.ini (`ini` is the file path, wide): missing, not a number, or far off any screen (a
@@ -1286,21 +1294,19 @@ impl App {
                     let _ = ClientToScreen(self.list.hwnd(), &mut pt);
                 }
             }
-            let rows = self.list.selection();
-            // The menu is modal and a load can land meanwhile: then the app's own commands do nothing.
-            let dir = self.list.location();
-            let names = self.list.selected_names();
-            if rows.is_empty() {
+            let m = self.menu_items();
+            if m.rows.is_empty() {
+                let dir = &m.dir;
                 // The folder's own menu, with Paste; none when the list shows no folder.
                 if matches!(dir, Location::Dir(_))
-                    && let Some(cm) = background_menu(self.wnd, &dir)
+                    && let Some(cm) = background_menu(self.wnd, dir)
                 {
                     let paste = |shortcuts| {
-                        if self.list.shows(&dir) {
-                            paste_into(self.wnd, &dir, shortcuts);
+                        if self.list.shows(dir) {
+                            paste_into(self.wnd, dir, shortcuts);
                         }
                     };
-                    let copied = unsafe { IsClipboardFormatAvailable(u32::from(CF_HDROP.0)) }.is_ok(); // else Paste is greyed
+                    let copied = can_paste(); // else Paste is greyed
                     let folder = dir.path().map(Path::to_path_buf).unwrap_or_default();
                     let own = [
                         OwnItem { text: "Paste\tCtrl+V", enabled: copied, act: &|| paste(false) },
@@ -1313,27 +1319,8 @@ impl App {
                 }
                 return;
             }
-            // With a folder or shortcut among them, activate opens them all (folders here, files with Windows).
-            let opens_here = rows.iter().any(|&r| self.list.item(r).is_some_and(|i| i.is_dir() || is_shortcut(&i.name)));
-            let Some(cm) = item_menu(self.wnd, &dir, &self.list.selected_items()) else { return };
-            show_menu(self.wnd, &cm, pt, &mut |verb| {
-                let is = |name: &str| verb.eq_ignore_ascii_case(name);
-                let (open, in_new_tab) = (is_open_verb(verb), is_new_tab_verb(verb));
-                if !is("rename") && !is("delete") && !(opens_here && (open || in_new_tab)) {
-                    return false;
-                }
-                if !self.list.shows(&dir) || self.list.selected_names() != names {
-                    return true; // changed: do nothing
-                }
-                if is("rename") {
-                    self.list.rename(self.list.focused().or(rows.first().copied()));
-                } else if is("delete") {
-                    self.delete_selection(key_down(VK_SHIFT)); // like the Delete key (4.6)
-                } else {
-                    self.activate(in_new_tab);
-                }
-                true
-            }, &[]);
+            let Some(cm) = item_menu(self.wnd, &m.dir, &self.list.selected_items()) else { return };
+            show_menu(self.wnd, &cm, pt, &mut |verb| self.item_verb(verb, &m), &[]);
             return;
         }
         if from == self.tree.hwnd() {
@@ -1345,21 +1332,58 @@ impl App {
             // The parent is read again whether or not the menu could be built (a node whose folder is already gone):
             // a folder deleted from its own menu then leaves the tree, as in the C++ build.
             if let Some(cm) = item_menu_at(self.wnd, &location) {
-                show_menu(self.wnd, &cm, pt, &mut |verb| {
-                    if is_open_verb(verb) {
-                        self.open_node(location.clone(), false, shortcut);
-                    } else if is_new_tab_verb(verb) {
-                        self.open_node(location.clone(), true, shortcut);
-                    } else if verb.eq_ignore_ascii_case("rename") {
-                        self.rename_node(location.clone());
-                    } else {
-                        return false;
-                    }
-                    true
-                }, &[]);
+                show_menu(self.wnd, &cm, pt, &mut |verb| self.node_verb(verb, &location, shortcut), &[]);
             }
             self.tree.refresh_folder(&location.parent());
         }
+    }
+
+    pub fn menu_items(&self) -> MenuItems {
+        let rows = self.list.selection();
+        // With a folder or shortcut among them, activate opens them all (folders here, files with Windows).
+        let opens_here = rows.iter().any(|&r| self.list.item(r).is_some_and(|i| i.is_dir() || is_shortcut(&i.name)));
+        MenuItems { dir: self.list.location(), names: self.list.selected_names(), rows, opens_here }
+    }
+
+    pub fn item_verb(&self, verb: &str, m: &MenuItems) -> bool {
+        let is = |name: &str| verb.eq_ignore_ascii_case(name);
+        let (open, in_new_tab, location) = (is_open_verb(verb), is_new_tab_verb(verb), is("opencontaining"));
+        if !is("rename") && !is("delete") && !location && !(m.opens_here && (open || in_new_tab)) {
+            return false;
+        }
+        if !self.list.shows(&m.dir) || self.list.selected_names() != m.names {
+            return true; // changed: do nothing
+        }
+        let row = self.list.focused().or(m.rows.first().copied());
+        if is("rename") {
+            self.list.rename(row);
+        } else if is("delete") {
+            self.delete_selection(key_down(VK_SHIFT)); // like the Delete key (4.6)
+        } else if location {
+            // A shortcut's Open file location.
+            if let Some(Location::Dir(lnk)) = row.and_then(|r| self.list.item_location(r)) {
+                self.open_target_location(&lnk);
+            }
+        } else {
+            self.activate(in_new_tab);
+        }
+        true
+    }
+
+    /// A tree node's menu.
+    pub fn node_verb(&self, verb: &str, location: &Location, shortcut: bool) -> bool {
+        if is_open_verb(verb) {
+            self.open_node(location.clone(), false, shortcut);
+        } else if is_new_tab_verb(verb) {
+            self.open_node(location.clone(), true, shortcut);
+        } else if verb.eq_ignore_ascii_case("rename") {
+            self.rename_node(location.clone());
+        } else if verb.eq_ignore_ascii_case("opencontaining") {
+            self.open_target_location(location.path().unwrap_or(Path::new(""))); // a bookmark's Open file location
+        } else {
+            return false;
+        }
+        true
     }
 
     fn on_tab_menu(&self) {
@@ -2098,6 +2122,21 @@ impl App {
             self.new_tab(dir, false);
         } else {
             self.open_from(dir, Nav::New, ViewState::default(), Origin::Shortcut(path));
+        }
+    }
+
+    /// A shortcut's Open file location (the menu's opencontaining): the folder its target is in, shown here with the
+    /// target selected, where Windows would show it in Explorer (4.4).
+    fn open_target_location(&self, lnk: &Path) {
+        match shortcut_target(lnk).filter(|(t, _)| opens_in_tab(t)) {
+            None => {
+                // A web link, a library...
+                let name = lnk.file_name().unwrap_or_default().to_string_lossy();
+                self.warn(&format!("Can't show where \"{name}\" points"));
+            }
+            // This PC: in no folder here.
+            Some((Location::ThisPc, _)) => self.open(Location::ThisPc, Nav::New, ViewState::default()),
+            Some((target, _)) => self.open(target.parent(), Nav::New, ViewState::selecting(target.display_name())),
         }
     }
 

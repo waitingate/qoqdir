@@ -3,10 +3,11 @@
 //! with the same names.
 
 use std::cell::{Cell, RefCell};
+use std::collections::BTreeSet;
 use std::ffi::{OsStr, OsString};
 use std::io::Write;
 use std::os::windows::ffi::OsStrExt;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::rc::Rc;
 
 use std::sync::atomic::{AtomicIsize, AtomicUsize, Ordering};
@@ -26,10 +27,13 @@ use windows::Win32::Storage::FileSystem::{
     SetFileAttributesW,
 };
 use windows::Win32::System::Com::IDataObject;
-use windows::Win32::System::DataExchange::{CloseClipboard, GetClipboardData, GetOpenClipboardWindow, OpenClipboard};
+use windows::Win32::System::DataExchange::{
+    CloseClipboard, GetClipboardData, GetOpenClipboardWindow, IsClipboardFormatAvailable, OpenClipboard,
+    RegisterClipboardFormatW,
+};
 use windows::Win32::System::Diagnostics::Debug::{GetErrorMode, SEM_FAILCRITICALERRORS};
 use windows::Win32::System::Memory::{GlobalLock, GlobalUnlock};
-use windows::Win32::System::Ole::{DROPEFFECT_COPY, DROPEFFECT_NONE};
+use windows::Win32::System::Ole::{DROPEFFECT_COPY, DROPEFFECT_NONE, OleSetClipboard};
 use windows::Win32::System::SystemServices::MK_LBUTTON;
 use windows::Win32::UI::Controls::{
     EM_SETSEL, EM_GETSEL, EM_REPLACESEL, HTREEITEM, LVIF_IMAGE, LVIR_LABEL, LVITEMW, LVM_CANCELEDITLABEL, LVM_GETBKCOLOR, LVM_GETCOUNTPERPAGE,
@@ -64,8 +68,8 @@ use crate::folder::{
     list_folder, parse_command_line, sort_items, system_dir,
 };
 use crate::shell::{
-    command_program, copy_to_clipboard, data_object_at, file_info, item_menu_at, known_folder, paste_into, pidl_from,
-    shortcut_target, type_name,
+    can_paste, command_program, copy_to_clipboard, data_object_at, file_info, item_menu_at, known_folder, paste_into,
+    pidl_from, shortcut_target, type_name,
 };
 use windows::core::{Interface, w};
 
@@ -165,6 +169,10 @@ thread_local! {
     static LOADS: Cell<(u32, u32)> = const { Cell::new((0, 0)) };
     static FLAG: Cell<bool> = const { Cell::new(false) };
     static NEXT: RefCell<OsString> = const { RefCell::new(OsString::new()) }; // the item after the one Delete removes
+    // What `sub` held before the paste step, and anything the paste brought in that isn't the test's file (a cut made
+    // elsewhere just as it started): then the test folder is kept, not deleted (7.2).
+    static SUB_BEFORE: RefCell<BTreeSet<OsString>> = const { RefCell::new(BTreeSet::new()) };
+    static FOREIGN: RefCell<BTreeSet<OsString>> = const { RefCell::new(BTreeSet::new()) };
     static RUN: RefCell<Option<SelfTest>> = const { RefCell::new(None) }; // the steps, and how far the run is
     static EXIT_CODE: Cell<i32> = const { Cell::new(1) }; // a run that never finishes (closed by hand) has not passed
 }
@@ -702,14 +710,36 @@ impl App {
             },
             |a| a.at(&p("sub")),
         );
+        // The names in a folder, hidden ones too.
+        fn names_in(dir: &Path) -> BTreeSet<OsString> {
+            std::fs::read_dir(dir)
+                .map(|d| d.filter_map(|e| e.ok().map(|e| e.file_name())).collect())
+                .unwrap_or_default()
+        }
         s.add(
             "Ctrl+V pastes with the Windows copy engine",
             |a| {
+                SUB_BEFORE.with(|b| *b.borrow_mut() = names_in(&p("sub")));
                 if test_file_on_clipboard(a) {
                     a.press(letter(b'V'), CTRL);
                 }
             },
-            |_| exists(&p("sub\\file1.txt")),
+            |_| {
+                // Only the test's file comes in. A cut made elsewhere just as the paste starts would bring someone's
+                // files instead: they are named here, and the test folder is kept at the end (7.2).
+                let before = SUB_BEFORE.with(|b| b.borrow().clone());
+                let came = names_in(&p("sub"))
+                    .into_iter()
+                    .filter(|n| n != OsStr::new("file1.txt") && !before.contains(n));
+                FOREIGN.with(|f| f.borrow_mut().extend(came));
+                let foreign = FOREIGN.with(|f| f.borrow().clone());
+                if !foreign.is_empty() {
+                    let names: Vec<_> = foreign.iter().map(|n| n.to_string_lossy()).collect();
+                    note(format!("not the test's: {}", names.join(", ")));
+                    return false;
+                }
+                exists(&p("sub\\file1.txt"))
+            },
         )
         .wait(10000);
         s.check("pasted file appears in the list by itself", |a| a.idle() && a.listed("file1.txt"));
@@ -1335,6 +1365,13 @@ impl App {
         s.add("typing a subfolder's name opens it here (not in Explorer)", |a| a.go_to("sub"), |a| a.at(&p("sub")));
         s.add("typing ..\\ goes up", |a| a.go_to("..\\"), move |a| a.at(&dir()));
         s.add("typing .\\sub opens it here (not in Explorer)", |a| a.go_to(".\\sub"), |a| a.at(&p("sub")));
+        // A path from the root without a drive ("\Users\...\qoqdir-selftest", as a script or another program can give
+        // one): on the folder's own drive or share, as Explorer takes it (5.3).
+        s.add(
+            "typing a path that starts at the root, without a drive, opens it on the folder's own drive",
+            move |a| a.go_to(dir().components().filter(|c| !matches!(c, Component::Prefix(_))).collect::<PathBuf>()),
+            move |a| a.at(&dir()),
+        );
         s.add(
             "a long folder name of emojis is cut to fit its tab, ending in an ellipsis, with no broken character",
             |a| {
@@ -1525,15 +1562,29 @@ impl App {
                 a.at(&dir()) && !ahead.is_some_and(|l| l.same(&Location::dir(p("temp2"))))
             },
         );
+        // The refresh has landed with exactly `names` selected.
+        fn selected_exactly(a: &App, names: &[&str]) -> bool {
+            let selected = a.list.selected_names();
+            a.idle() && selected.len() == names.len() && names.iter().all(|n| selected.iter().any(|s| s == *n))
+        }
         // Enter on the selected shortcuts, once the refresh that selected them has landed.
         let enter_when = |names: &'static [&'static str]| {
             move |a: &App| {
-                let selected = a.list.selected_names();
-                if !a.idle() || selected.len() != names.len() || !names.iter().all(|n| selected.iter().any(|s| s == *n)) {
+                if !selected_exactly(a, names) {
                     return false;
                 }
                 focus(a.list.hwnd());
                 a.press(VK_RETURN, 0);
+                true
+            }
+        };
+        // The same for one of an item menu's own verbs, picked as the menu would pick it (no menu is shown).
+        let verb_when = |verb: &'static str, names: &'static [&'static str]| {
+            move |a: &App| {
+                if !selected_exactly(a, names) {
+                    return false;
+                }
+                a.item_verb(verb, &a.menu_items());
                 true
             }
         };
@@ -1797,6 +1848,59 @@ impl App {
                 && item_menu_at(a.wnd, &Location::dir("C:\\")).is_some()
                 && item_menu_at(a.wnd, &Location::dir(p("file1.txt"))).is_some()
         });
+        // An item menu's own verbs, picked as the menu would pick them (no menu is shown). A shortcut's Open file
+        // location shows the folder its target is in, here, where Windows would open an Explorer window (4.4).
+        s.add(
+            "a shortcut's Open file location shows the target's folder here, with the target selected (not in Explorer)",
+            move |a| {
+                write_file(&p("sub\\target.txt"));
+                make_shortcut(&p("far.lnk"), p("sub\\target.txt"));
+                a.open(Location::dir(dir()), Nav::New, ViewState::selecting("far.lnk"));
+            },
+            verb_when("opencontaining", &["far.lnk"]),
+        );
+        let target_shown = |a: &App| a.at(&p("sub")) && a.list.selected_names() == [OsString::from("target.txt")];
+        s.check("(the target's folder is shown, with the target selected)", target_shown);
+        s.home("(back to the test folder)");
+        s.add(
+            "the same on a bookmark's menu in the tree",
+            |a| {
+                a.node_verb("opencontaining", &Location::dir(p("far.lnk")), true);
+            },
+            target_shown,
+        );
+        s.home("(back to the test folder)");
+        s.add(
+            "(remove them)",
+            |a| {
+                let _ = std::fs::remove_file(p("far.lnk"));
+                let _ = std::fs::remove_file(p("sub\\target.txt"));
+                a.refresh(ViewState::default());
+            },
+            |a| a.idle() && !a.listed("far.lnk"),
+        );
+        // This PC on the clipboard, put there again if another program took it: a shell item with no file path, as a
+        // zip's or a phone's items are.
+        fn pc_on_clipboard(a: &App) {
+            const CF_HDROP: u32 = 15;
+            unsafe {
+                let items = RegisterClipboardFormatW(w!("Shell IDList Array"));
+                if IsClipboardFormatAvailable(items).is_ok() && IsClipboardFormatAvailable(CF_HDROP).is_err() {
+                    return;
+                }
+                if let Some(pc) = data_object_at(a.wnd, &Location::ThisPc) {
+                    let _ = OleSetClipboard(&pc);
+                }
+            }
+        }
+        s.add(
+            "Paste on empty space is offered for items without a file path, as copied from a zip or a phone",
+            pc_on_clipboard,
+            |a| {
+                pc_on_clipboard(a);
+                can_paste()
+            },
+        );
         s.add(
             "a drag over a tab whose folder was never shown is refused at once (nobody has checked that folder)",
             |a| {
@@ -2011,9 +2115,9 @@ impl App {
                 a.press(VK_F5, 0); // reads every open node again, "one" among them
                 a.tree_key(VK_LEFT); // collapsed before that read lands
             },
-            |a| {
+            move |a| {
                 let one = a.tree_one();
-                if step_ms() < 400 || a.is_loading() || one == 0 {
+                if step_ms() < 400 || !a.at(&dir()) || one == 0 {
                     return false;
                 }
                 let expanded = a.expanded(one);
@@ -3137,7 +3241,42 @@ impl App {
                 }
                 let failures = with_test(|t| t.failures);
                 log(&if failures > 0 { format!("{failures} step(s) FAILED\n") } else { "all steps passed\n".into() });
-                let _ = std::fs::remove_dir_all(test_dir());
+                // Files that aren't the test's came in with its paste (a cut made elsewhere just then): they go to a
+                // folder of their own next to the test folder before it is deleted, so they can be put back. The test
+                // folder itself can't be moved aside: the window still watches folders in it.
+                let dir = test_dir();
+                let foreign = FOREIGN.with(|f| f.borrow().clone());
+                let mut moved = 0;
+                if !foreign.is_empty() {
+                    let mut kept = None;
+                    for n in 1..=99 {
+                        let mut name = dir.clone().into_os_string();
+                        name.push(if n == 1 { " kept".into() } else { format!(" kept ({n})") });
+                        if std::fs::create_dir(&name).is_ok() {
+                            kept = Some(PathBuf::from(name));
+                            break;
+                        }
+                    }
+                    if let Some(k) = &kept {
+                        for name in &foreign {
+                            if std::fs::rename(dir.join("sub").join(name), k.join(name)).is_ok() {
+                                moved += 1;
+                            }
+                        }
+                    }
+                    log(&match kept {
+                        Some(k) if moved == foreign.len() => {
+                            let k = k.display();
+                            format!("files that aren't the test's came in with its paste: they are in {k}\n")
+                        }
+                        _ => "files that aren't the test's came in with its paste and could not all be moved out: the \
+                              test folder is left in place, and the next run deletes it\n"
+                            .into(),
+                    });
+                }
+                if moved == foreign.len() {
+                    let _ = std::fs::remove_dir_all(&dir);
+                }
                 EXIT_CODE.set(if failures > 0 { 1 } else { 0 });
                 unsafe {
                     let _ = PostMessageW(Some(self.wnd), WM_CLOSE, WPARAM(0), LPARAM(0));

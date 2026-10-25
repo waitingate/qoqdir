@@ -345,6 +345,15 @@ void pasteInto(HWND owner, const std::wstring& dir, bool shortcuts) {
     invokeVerb(owner, backgroundMenu(owner, dir).get(), shortcuts ? "pastelink" : "paste");
 }
 
+bool canPaste() {
+    // Files, or items with no file path that Windows' Paste takes too: from inside a zip, on a phone, or attachments
+    // another program offers as files.
+    for (UINT format : {UINT(CF_HDROP), RegisterClipboardFormatW(CFSTR_SHELLIDLIST),
+                        RegisterClipboardFormatW(CFSTR_FILEDESCRIPTORW)})
+        if (IsClipboardFormatAvailable(format)) return true;
+    return false;
+}
+
 bool deleteItems(HWND owner, const std::wstring& dir, const std::vector<Item>& items, bool permanently) {
     Com<IDataObject> obj = shellObject<IDataObject>(owner, dir, items);
     if (!obj) return false;

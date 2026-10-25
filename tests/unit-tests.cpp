@@ -102,6 +102,12 @@ int main(int argc, char** argv) {
     CHECK_EQ(joinPath(L"C:\\", L"a"), L"C:\\a");
     CHECK_EQ(joinPath(L"C:\\a", L"b"), L"C:\\a\\b");
     CHECK_EQ(joinPath(L"", L"D:\\"), L"D:\\");
+    // A name from the root, as typed ("\Windows"): on the folder's own drive or share, as Explorer takes it (5.3).
+    CHECK_EQ(joinPath(L"C:\\x\\y", L"\\Windows"), L"C:\\Windows");
+    CHECK_EQ(joinPath(L"C:\\", L"\\Windows"), L"C:\\Windows");
+    CHECK_EQ(joinPath(L"C:\\x", L"\\"), L"C:\\");
+    CHECK_EQ(joinPath(L"\\\\server\\share\\dir", L"\\x"), L"\\\\server\\share\\x");
+    CHECK_EQ(joinPath(L"\\\\server\\share", L"\\x"), L"\\\\server\\share\\x");
     CHECK_EQ(leafName(L"C:\\a\\b"), L"b");
     CHECK_EQ(leafName(L"C:\\"), L"C:\\");
     CHECK_EQ(leafName(L"\\\\server\\share"), L"share");
