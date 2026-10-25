@@ -131,6 +131,11 @@ void FolderTree::refreshFolder(const std::wstring& dir) {
 }
 
 void FolderTree::reread(HTREEITEM n) {
+    // A read already out may have listed the folder before the change this is for: one more follows it.
+    if (reading_.count(n)) {
+        stale_.insert(n);
+        return;
+    }
     TVITEMW item{};
     item.mask = TVIF_CHILDREN;
     item.hItem = n;
@@ -195,6 +200,13 @@ void FolderTree::addChildren(const TreeBatch& batch) {
     auto it = reading_.find(batch.node);
     if (it == reading_.end() || it->second != batch.read) return;
     reading_.erase(it);
+    // A change while this read was out (reread) may be missing from it: one more read once it is shown.
+    bool changed = stale_.erase(batch.node);
+    showChildren(batch);
+    if (changed) reread(batch.node);
+}
+
+void FolderTree::showChildren(const TreeBatch& batch) {
     if (!batch.node) {   // the user folders go after Bookmarks (always the first root) and before This PC
         HTREEITEM after = TreeView_GetRoot(tv_);
         for (const auto& c : batch.children) after = add(TVI_ROOT, c.path, c.text, c.icon, false, after);
@@ -300,6 +312,7 @@ bool FolderTree::onNotify(NMHDR* nm, std::wstring* open, bool* shortcut) {
         auto* tv = reinterpret_cast<NMTREEVIEWW*>(nm);
         if (tv->action & TVE_COLLAPSE) {
             reading_.erase(tv->itemNew.hItem);
+            stale_.erase(tv->itemNew.hItem);
             TreeView_Expand(tv_, tv->itemNew.hItem, TVE_COLLAPSE | TVE_COLLAPSERESET);
         }
         return false;
@@ -307,6 +320,7 @@ bool FolderTree::onNotify(NMHDR* nm, std::wstring* open, bool* shortcut) {
     case TVN_DELETEITEMW:
         // The handle dies with the node (collapse, fill(), shutdown); a read still in flight must not insert under it.
         reading_.erase(reinterpret_cast<NMTREEVIEWW*>(nm)->itemOld.hItem);
+        stale_.erase(reinterpret_cast<NMTREEVIEWW*>(nm)->itemOld.hItem);
         paths_.erase(reinterpret_cast<NMTREEVIEWW*>(nm)->itemOld.hItem);
         return false;
     case TVN_SELCHANGEDW: {

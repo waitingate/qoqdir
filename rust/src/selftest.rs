@@ -58,6 +58,7 @@ use windows::Win32::UI::Shell::{
 use windows::Win32::UI::WindowsAndMessaging::{
     BM_CLICK, CHILDID_SELF, EnumWindows, FindWindowExW, HTCLIENT, OBJID_CLIENT, GCLP_HBRBACKGROUND, GWLP_USERDATA, GetClassLongPtrW, GetWindowLongPtrW, GetWindowTextLengthW, IsWindowVisible,
     CreateWindowExW, HWND_MESSAGE, WINDOW_EX_STYLE, WINDOW_STYLE,
+    MSG, PM_NOREMOVE, PeekMessageW,
     KillTimer, PostMessageW, SW_SHOWMINNOACTIVE, SW_SHOWNOACTIVATE, SetTimer, ShowWindow, WM_CHAR, WM_CLOSE,
     WM_DEVICECHANGE, WM_DPICHANGED, WM_KEYDOWN, WM_LBUTTONDBLCLK, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONUP, WM_MOUSEMOVE, WM_MOUSEWHEEL,
     WM_NCHITTEST, WM_SYSKEYDOWN, WM_TIMER,
@@ -2263,6 +2264,34 @@ impl App {
             },
             |a| a.node_texts(a.tree.child(a.tree_one())) == "deep",
         );
+        // A change that comes while a node is being read: that read may have listed the folder before it, so one more
+        // follows (5.5). Made where no watch sees it, only that second read can show it.
+        s.add(
+            "a change to a tree folder while it is being read shows once that read is in (5.5)",
+            |a| {
+                let one = Location::dir(p("Bookmarks\\one"));
+                a.tree.refresh_folder(&one); // a read of "one" goes out...
+                let msg = a.tree.batch_message();
+                let start = Instant::now(); // ...and lists the folder: its result waits in the queue
+                let mut m = MSG::default();
+                while !unsafe { PeekMessageW(&mut m, Some(a.wnd), msg, msg, PM_NOREMOVE) }.as_bool()
+                    && start.elapsed() < Duration::from_secs(2)
+                {
+                    std::thread::sleep(Duration::from_millis(5));
+                }
+                let _ = std::fs::create_dir(p("Bookmarks\\one\\fresh"));
+                a.tree.refresh_folder(&one); // the change, as a watch tells it, while that read is out
+            },
+            |a| a.node_texts(a.tree.child(a.tree_one())) == "deep,fresh",
+        );
+        s.add(
+            "(remove it)",
+            |a| {
+                let _ = std::fs::remove_dir(p("Bookmarks\\one\\fresh"));
+                a.tree.refresh_folder(&Location::dir(p("Bookmarks\\one")));
+            },
+            |a| a.node_texts(a.tree.child(a.tree_one())) == "deep",
+        );
         s.add(
             "F5 reads the folders open in the tree again: one that is the same stays as it is (\"one\" stays open), one \
              that changed shows its new subfolder (5.5)",
@@ -2538,19 +2567,24 @@ impl App {
             },
             |a| a.bookmark_nodes() == "one,two,sub",
         );
+        // These two wait for Explorer to pass on another program's change, which has taken it more than 5 s here
+        // after this test's own floods of changes (10,000 folders, 300 shortcuts): not a false alarm when the
+        // machine is busy.
         s.add(
             "a shortcut another program makes in Bookmarks (or an Alt+drag onto its node) shows in the tree while another \
              folder is shown (5.5)",
             |_| make_shortcut(&p("Bookmarks\\dropped.lnk"), p("sub")),
             |a| a.bookmark_nodes() == "one,two,dropped,sub",
-        );
+        )
+        .wait(20000);
         s.add(
             "(and leaves the tree when deleted)",
             |_| {
                 let _ = std::fs::remove_file(p("Bookmarks\\dropped.lnk"));
             },
             |a| a.bookmark_nodes() == "one,two,sub",
-        );
+        )
+        .wait(20000);
 
         // Speed: a folder with 10,000 files.
         s.add(

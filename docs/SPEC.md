@@ -354,7 +354,9 @@ readers read the same as the button's name.
   dropped on it, or made in its folder by another program, shows at once (a
   group folder inside Bookmarks is followed while shown, like any other). After
   a command from a node's menu, the node's parent is read again, so a folder
-  deleted there leaves the tree.
+  deleted there leaves the tree. A change that comes while a node is being read
+  gets it read once more after, as that read may have listed the folder before
+  the change.
 - Clicking a node, or moving to it with the keyboard, opens it in this tab, and
   clicking the selected node opens it again. Middle-click opens a new background
   tab. Moving the selection with the keyboard opens a folder or a folder
@@ -732,7 +734,9 @@ result:
 36. Creating `Bookmarks\two` shows "one", "two", "sub" in the tree by itself. Of
     a subfolder and a hidden one made in `Bookmarks\one`, which no watch sees,
     collapsing and expanding it with the Left and Right keys shows the new one
-    and not the hidden one.
+    and not the hidden one. A subfolder made there while `one` is being read
+    again, after that read listed the folder, shows once the read is in: the
+    change gets `one` read once more.
 37. A 10,000-file folder loads within the target of 4.7.
 38. Filtering while scrolled to the bottom shows the matches from the top.
 39. Filtering and sorting 10,000 files are within the targets of 4.7.

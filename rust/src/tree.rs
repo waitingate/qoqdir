@@ -1,7 +1,7 @@
 //! The folder tree. Subfolders are read on a worker thread when a node expands: a dead drive never freezes it.
 
 use std::cell::{Cell, RefCell};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::ffi::{OsStr, OsString};
 use std::os::windows::ffi::OsStrExt;
 use std::path::Path;
@@ -61,6 +61,7 @@ pub struct FolderTree {
     reads: Cell<u32>,                         // numbers every read started
     paths: RefCell<HashMap<isize, (Location, bool)>>, // each node's folder or shortcut (bool: a bookmark shortcut)
     reading: RefCell<HashMap<isize, u32>>,    // nodes whose subfolders are being read, by read number
+    stale: RefCell<HashSet<isize>>,           // ...that changed meanwhile: read once more after (5.5)
     bookmarks_empty: Cell<bool>,              // Bookmarks was read and found empty (it keeps its arrow)
     open_at: Cell<u64>,                       // when the node a drag lights up opens (0: done)
     drop_folder: RefCell<Option<Location>>,   // and where a drop on that node goes
@@ -175,6 +176,7 @@ impl FolderTree {
             reads: Cell::new(0),
             paths: RefCell::new(HashMap::new()),
             reading: RefCell::new(HashMap::new()),
+            stale: RefCell::new(HashSet::new()),
             bookmarks_empty: Cell::new(false),
             open_at: Cell::new(0),
             drop_folder: RefCell::new(None),
@@ -247,6 +249,11 @@ impl FolderTree {
     }
 
     fn reread(&self, node: isize) {
+        // A read already out may have listed the folder before the change this is for: one more follows it.
+        if self.reading.borrow().contains_key(&node) {
+            self.stale.borrow_mut().insert(node);
+            return;
+        }
         let mut item = TVITEMW { mask: TVIF_CHILDREN, hItem: HTREEITEM(node), ..Default::default() };
         send(self.hwnd, TVM_GETITEMW, 0, &mut item as *mut _ as isize);
         let none = item.cChildren.0 == 0 && !self.shortcut_of(HTREEITEM(node));
@@ -351,12 +358,29 @@ impl FolderTree {
         });
     }
 
+    /// What a read's result comes back as (self-test).
+    #[cfg(feature = "selftest")] // only the self-test uses it
+    pub fn batch_message(&self) -> u32 {
+        self.batch_msg
+    }
+
     pub fn add_children(&self, batch: TreeBatch) {
         // Nodes in `reading` are alive (deleted ones leave in TVN_DELETEITEM); the read number spots a reused handle.
         if self.reading.borrow().get(&batch.node) != Some(&batch.read) {
             return;
         }
         self.reading.borrow_mut().remove(&batch.node);
+        let node = batch.node;
+        // A change while this read was out (reread) may be missing from it: one more read once it is shown.
+        let changed = self.stale.borrow_mut().remove(&node);
+        self.show_children(batch);
+        if changed {
+            self.reread(node);
+        }
+    }
+
+    /// `add_children`'s batch, put in the tree.
+    fn show_children(&self, batch: TreeBatch) {
         if batch.node == 0 {
             // The user folders go after Bookmarks (always the first root) and before This PC.
             let mut after = HTREEITEM(self.root());
@@ -496,6 +520,7 @@ impl FolderTree {
                 let tv = unsafe { &*(nm as *const NMTREEVIEWW) };
                 if tv.action.0 & TVE_COLLAPSE.0 != 0 {
                     self.reading.borrow_mut().remove(&tv.itemNew.hItem.0);
+                    self.stale.borrow_mut().remove(&tv.itemNew.hItem.0);
                     send(self.hwnd, TVM_EXPAND, (TVE_COLLAPSE.0 | TVE_COLLAPSERESET.0) as usize, tv.itemNew.hItem.0);
                 }
                 None
@@ -504,6 +529,7 @@ impl FolderTree {
                 // The handle dies with the node (collapse, fill(), shutdown); a read still in flight must not insert under it.
                 let node = unsafe { (*(nm as *const NMTREEVIEWW)).itemOld.hItem.0 };
                 self.reading.borrow_mut().remove(&node);
+                self.stale.borrow_mut().remove(&node);
                 self.paths.borrow_mut().remove(&node);
                 None
             }

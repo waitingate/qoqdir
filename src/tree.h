@@ -5,6 +5,7 @@
 
 #include <functional>
 #include <map>
+#include <set>
 
 // Subfolders of one node, read on a worker thread and posted to the tree's parent window.
 struct TreeBatch {
@@ -32,6 +33,7 @@ public:
     void refresh();         // F5: reads again the folders whose subfolders are shown or known to be none (5.5)
     void refreshFolder(const std::wstring& dir);   // the same for that folder's nodes alone
     void addChildren(const TreeBatch& batch);
+    UINT batchMessage() const { return batchMsg_; }   // what a read's result comes back as (self-test)
     void setIcons(HTREEITEM node, const IconBatch& batch);
 
     // Path of the node under a screen point, or of the selected node when pt is (-1,-1). 'shortcut', when given,
@@ -48,6 +50,7 @@ private:
                   HTREEITEM after = TVI_LAST);   // a bookmark shortcut gets no expand arrow
     void startReading(HTREEITEM node);
     void reread(HTREEITEM node);   // what refresh() does for one node
+    void showChildren(const TreeBatch& batch);   // addChildren's batch, put in the tree
     // Runs `reader` on a worker thread to fill a batch, then posts it as the children of `node`.
     void startWorker(HTREEITEM node, std::function<void(TreeBatch&)> reader);
     const std::wstring& pathOf(HTREEITEM node) const;
@@ -61,6 +64,7 @@ private:
     struct Node { std::wstring path; bool shortcut = false; };   // a bookmark shortcut, or a folder (its own path)
     std::map<HTREEITEM, Node> paths_;         // each node's folder or shortcut; a node leaves it when deleted
     std::map<HTREEITEM, unsigned> reading_;   // nodes whose subfolders are being read, by read number
+    std::set<HTREEITEM> stale_;               // ...that changed meanwhile: read once more after (5.5)
     bool bookmarksEmpty_ = false;             // Bookmarks was read and found empty (it keeps its arrow)
     ULONGLONG openAt_ = 0;                    // when the node a drag lights up opens (0: done)
     std::optional<std::wstring> dropFolder_;  // and where a drop on that node goes

@@ -1504,6 +1504,26 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
             SendMessageW(tree_.hwnd(), WM_KEYDOWN, VK_RIGHT, 0);
         },
         [=, this] { return nodeTexts(TreeView_GetChild(tree_.hwnd(), one())) == L"deep"; });
+    // A change that comes while a node is being read: that read may have listed the folder before it, so one more
+    // follows (5.5). Made where no watch sees it, only that second read can show it.
+    add(L"a change to a tree folder while it is being read shows once that read is in (5.5)",
+        [=, this] {
+            tree_.refreshFolder(path(L"Bookmarks\\one"));   // a read of "one" goes out...
+            MSG m;
+            ULONGLONG start = GetTickCount64();   // ...and lists the folder: its result waits in the queue
+            while (!PeekMessageW(&m, wnd_, tree_.batchMessage(), tree_.batchMessage(), PM_NOREMOVE) &&
+                   GetTickCount64() - start < 2000)
+                Sleep(5);
+            CreateDirectoryW(path(L"Bookmarks\\one\\fresh").c_str(), nullptr);
+            tree_.refreshFolder(path(L"Bookmarks\\one"));   // the change, as a watch tells it, while that read is out
+        },
+        [=, this] { return nodeTexts(TreeView_GetChild(tree_.hwnd(), one())) == L"deep,fresh"; });
+    add(L"(remove it)",
+        [=, this] {
+            RemoveDirectoryW(path(L"Bookmarks\\one\\fresh").c_str());
+            tree_.refreshFolder(path(L"Bookmarks\\one"));
+        },
+        [=, this] { return nodeTexts(TreeView_GetChild(tree_.hwnd(), one())) == L"deep"; });
     add(L"F5 reads the folders open in the tree again: one that is the same stays as it is (\"one\" stays open), one "
         L"that changed shows its new subfolder (5.5)",
         [=, this] {
@@ -1705,13 +1725,15 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
             tree_.refreshFolder(tree_.bookmarks());
         },
         [=, this] { return bookmarkNodes() == L"one,two,sub"; });
+    // These two wait for Explorer to pass on another program's change, which has taken it more than 5 s here after
+    // this test's own floods of changes (10,000 folders, 300 shortcuts): not a false alarm when the machine is busy.
     add(L"a shortcut another program makes in Bookmarks (or an Alt+drag onto its node) shows in the tree while another "
         L"folder is shown (5.5)",
         [=, this] { makeShortcut(path(L"Bookmarks\\dropped.lnk"), path(L"sub")); },
-        [=, this] { return bookmarkNodes() == L"one,two,dropped,sub"; });
+        [=, this] { return bookmarkNodes() == L"one,two,dropped,sub"; }, 20000);
     add(L"(and leaves the tree when deleted)",
         [=, this] { DeleteFileW(path(L"Bookmarks\\dropped.lnk").c_str()); },
-        [=, this] { return bookmarkNodes() == L"one,two,sub"; });
+        [=, this] { return bookmarkNodes() == L"one,two,sub"; }, 20000);
 
     // Speed: a folder with 10,000 files.
     add(L"loads a 10,000-file folder",
