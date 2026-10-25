@@ -272,6 +272,8 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
 
     // 6 items: the 5 test files and folders, plus the self-test's own Bookmarks folder.
     add(L"opens the start folder with all 6 items", nullptr, [=, this] { return at(dir) && list_.count() == 6; });
+    add(L"at start, the status bar says F1 shows the keys (5.10)", nullptr,
+        [=, this] { return message() == L"F1 shows the keys"; });
     add(L"shows a Chinese file name", nullptr, [=, this] { return listed(L"\u5831\u544A.pdf"); });
     add(L"the folder Qoqdir was started from is not kept open (its working folder is the system folder)", nullptr,
         [=, this] {

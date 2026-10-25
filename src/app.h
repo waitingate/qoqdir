@@ -214,6 +214,7 @@ private:
     } queuedView_;
     bool loadMessageShown_ = false; // the status bar says "Loading..." or "not available" (setMessage clears it)
     const wchar_t* lateHint_ = nullptr;   // a hint for when the folder being loaded lands (a navigation clears messages)
+    bool firstFolder_ = true;   // no folder shown yet: the first says "F1 shows the keys" (5.10)
 
     std::vector<Tab> tabs_;
     int active_ = 0;

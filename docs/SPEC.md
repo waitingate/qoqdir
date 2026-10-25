@@ -567,6 +567,9 @@ qoqdir [options] [folder ...]
   Ctrl+C. No tab stops: a message box lines up columns in one font only. It
   ends with the command line by example and "More detail: type qoqdir --help in
   a terminal".
+- When the first folder shows at start, the status bar says "F1 shows the
+  keys", unless it says something else by then; a folder that fails to open
+  says why instead.
 - `--selftest` runs the self-test (7.2) in `qoqdir-test.exe`; the exe users get
   treats it as an unknown option. It isn't in the help.
 
@@ -660,8 +663,8 @@ The test folder starts with a few files (one with a Chinese name), a subfolder
 `sub` and the test Bookmarks folder. Each scenario is an action and the expected
 result:
 
-1. Start: the test folder shows the expected item count, and the Chinese name
-   shows correctly.
+1. Start: the test folder shows the expected item count, the status bar says
+   "F1 shows the keys", and the Chinese name shows correctly.
 2. Typing letters in the list moves the focus to the filter box and filters the
    list, and the status bar says so, this first time. Esc clears the filter and
    goes back to the list. (The first Backspace that goes up is said the same

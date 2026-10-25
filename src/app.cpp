@@ -1094,6 +1094,8 @@ void App::onLoaded(Listing&& listing, UINT generation) {
     } else if (!samePath(old, t.path)) {
         showLocation();
     }
+    // The first folder shown says how to see the keys (5.10), unless the status bar says something else by now.
+    if (std::exchange(firstFolder_, false) && message().empty()) setMessage(L"F1 shows the keys");
     showStatus();
 }
 

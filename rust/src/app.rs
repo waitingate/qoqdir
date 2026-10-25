@@ -285,6 +285,7 @@ pub struct App {
     asking: Cell<bool>,    // the "Save these tabs?" box is up: a second WM_CLOSE is ignored (5.7)
     hinted_filter: Cell<bool>, // the two things Explorer users don't expect, said once (5.3)
     hinted_up: Cell<bool>,
+    first_folder: Cell<bool>, // no folder shown yet: the first says "F1 shows the keys" (5.10)
     pub late_hint: Cell<Option<&'static str>>, // a hint for when the folder being loaded lands (a navigation clears messages)
     gray: HBRUSH,          // the window's soft gray: lives as long as the process
 }
@@ -638,6 +639,7 @@ impl App {
                 asking: Cell::new(false),
                 hinted_filter: Cell::new(false),
                 hinted_up: Cell::new(false),
+                first_folder: Cell::new(true),
                 late_hint: Cell::new(None),
                 gray: CreateSolidBrush(BACKGROUND),
             });
@@ -1951,6 +1953,10 @@ impl App {
             self.set_message(hint.unwrap_or("")); // a navigation clears the message, or says its hint
         } else if !old.same(&location) {
             self.show_location(false);
+        }
+        // The first folder shown says how to see the keys (5.10), unless the status bar says something else by now.
+        if self.first_folder.replace(false) && self.status_message().is_empty() {
+            self.set_message("F1 shows the keys");
         }
         self.show_status();
     }

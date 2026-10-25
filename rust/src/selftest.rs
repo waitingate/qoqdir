@@ -598,6 +598,9 @@ impl App {
 
         // 6 items: the 5 test files and folders, plus the self-test's own Bookmarks folder.
         s.check("opens the start folder with all 6 items", move |a| a.at(&dir()) && a.list.count() == 6);
+        s.check("at start, the status bar says F1 shows the keys (5.10)", |a| {
+            a.status_message() == "F1 shows the keys"
+        });
         s.check("shows a Chinese file name", |a| a.listed("\u{5831}\u{544A}.pdf"));
         s.check("the folder Qoqdir was started from is not kept open (its working folder is the system folder)", |_| {
             let cwd = std::env::current_dir().unwrap_or_default();
