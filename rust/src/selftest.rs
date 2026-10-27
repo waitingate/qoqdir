@@ -15,12 +15,12 @@ use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
 
 use windows::Win32::Foundation::{
-    ERROR_BAD_NETPATH, HGLOBAL, HWND, LPARAM, POINT, POINTL, RECT, WPARAM,
+    COLORREF, ERROR_BAD_NETPATH, HGLOBAL, HWND, LPARAM, POINT, POINTL, RECT, WPARAM,
 };
 use windows::Win32::Graphics::Gdi::{
     COLOR_WINDOW, ClientToScreen, GetMonitorInfoW, GetSysColor, GetSysColorBrush, MONITOR_DEFAULTTONEAREST, MONITORINFO,
     MonitorFromWindow, CreateCompatibleBitmap, CreateCompatibleDC, DeleteDC, DeleteObject, FillRect, GetDC, GetPixel,
-    ReleaseDC, SelectObject,
+    HDC, ReleaseDC, SelectObject,
 };
 use windows::Win32::Storage::FileSystem::{
     DDD_EXACT_MATCH_ON_REMOVE, DDD_NO_BROADCAST_SYSTEM, DDD_REMOVE_DEFINITION, DefineDosDeviceW, FILE_ATTRIBUTE_ARCHIVE,
@@ -39,7 +39,7 @@ use windows::Win32::System::Ole::{
 };
 use windows::Win32::System::SystemServices::{MK_CONTROL, MK_LBUTTON};
 use windows::Win32::UI::Controls::{
-    EM_GETCUEBANNER,
+    EM_GETCUEBANNER, LVIR_BOUNDS,
     EM_SETSEL, EM_GETSEL, EM_REPLACESEL, HTREEITEM, LVIF_IMAGE, LVIR_LABEL, LVITEMW, LVM_CANCELEDITLABEL, LVM_GETBKCOLOR, LVM_GETCOUNTPERPAGE,
     LVM_GETTEXTBKCOLOR, TVM_GETBKCOLOR,
     LVM_GETITEMRECT, LVM_GETITEMW, TCIF_TEXT, TCITEMW,
@@ -65,7 +65,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
     MSG, PM_NOREMOVE, PeekMessageW,
     KillTimer, PostMessageW, SW_SHOWMINNOACTIVE, SW_SHOWNOACTIVATE, SetTimer, ShowWindow, WM_CHAR, WM_CLOSE,
     WM_DEVICECHANGE, WM_DPICHANGED, WM_KEYDOWN, WM_LBUTTONDBLCLK, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONUP, WM_MOUSEMOVE, WM_MOUSEWHEEL,
-    WM_NCHITTEST, WM_SYSKEYDOWN, WM_TIMER, PRF_CLIENT, WM_PRINTCLIENT,
+    WM_NCHITTEST, WM_SYSKEYDOWN, WM_TIMER, PRF_CLIENT, PRF_ERASEBKGND, WM_PRINTCLIENT,
 };
 
 use crate::app::{App, Key, Nav, TIMER_LOADING, TIMER_REFRESH, ViewState};
@@ -580,6 +580,42 @@ impl App {
         from_wide(&text).to_string_lossy().into_owned()
     }
 
+    /// The list drawn into a bitmap, as the filter box is: which rows have a line under them, and whether one shows
+    /// below the last row, where the next would be (5.2).
+    fn row_lines(&self) -> (Vec<bool>, bool) {
+        /// How much of pixel row `y` of `dc`, from `from` to `to`, has the colour `line`.
+        fn share(dc: HDC, line: COLORREF, y: i32, from: i32, to: i32) -> f64 {
+            let n = (from..to).filter(|&x| unsafe { GetPixel(dc, x, y) } == line).count();
+            if to > from { n as f64 / f64::from(to - from) } else { 0.0 }
+        }
+        let lv = self.list.hwnd();
+        let Some(line) = self.list.line_color() else { return (Vec::new(), true) };
+        let rc = client_rect(lv);
+        let (mut lined, mut last) = (Vec::new(), RECT::default());
+        unsafe {
+            let screen = GetDC(Some(lv));
+            let dc = CreateCompatibleDC(Some(screen));
+            let bitmap = CreateCompatibleBitmap(screen, rc.right, rc.bottom);
+            let old = SelectObject(dc, bitmap.into());
+            send(lv, WM_PRINTCLIENT, dc.0 as usize, (PRF_CLIENT | PRF_ERASEBKGND) as isize);
+            for row in 0..self.list.count() {
+                let mut r = RECT { left: LVIR_BOUNDS as i32, ..Default::default() };
+                if send(lv, LVM_GETITEMRECT, row, &mut r as *mut _ as isize) == 0 || r.bottom > rc.bottom {
+                    break;
+                }
+                lined.push(share(dc, line, r.bottom - 1, r.left.max(0), r.right.min(rc.right)) > 0.9);
+                last = r;
+            }
+            let under = last.bottom + (last.bottom - last.top) - 1; // where a line under one more row would be
+            let below = under < rc.bottom && share(dc, line, under, 0, rc.right) > 0.0;
+            SelectObject(dc, old);
+            let _ = DeleteObject(bitmap.into());
+            let _ = DeleteDC(dc);
+            ReleaseDC(Some(lv), screen);
+            (lined, below)
+        }
+    }
+
     /// The filter box drawn into a bitmap: whether its right third has anything on it but the box's own paper, as the
     /// funnel the empty box shows does (5.1). A bitmap, so a window over this one on screen makes no difference.
     fn funnel_shown(&self) -> bool {
@@ -676,6 +712,20 @@ impl App {
         s.add("(empty again, it shows the funnel)", |a| set_text(a.filter, ""), |a| {
             a.list.count() == 6 && a.funnel_shown()
         });
+        s.add(
+            "a pale line runs under each row of the list, not under a selected one, and none below the last row (5.2)",
+            |a| {
+                a.select_one("sub");
+            },
+            |a| {
+                let (lined, below) = a.row_lines();
+                let sub = a.row_of("sub");
+                // Lined rows besides "sub": one may lack it while the mouse is over it (hot).
+                let others = lined.iter().enumerate().filter(|&(i, &l)| Some(i) != sub && l).count();
+                note(format!("{others} other row(s) lined"));
+                lined.len() == 6 && sub.is_some_and(|s| !lined[s]) && others >= 4 && !below
+            },
+        );
         s.add(
             "typing in the list filters it, and the status bar says so the first time",
             |a| {

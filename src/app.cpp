@@ -36,6 +36,7 @@ std::atomic<UINT> g_keptLoad{0};   // a tab switch's load a move took over: it r
 
 constexpr COLORREF kBackground = RGB(235, 235, 235);   // soft gray: less glare than white
 constexpr COLORREF kHint = RGB(160, 160, 160);         // the empty filter box's funnel: there, but quiet (5.1)
+constexpr COLORREF kLine = RGB(219, 219, 219);         // the line under each row of the list: there, but quiet (5.2)
 
 bool highContrastOn() {
     HIGHCONTRASTW hc{sizeof hc, 0, nullptr};
@@ -330,6 +331,7 @@ void App::applyColors(bool highContrast) {
     COLORREF color = highContrast ? GetSysColor(COLOR_WINDOW) : kBackground;
     ListView_SetBkColor(list_.hwnd(), color);
     ListView_SetTextBkColor(list_.hwnd(), color);
+    list_.setLineColor(highContrast ? GetSysColor(COLOR_GRAYTEXT) : kLine);
     TreeView_SetBkColor(tree_.hwnd(), color);
     SetClassLongPtrW(wnd_, GCLP_HBRBACKGROUND, LONG_PTR(highContrast ? GetSysColorBrush(COLOR_WINDOW) : gray));
     InvalidateRect(wnd_, nullptr, TRUE);

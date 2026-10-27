@@ -50,6 +50,9 @@ public:
 
     std::vector<int> columnWidths() const;
     void setColumnWidths(const std::vector<int>& widths);
+    // The line under each row (5.2): drawn while the list paints, in this colour (CLR_NONE: none).
+    void setLineColor(COLORREF color);
+    COLORREF lineColor() const { return lineColor_; }
 
     // Handles display-only notifications. Returns false for ones the app must handle.
     bool onNotify(NMHDR* nm, LRESULT* result);
@@ -70,4 +73,5 @@ private:
     int total_ = 0;
     SortKey key_ = SortKey::Name;
     bool asc_ = true;
+    COLORREF lineColor_ = CLR_NONE;   // the line under each row (setLineColor)
 };

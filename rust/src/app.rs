@@ -133,6 +133,7 @@ const MAX_HISTORY: usize = 100;
 /// Soft gray (#EBEBEB): less glare than white.
 const BACKGROUND: COLORREF = COLORREF(0x00EBEBEB);
 const HINT: COLORREF = COLORREF(0x00A0A0A0); // the empty filter box's funnel: there, but quiet (5.1)
+const LINE: COLORREF = COLORREF(0x00DBDBDB); // the line under each row of the list: there, but quiet (5.2)
 const SPLITTER_WIDTH: i32 = 5; // in 96-DPI units
 const EN_CHANGE: u32 = 0x0300;
 const BN_CLICKED: u32 = 0;
@@ -846,6 +847,7 @@ impl App {
         let color = if high_contrast { COLORREF(unsafe { GetSysColor(COLOR_WINDOW) }) } else { BACKGROUND };
         send(self.list.hwnd(), LVM_SETBKCOLOR, 0, color.0 as isize);
         send(self.list.hwnd(), LVM_SETTEXTBKCOLOR, 0, color.0 as isize);
+        self.list.set_line_color(if high_contrast { COLORREF(unsafe { GetSysColor(COLOR_GRAYTEXT) }) } else { LINE });
         send(self.tree.hwnd(), TVM_SETBKCOLOR, 0, color.0 as isize);
         unsafe {
             let brush = if high_contrast { GetSysColorBrush(COLOR_WINDOW) } else { self.gray };

@@ -248,6 +248,11 @@ void FileList::showSortArrow() {
     }
 }
 
+void FileList::setLineColor(COLORREF color) {
+    lineColor_ = color;
+    InvalidateRect(lv_, nullptr, FALSE);
+}
+
 // ---------------------------------------------------------------- notifications
 
 bool FileList::onNotify(NMHDR* nm, LRESULT* result) {
@@ -288,6 +293,27 @@ bool FileList::onNotify(NMHDR* nm, LRESULT* result) {
         if (dot != std::wstring::npos && dot > 0)
             PostMessageW(ListView_GetEditControl(lv_), EM_SETSEL, 0, LPARAM(dot));
         *result = FALSE;
+        return true;
+    }
+    case NM_CUSTOMDRAW: {
+        // A pale line under each row, so the eye can follow it across the columns (5.2), drawn once the row is: not
+        // under a selected, focused or hot row, whose own frame marks it. Rows that aren't there get none.
+        auto* cd = reinterpret_cast<NMLVCUSTOMDRAW*>(nm);
+        *result = CDRF_DODEFAULT;
+        if (cd->nmcd.dwDrawStage == CDDS_PREPAINT) *result = CDRF_NOTIFYITEMDRAW;
+        if (cd->nmcd.dwDrawStage == CDDS_ITEMPREPAINT) *result = CDRF_NOTIFYPOSTPAINT;
+        if (cd->nmcd.dwDrawStage == CDDS_ITEMPOSTPAINT && lineColor_ != CLR_NONE) {
+            int row = int(cd->nmcd.dwItemSpec);
+            bool framed = (cd->nmcd.uItemState & (CDIS_FOCUS | CDIS_HOT)) ||
+                          ListView_GetItemState(lv_, row, LVIS_SELECTED);
+            RECT r{};
+            if (!framed && ListView_GetItemRect(lv_, row, &r, LVIR_BOUNDS)) {
+                r.top = r.bottom - 1;
+                COLORREF old = SetDCBrushColor(cd->nmcd.hdc, lineColor_);
+                FillRect(cd->nmcd.hdc, &r, static_cast<HBRUSH>(GetStockObject(DC_BRUSH)));
+                SetDCBrushColor(cd->nmcd.hdc, old);
+            }
+        }
         return true;
     }
     case LVN_ODFINDITEMW:

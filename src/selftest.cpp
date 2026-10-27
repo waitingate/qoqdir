@@ -334,6 +334,50 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
         [=, this] { return list_.count() == 0 && !funnelShown(); });
     add(L"(empty again, it shows the funnel)", [=, this] { SetWindowTextW(filter_, L""); },
         [=, this] { return list_.count() == 6 && funnelShown(); });
+    // The list drawn into a bitmap, as the filter box is: which rows have a line under them, and whether one shows
+    // below the last row, where the next would be (5.2).
+    auto rowLines = [this](std::vector<bool>& lined, bool& below) {
+        HWND lv = list_.hwnd();
+        COLORREF line = list_.lineColor();
+        RECT rc;
+        GetClientRect(lv, &rc);
+        HDC screen = GetDC(lv);
+        HDC dc = CreateCompatibleDC(screen);
+        HBITMAP bitmap = CreateCompatibleBitmap(screen, rc.right, rc.bottom);
+        HGDIOBJ old = SelectObject(dc, bitmap);
+        SendMessageW(lv, WM_PRINTCLIENT, reinterpret_cast<WPARAM>(dc), PRF_CLIENT | PRF_ERASEBKGND);
+        auto share = [&](int y, int from, int to) {   // how much of a pixel row has the line's colour
+            int n = 0;
+            for (int x = from; x < to; ++x) n += GetPixel(dc, x, y) == line;
+            return to > from ? double(n) / (to - from) : 0.0;
+        };
+        lined.clear();
+        RECT last{};
+        for (int row = 0; row < list_.count(); ++row) {
+            RECT r{};
+            if (!ListView_GetItemRect(lv, row, &r, LVIR_BOUNDS) || r.bottom > rc.bottom) break;
+            lined.push_back(share(r.bottom - 1, std::max(LONG(0), r.left), std::min(r.right, rc.right)) > 0.9);
+            last = r;
+        }
+        int under = last.bottom + (last.bottom - last.top) - 1;   // where a line under one more row would be
+        below = under < rc.bottom && share(under, 0, rc.right) > 0;
+        SelectObject(dc, old);
+        DeleteObject(bitmap);
+        DeleteDC(dc);
+        ReleaseDC(lv, screen);
+    };
+    auto subRow = std::make_shared<int>(-1);
+    add(L"a pale line runs under each row of the list, not under a selected one, and none below the last row (5.2)",
+        [=, this] { *subRow = list_.select({L"sub"}, L"sub"); },
+        [=, this] {
+            std::vector<bool> lined;
+            bool below = true;
+            rowLines(lined, below);
+            int others = 0;   // lined rows besides "sub": one may lack it while the mouse is over it (hot)
+            for (size_t i = 0; i < lined.size(); ++i) others += int(i) != *subRow && lined[i];
+            selfTest_->note = std::to_wstring(others) + L" other row(s) lined";
+            return lined.size() == 6 && *subRow >= 0 && !lined[size_t(*subRow)] && others >= 4 && !below;
+        });
     add(L"typing in the list filters it, and the status bar says so the first time",
         [=, this] { SetFocus(list_.hwnd()); selfTestType(L"file"); },
         [=, this] {

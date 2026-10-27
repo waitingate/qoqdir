@@ -3,13 +3,13 @@
 //! clears the selection with them, so no row or selection can point at the wrong file. The model is
 //! never borrowed while a message goes to the ListView, which can call straight back into `on_notify`.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet};
 use std::ffi::{OsStr, OsString};
 use std::path::PathBuf;
 
-use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
-use windows::Win32::Graphics::Gdi::InvalidateRect;
+use windows::Win32::Foundation::{COLORREF, HWND, LPARAM, LRESULT, RECT, WPARAM};
+use windows::Win32::Graphics::Gdi::{DC_BRUSH, FillRect, GetStockObject, HBRUSH, InvalidateRect, SetDCBrushColor};
 use windows::Win32::Storage::FileSystem::FILE_ATTRIBUTE_HIDDEN;
 use windows::Win32::UI::Controls::{
     HDI_FORMAT, HDITEMW, HDS_FLAT, HDF_SORTDOWN, HDF_SORTUP, HDM_GETITEMW, HDM_SETITEMW, LIST_VIEW_ITEM_STATE_FLAGS,
@@ -21,6 +21,8 @@ use windows::Win32::UI::Controls::{
     LVN_ODFINDITEMW, LVNI_FOCUSED, LVNI_SELECTED, LVS_EDITLABELS, LVS_EX_DOUBLEBUFFER, LVS_EX_FULLROWSELECT,
     LVS_OWNERDATA, LVS_REPORT, LVS_SHAREIMAGELISTS, LVS_SHOWSELALWAYS, LVSIL_SMALL, NMHDR, NMLISTVIEW,
     NMLVDISPINFOW, EM_SETSEL, HEADER_CONTROL_FORMAT_FLAGS,
+    CDDS_ITEMPOSTPAINT, CDDS_ITEMPREPAINT, CDDS_PREPAINT, CDIS_FOCUS, CDIS_HOT, CDRF_DODEFAULT, CDRF_NOTIFYITEMDRAW,
+    CDRF_NOTIFYPOSTPAINT, LVM_GETITEMSTATE, NM_CUSTOMDRAW, NMLVCUSTOMDRAW,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, GWL_STYLE, GetWindowLongPtrW, HMENU, PostMessageW, SetWindowLongPtrW, WINDOW_EX_STYLE, WINDOW_STYLE,
@@ -59,6 +61,7 @@ pub struct FileList {
     hwnd: HWND,
     model: RefCell<Model>,
     own_icons: RefCell<HashMap<PathBuf, i32>>, // full path -> own icon, for the folder shown
+    line_color: Cell<Option<COLORREF>>,        // the line under each row (set_line_color): none until set
 }
 
 impl FileList {
@@ -106,6 +109,7 @@ impl FileList {
         let list = FileList {
             hwnd,
             own_icons: RefCell::new(HashMap::new()),
+            line_color: Cell::new(None),
             model: RefCell::new(Model {
                 location: Location::ThisPc,
                 shown: false,
@@ -447,6 +451,19 @@ impl FileList {
         }
     }
 
+    /// The line under each row (5.2): drawn while the list paints, in this colour.
+    pub fn set_line_color(&self, color: COLORREF) {
+        self.line_color.set(Some(color));
+        unsafe {
+            let _ = InvalidateRect(Some(self.hwnd), None, false);
+        }
+    }
+
+    #[cfg(feature = "selftest")] // only the self-test asks
+    pub fn line_color(&self) -> Option<COLORREF> {
+        self.line_color.get()
+    }
+
     // ------------------------------------------------------------ notifications
 
     /// Handles display-only notifications. Returns None for ones the app handles.
@@ -497,6 +514,34 @@ impl FileList {
                     }
                 }
                 Some(LRESULT(0))
+            }
+            NM_CUSTOMDRAW => {
+                // A pale line under each row, so the eye can follow it across the columns (5.2), drawn once the row
+                // is: not under a selected, focused or hot row, whose own frame marks it. Rows that aren't there get
+                // none.
+                let cd = unsafe { &*(nm as *const NMLVCUSTOMDRAW) };
+                let stage = cd.nmcd.dwDrawStage;
+                if stage == CDDS_PREPAINT {
+                    return Some(LRESULT(CDRF_NOTIFYITEMDRAW as isize));
+                }
+                if stage == CDDS_ITEMPREPAINT {
+                    return Some(LRESULT(CDRF_NOTIFYPOSTPAINT as isize));
+                }
+                if stage == CDDS_ITEMPOSTPAINT && let Some(color) = self.line_color.get() {
+                    let row = cd.nmcd.dwItemSpec;
+                    let framed = (cd.nmcd.uItemState.0 & (CDIS_FOCUS.0 | CDIS_HOT.0)) != 0
+                        || send(self.hwnd, LVM_GETITEMSTATE, row, LVIS_SELECTED.0 as isize) != 0;
+                    let mut r = RECT { left: LVIR_BOUNDS as i32, ..Default::default() };
+                    if !framed && send(self.hwnd, LVM_GETITEMRECT, row, &mut r as *mut _ as isize) != 0 {
+                        r.top = r.bottom - 1;
+                        unsafe {
+                            let old = SetDCBrushColor(cd.nmcd.hdc, color);
+                            FillRect(cd.nmcd.hdc, &r, HBRUSH(GetStockObject(DC_BRUSH).0));
+                            SetDCBrushColor(cd.nmcd.hdc, old);
+                        }
+                    }
+                }
+                Some(LRESULT(CDRF_DODEFAULT as isize))
             }
             LVN_ODFINDITEMW => Some(LRESULT(-1)), // typing goes to the filter box instead
             _ => None,
