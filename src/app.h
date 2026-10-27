@@ -190,6 +190,7 @@ private:
          filter_ = nullptr, tabBar_ = nullptr, plus_ = nullptr, status_ = nullptr, tips_ = nullptr, lastFocus_ = nullptr;
     FileList list_;
     FolderTree tree_;
+    Com<IDropTarget> listDrop_;     // files dropped on the list go to a folder row, or the folder shown
     Com<IDropTarget> tabDrop_;      // files dropped on a tab go to its folder
     Com<IDropTarget> treeDrop_;     // and on a folder in the tree, to that folder
     int dropTab_ = -1;              // tab highlighted during a drag

@@ -19,6 +19,7 @@ void FileList::create(HWND parent, int id) {
                               LVS_EDITLABELS | LVS_SHAREIMAGELISTS,
                           0, 0, 0, 0, parent, reinterpret_cast<HMENU>(INT_PTR(id)), GetModuleHandleW(nullptr), nullptr);
     ListView_SetExtendedListViewStyle(lv_, LVS_EX_FULLROWSELECT | LVS_EX_DOUBLEBUFFER);
+    ListView_SetCallbackMask(lv_, LVIS_DROPHILITED);   // the drop highlight is kept here (dropFolder)
     setTheme(lv_, L"Explorer");
     // The column header in Windows' plain flat look: a light gray that goes with the list's (the themed one is white).
     HWND header = ListView_GetHeader(lv_);
@@ -97,6 +98,9 @@ void FileList::update(bool keepSelection, const std::function<void()>& change) {
         ++total_;
         if (matchesFilter(items_[i], filter_)) view_.push_back(i);
     }
+    // A drop's lit row is a row, not a file: the next move over the list works it out again (dropFolder).
+    overRow_ = -1;
+    dropFolder_.reset();
     ListView_SetItemState(lv_, -1, 0, LVIS_SELECTED | LVIS_FOCUSED);
     ListView_SetItemCountEx(lv_, int(view_.size()), LVSICF_NOSCROLL);
     InvalidateRect(lv_, nullptr, FALSE);
@@ -253,6 +257,30 @@ void FileList::setLineColor(COLORREF color) {
     InvalidateRect(lv_, nullptr, FALSE);
 }
 
+// ---------------------------------------------------------------- drops
+
+std::optional<std::wstring> FileList::dropFolder(const POINT* screenPt, bool own) {
+    int row = -1;
+    if (screenPt && !dir_.empty()) {
+        LVHITTESTINFO hit{};
+        hit.pt = *screenPt;
+        ScreenToClient(lv_, &hit.pt);
+        row = ListView_HitTest(lv_, &hit);
+        if (row >= count() || (own && row >= 0 && ListView_GetItemState(lv_, row, LVIS_SELECTED))) row = -1;
+    }
+    if (row != overRow_) {   // a new row: what it takes is worked out once, as the tree does for a node
+        int lit = litRow();
+        overRow_ = row;
+        dropFolder_.reset();
+        if (row >= 0 && at(row).isDir()) dropFolder_ = joinPath(dir_, at(row).name);
+        else if (row >= 0 && isShortcut(at(row).name)) dropFolder_ = localFolder(joinPath(dir_, at(row).name), true);
+        for (int r : {lit, litRow()})
+            if (r >= 0) ListView_RedrawItems(lv_, r, r);
+        UpdateWindow(lv_);
+    }
+    return dropFolder_;
+}
+
 // ---------------------------------------------------------------- notifications
 
 bool FileList::onNotify(NMHDR* nm, LRESULT* result) {
@@ -272,6 +300,8 @@ bool FileList::onNotify(NMHDR* nm, LRESULT* result) {
             lstrcpynW(lvi.pszText, text.c_str(), lvi.cchTextMax);
         }
         if (lvi.mask & LVIF_IMAGE) lvi.iImage = iconOf(it);   // not stored in the item: a file's own icon may come later
+        // The drop highlight, the one state kept here (the callback mask): a virtual list keeps no other.
+        if (lvi.mask & LVIF_STATE) lvi.state = lvi.iItem == litRow() ? LVIS_DROPHILITED : 0;
         return true;
     }
     case LVN_COLUMNCLICK: {
@@ -297,7 +327,8 @@ bool FileList::onNotify(NMHDR* nm, LRESULT* result) {
     }
     case NM_CUSTOMDRAW: {
         // A pale line under each row, so the eye can follow it across the columns (5.2), drawn once the row is: not
-        // under a selected, focused or hot row, whose own frame marks it. Rows that aren't there get none.
+        // under a selected, focused or hot row, or one a drag lights up, whose own frame marks it. Rows that aren't
+        // there get none.
         auto* cd = reinterpret_cast<NMLVCUSTOMDRAW*>(nm);
         *result = CDRF_DODEFAULT;
         if (cd->nmcd.dwDrawStage == CDDS_PREPAINT) *result = CDRF_NOTIFYITEMDRAW;
@@ -305,7 +336,7 @@ bool FileList::onNotify(NMHDR* nm, LRESULT* result) {
         if (cd->nmcd.dwDrawStage == CDDS_ITEMPOSTPAINT && lineColor_ != CLR_NONE) {
             int row = int(cd->nmcd.dwItemSpec);
             bool framed = (cd->nmcd.uItemState & (CDIS_FOCUS | CDIS_HOT)) ||
-                          ListView_GetItemState(lv_, row, LVIS_SELECTED);
+                          ListView_GetItemState(lv_, row, LVIS_SELECTED) || row == litRow();
             RECT r{};
             if (!framed && ListView_GetItemRect(lv_, row, &r, LVIR_BOUNDS)) {
                 r.top = r.bottom - 1;

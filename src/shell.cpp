@@ -673,6 +673,14 @@ void acknowledgeChange(WPARAM wp, LPARAM lp) {
 
 // ---------------------------------------------------------------- drag and drop
 
+std::optional<std::wstring> localFolder(std::wstring path, bool shortcut) {
+    bool folder = true;
+    if (shortcut) path = shortcutTarget(path, &folder).value_or(L"");
+    bool local = folder && path.size() >= 3 && path[1] == L':' &&
+                 GetDriveTypeW(path.substr(0, 3).c_str()) != DRIVE_REMOTE;
+    return local ? std::optional(path) : std::nullopt;
+}
+
 namespace {
 
 class DropTarget final : public IDropTarget {

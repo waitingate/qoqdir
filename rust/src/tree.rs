@@ -3,14 +3,11 @@
 use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet};
 use std::ffi::{OsStr, OsString};
-use std::os::windows::ffi::OsStrExt;
 use std::path::Path;
 
 use windows::Win32::Foundation::{HWND, POINT};
 use windows::Win32::Graphics::Gdi::ScreenToClient;
-use windows::Win32::Storage::FileSystem::GetDriveTypeW;
 use windows::Win32::System::SystemInformation::GetTickCount64;
-use windows::Win32::System::WindowsProgramming::DRIVE_REMOTE;
 use windows::Win32::UI::Controls::{
     HTREEITEM, NM_CLICK, NMHDR, NMTREEVIEWW, TVE_COLLAPSE, TVE_COLLAPSERESET, TVE_EXPAND, TVGN_CARET,
     TVGN_CHILD, TVGN_DROPHILITE, TVGN_NEXT, TVGN_NEXTVISIBLE, TVGN_PARENT, TVGN_ROOT, TVHITTESTINFO, TVHT_ONITEM, TVHT_ONITEMRIGHT,
@@ -33,9 +30,9 @@ use windows::core::{PWSTR, w};
 use crate::folder::{Location, SortKey, drive_roots, is_directory, is_shortcut, list_folder, sort_items, to_lower};
 use crate::shell::{
     IconBatch, describe, describe_shortcut, folder_icon, in_background, known_folder, post, read_own_icons, set_theme,
-    shortcut_target, system_image_list,
+    local_folder, shortcut_target, system_image_list,
 };
-use crate::util::{cursor_pos, pcwstr, send, wide};
+use crate::util::{cursor_pos, send, wide};
 
 /// Subfolders of one node, read on a worker thread and posted to the tree's parent window.
 pub struct TreeBatch {
@@ -104,26 +101,6 @@ fn read_children(batch: &mut TreeBatch, location: &Location, shortcuts: bool) {
                 .collect();
         }
     }
-}
-
-/// The local folder a node stands for: its own, or a bookmark shortcut's target (read from the .lnk alone). None for
-/// This PC, a link to a file or a web page, and anything on the network: asking Windows about a server that is off
-/// would freeze the drag.
-fn local_folder(location: Location, shortcut: bool) -> Option<Location> {
-    let path = location.path()?.to_path_buf(); // This PC: none
-    let location = if shortcut {
-        match shortcut_target(&path)? {
-            (target, true) => target,
-            _ => return None, // a link to a file
-        }
-    } else {
-        location
-    };
-    let w: Vec<u16> = location.path()?.as_os_str().encode_wide().collect();
-    let local = w.len() >= 3
-        && w[1] == u16::from(b':')
-        && unsafe { GetDriveTypeW(pcwstr(&[w[0], w[1], w[2], 0])) } != DRIVE_REMOTE;
-    local.then_some(location)
 }
 
 /// The user folders that exist, as roots, into `batch`. Worker thread: one on a dead server can take 20-60 s.

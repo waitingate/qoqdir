@@ -259,12 +259,15 @@ bool App::create(HINSTANCE instance, const CommandLine& cmd, bool useSettings) {
     SetWindowSubclass(filter_, filterProc, 1, 0);
     SetWindowSubclass(list_.hwnd(), middleClickProc, 1, 0);
     SetWindowSubclass(tree_.hwnd(), middleClickProc, 1, 0);
-    // Drops land in the current folder; never in This PC, and never back onto our own drag.
-    Com<IDropTarget> drop = newDropTarget(wnd_, [this](const POINT* pt) -> std::optional<std::wstring> {
-        if (!pt || draggingFiles_ || list_.dir().empty()) return std::nullopt;
+    // Drops land in the folder row under the pointer (or a shortcut's folder), which lights up, or else in the folder
+    // shown; never in This PC. Our own drag takes neither the folder it comes from nor a folder it carries (5.4).
+    listDrop_ = newDropTarget(wnd_, [this](const POINT* pt) -> std::optional<std::wstring> {
+        std::optional<std::wstring> row = list_.dropFolder(pt, draggingFiles_);
+        if (!pt || list_.dir().empty()) return std::nullopt;
+        if (row || draggingFiles_) return row;
         return list_.dir();
     });
-    RegisterDragDrop(list_.hwnd(), drop.get());
+    RegisterDragDrop(list_.hwnd(), listDrop_.get());
     // Dropping on a tab puts the files in that tab's folder.
     tabDrop_ = newDropTarget(wnd_, [this](const POINT* pt) { return tabDropTarget(pt); });
     RegisterDragDrop(tabBar_, tabDrop_.get());

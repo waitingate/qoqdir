@@ -255,6 +255,7 @@ pub struct App {
     status: HWND,
     pub list: FileList,
     pub tree: FolderTree,
+    pub list_drop: RefCell<Option<IDropTarget>>, // files dropped on the list go to a folder row, or the folder shown
     pub tab_drop: RefCell<Option<IDropTarget>>, // files dropped on a tab go to its folder
     pub tree_drop: RefCell<Option<IDropTarget>>, // and on a folder in the tree, to that folder
     pub drop_tab: Cell<Option<usize>>,          // tab highlighted during a drag
@@ -267,7 +268,7 @@ pub struct App {
     pub tree_width: Cell<i32>, // in 96-DPI units
     pub splitter_x: Cell<i32>,
     pub dragging: Cell<bool>,   // moving the tree/list splitter
-    dragging_files: Cell<bool>, // a drag started from our own list is in progress
+    pub dragging_files: Cell<bool>, // a drag started from our own list is in progress
     drag_source: RefCell<Option<Location>>, // the folder it came from: a drop back there does nothing (even after a load)
     pub refresh_queued: Cell<bool>,
     refresh_for_watch: Cell<bool>, // ...and only a change in the folder shown asked for it (on_folder_changed)
@@ -636,6 +637,7 @@ impl App {
                 status,
                 list,
                 tree,
+                list_drop: RefCell::new(None),
                 tab_drop: RefCell::new(None),
                 tree_drop: RefCell::new(None),
                 drop_tab: Cell::new(None),
@@ -690,17 +692,25 @@ impl App {
             let _ = SetWindowSubclass(filter, Some(filter_proc), 1, 0);
             let _ = SetWindowSubclass(app.list.hwnd(), Some(middle_click_proc), 1, 0);
             let _ = SetWindowSubclass(app.tree.hwnd(), Some(middle_click_proc), 1, 0);
-            // Drops land in the current folder; never in This PC, and never back onto our own drag.
+            // Drops land in the folder row under the pointer (or a shortcut's folder), which lights up, or else in the
+            // folder shown; never in This PC. Our own drag takes neither the folder it comes from nor a folder it
+            // carries (5.4).
             let weak: Weak<App> = Rc::downgrade(&app);
             let drop = new_drop_target(
                 wnd,
                 Box::new(move |pt| {
                     let app = weak.upgrade()?;
+                    let own = app.dragging_files.get();
+                    let row = app.list.drop_folder(pt, own);
                     let location = app.list.location();
-                    (pt.is_some() && !app.dragging_files.get() && matches!(location, Location::Dir(_))).then_some(location)
+                    if pt.is_none() || !matches!(location, Location::Dir(_)) {
+                        return None;
+                    }
+                    if row.is_some() || own { row } else { Some(location) }
                 }),
             );
             let _ = RegisterDragDrop(app.list.hwnd(), &drop);
+            *app.list_drop.borrow_mut() = Some(drop);
             // Dropping on a tab puts the files in that tab's folder.
             let weak: Weak<App> = Rc::downgrade(&app);
             let tab_drop = new_drop_target(wnd, Box::new(move |pt| weak.upgrade()?.tab_drop_target(pt)));

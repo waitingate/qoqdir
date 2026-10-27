@@ -5,6 +5,7 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::ffi::{OsStr, OsString};
 use std::mem::ManuallyDrop;
+use std::os::windows::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 
 use windows::Win32::Foundation::{
@@ -32,7 +33,7 @@ use windows::Win32::System::Ole::{
 };
 use windows::Win32::System::SystemServices::MODIFIERKEYS_FLAGS;
 use windows::Win32::System::Threading::{CreateEventW, INFINITE, SetEvent};
-use windows::Win32::System::WindowsProgramming::DRIVE_NO_ROOT_DIR;
+use windows::Win32::System::WindowsProgramming::{DRIVE_NO_ROOT_DIR, DRIVE_REMOTE};
 use windows::Win32::UI::Controls::HIMAGELIST;
 use windows::Win32::UI::Input::KeyboardAndMouse::{VK_CONTROL, VK_SHIFT};
 use windows::Win32::UI::Shell::Common::ITEMIDLIST;
@@ -929,6 +930,26 @@ pub fn acknowledge_change(wp: WPARAM, lp: LPARAM) {
 }
 
 // ---------------------------------------------------------------- drag and drop
+
+/// The local folder a tree node or a shortcut in the list stands for when files are dropped on it: its own, or the
+/// shortcut's target (read from the .lnk alone). None for This PC, a link to a file or a web page, and anything on the
+/// network: asking Windows about a server that is off would freeze the drag.
+pub fn local_folder(location: Location, shortcut: bool) -> Option<Location> {
+    let path = location.path()?.to_path_buf(); // This PC: none
+    let location = if shortcut {
+        match shortcut_target(&path)? {
+            (target, true) => target,
+            _ => return None, // a link to a file
+        }
+    } else {
+        location
+    };
+    let w: Vec<u16> = location.path()?.as_os_str().encode_wide().collect();
+    let local = w.len() >= 3
+        && w[1] == u16::from(b':')
+        && unsafe { GetDriveTypeW(pcwstr(&[w[0], w[1], w[2], 0])) } != DRIVE_REMOTE;
+    local.then_some(location)
+}
 
 /// The folder a drop goes to, for the cursor (None: refused); called with None when the drag leaves or ends.
 pub type DropTargetFn = Box<dyn Fn(Option<POINT>) -> Option<Location>>;

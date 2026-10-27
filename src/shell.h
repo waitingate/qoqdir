@@ -135,6 +135,11 @@ void acknowledgeChange(WPARAM wp, LPARAM lp);
 
 // ---------------------------------------------------------------- drag and drop
 
+// The local folder a tree node or a shortcut in the list stands for when files are dropped on it: its own, or the
+// shortcut's target (read from the .lnk alone). None for This PC, a link to a file or a web page, and anything on the
+// network: asking Windows about a server that is off would freeze the drag.
+std::optional<std::wstring> localFolder(std::wstring path, bool shortcut);
+
 // Drops go to the folder 'target' returns for the cursor (none: refused); nullptr means the drag left or ended.
 using DropTargetFn = std::function<std::optional<std::wstring>(const POINT* screenPt)>;
 Com<IDropTarget> newDropTarget(HWND owner, DropTargetFn target);

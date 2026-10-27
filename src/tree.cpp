@@ -42,17 +42,6 @@ void readChildren(TreeBatch& batch, const std::wstring& dir, bool shortcuts) {
     }
 }
 
-// The local folder a node stands for: its own, or a bookmark shortcut's target (read from the .lnk alone). None for
-// This PC, a link to a file or a web page, and anything on the network: asking Windows about a server that is off
-// would freeze the drag.
-std::optional<std::wstring> localFolder(std::wstring path, bool shortcut) {
-    bool folder = true;
-    if (shortcut) path = shortcutTarget(path, &folder).value_or(L"");
-    bool local = folder && path.size() >= 3 && path[1] == L':' &&
-                 GetDriveTypeW(path.substr(0, 3).c_str()) != DRIVE_REMOTE;
-    return local ? std::optional(path) : std::nullopt;
-}
-
 // The user folders that exist, as roots, into `batch`. Worker thread: one on a dead server can take 20-60 s.
 void readUserFolders(TreeBatch& batch) {
     const KNOWNFOLDERID* folders[] = {&FOLDERID_Desktop, &FOLDERID_Downloads, &FOLDERID_Documents,

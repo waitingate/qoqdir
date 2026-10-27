@@ -8,8 +8,10 @@ use std::collections::{HashMap, HashSet};
 use std::ffi::{OsStr, OsString};
 use std::path::PathBuf;
 
-use windows::Win32::Foundation::{COLORREF, HWND, LPARAM, LRESULT, RECT, WPARAM};
-use windows::Win32::Graphics::Gdi::{DC_BRUSH, FillRect, GetStockObject, HBRUSH, InvalidateRect, SetDCBrushColor};
+use windows::Win32::Foundation::{COLORREF, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
+use windows::Win32::Graphics::Gdi::{
+    DC_BRUSH, FillRect, GetStockObject, HBRUSH, InvalidateRect, ScreenToClient, SetDCBrushColor, UpdateWindow,
+};
 use windows::Win32::Storage::FileSystem::FILE_ATTRIBUTE_HIDDEN;
 use windows::Win32::UI::Controls::{
     HDI_FORMAT, HDITEMW, HDS_FLAT, HDF_SORTDOWN, HDF_SORTUP, HDM_GETITEMW, HDM_SETITEMW, LIST_VIEW_ITEM_STATE_FLAGS,
@@ -22,7 +24,8 @@ use windows::Win32::UI::Controls::{
     LVS_OWNERDATA, LVS_REPORT, LVS_SHAREIMAGELISTS, LVS_SHOWSELALWAYS, LVSIL_SMALL, NMHDR, NMLISTVIEW,
     NMLVDISPINFOW, EM_SETSEL, HEADER_CONTROL_FORMAT_FLAGS,
     CDDS_ITEMPOSTPAINT, CDDS_ITEMPREPAINT, CDDS_PREPAINT, CDIS_FOCUS, CDIS_HOT, CDRF_DODEFAULT, CDRF_NOTIFYITEMDRAW,
-    CDRF_NOTIFYPOSTPAINT, LVM_GETITEMSTATE, NM_CUSTOMDRAW, NMLVCUSTOMDRAW,
+    CDRF_NOTIFYPOSTPAINT, LVM_GETITEMSTATE, NM_CUSTOMDRAW, NMLVCUSTOMDRAW, LVHITTESTINFO, LVIF_STATE, LVIS_DROPHILITED,
+    LVM_HITTEST, LVM_REDRAWITEMS, LVM_SETCALLBACKMASK,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, GWL_STYLE, GetWindowLongPtrW, HMENU, PostMessageW, SetWindowLongPtrW, WINDOW_EX_STYLE, WINDOW_STYLE,
@@ -32,7 +35,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
 use windows::core::w;
 
 use crate::folder::{Item, Listing, Location, SortKey, equal_no_case, is_shortcut, matches_filter, sort_items, to_lower, format_size, format_time};
-use crate::shell::{IconBatch, has_own_icon, set_theme, system_image_list, type_icon, type_name};
+use crate::shell::{IconBatch, has_own_icon, local_folder, set_theme, system_image_list, type_icon, type_name};
 use crate::util::{copy_to, focus, send, wide};
 
 const COLUMNS: [&str; 4] = ["Name", "Date modified", "Type", "Size"];
@@ -62,6 +65,8 @@ pub struct FileList {
     model: RefCell<Model>,
     own_icons: RefCell<HashMap<PathBuf, i32>>, // full path -> own icon, for the folder shown
     line_color: Cell<Option<COLORREF>>,        // the line under each row (set_line_color): none until set
+    over_row: Cell<Option<usize>>,             // the row a drag is over (drop_folder)
+    drop_into: RefCell<Option<Location>>,      // ...and the folder it takes the drop into: lit while there is one
 }
 
 impl FileList {
@@ -89,6 +94,8 @@ impl FileList {
         .unwrap_or_default();
         let ex = (LVS_EX_FULLROWSELECT | LVS_EX_DOUBLEBUFFER) as isize;
         send(hwnd, LVM_SETEXTENDEDLISTVIEWSTYLE, ex as usize, ex);
+        // The drop highlight is kept here (drop_folder).
+        send(hwnd, LVM_SETCALLBACKMASK, LVIS_DROPHILITED.0 as usize, 0);
         set_theme(hwnd, "Explorer");
         // The column header in Windows' plain flat look: a light gray that goes with the list's (the themed one is white).
         let header = HWND(send(hwnd, LVM_GETHEADER, 0, 0) as _);
@@ -110,6 +117,8 @@ impl FileList {
             hwnd,
             own_icons: RefCell::new(HashMap::new()),
             line_color: Cell::new(None),
+            over_row: Cell::new(None),
+            drop_into: RefCell::new(None),
             model: RefCell::new(Model {
                 location: Location::ThisPc,
                 shown: false,
@@ -218,6 +227,9 @@ impl FileList {
             m.view = listed.into_iter().filter(|&i| matches_filter(&m.items[i], &m.filter)).collect();
             m.view.len()
         };
+        // A drop's lit row is a row, not a file: the next move over the list works it out again (drop_folder).
+        self.over_row.set(None);
+        *self.drop_into.borrow_mut() = None;
         self.set_state(None, LIST_VIEW_ITEM_STATE_FLAGS(0), LIST_VIEW_ITEM_STATE_FLAGS(LVIS_SELECTED.0 | LVIS_FOCUSED.0));
         send(self.hwnd, LVM_SETITEMCOUNT, count, LVSICF_NOSCROLL);
         unsafe {
@@ -464,6 +476,54 @@ impl FileList {
         self.line_color.get()
     }
 
+    // ------------------------------------------------------------ drops
+
+    /// During a drag (5.4): the folder a drop at that screen point goes into when it is over a folder's row, or a
+    /// shortcut's to a local folder, which then lights up; none elsewhere, nor when `pt` is none (the drag left or
+    /// ended). `own`: the drag comes from this list and carries its selected rows, so none of those takes it.
+    pub fn drop_folder(&self, pt: Option<POINT>, own: bool) -> Option<Location> {
+        let shown = matches!(self.model.borrow().location, Location::Dir(_));
+        let row = pt.filter(|_| shown).and_then(|pt| {
+            let mut hit = LVHITTESTINFO { pt, ..Default::default() };
+            unsafe {
+                let _ = ScreenToClient(self.hwnd, &mut hit.pt);
+            }
+            let row = usize::try_from(send(self.hwnd, LVM_HITTEST, 0, &mut hit as *mut _ as isize)).ok()?;
+            let carried = own && send(self.hwnd, LVM_GETITEMSTATE, row, LVIS_SELECTED.0 as isize) != 0;
+            (row < self.count() && !carried).then_some(row)
+        });
+        if row != self.over_row.get() {
+            // A new row: what it takes is worked out once, as the tree does for a node.
+            let lit = self.lit_row();
+            self.over_row.set(row);
+            let into = row.and_then(|row| {
+                let m = self.model.borrow();
+                let it = m.item(row)?;
+                let path = Location::dir(m.location.join(&it.name));
+                if it.is_dir() {
+                    Some(path)
+                } else if is_shortcut(&it.name) {
+                    local_folder(path, true)
+                } else {
+                    None
+                }
+            });
+            *self.drop_into.borrow_mut() = into;
+            for r in [lit, self.lit_row()].into_iter().flatten() {
+                send(self.hwnd, LVM_REDRAWITEMS, r, r as isize);
+            }
+            unsafe {
+                let _ = UpdateWindow(self.hwnd);
+            }
+        }
+        self.drop_into.borrow().clone()
+    }
+
+    /// The row a drag lights up, if any.
+    fn lit_row(&self) -> Option<usize> {
+        self.drop_into.borrow().as_ref().and(self.over_row.get())
+    }
+
     // ------------------------------------------------------------ notifications
 
     /// Handles display-only notifications. Returns None for ones the app handles.
@@ -489,6 +549,11 @@ impl FileList {
                 }
                 if lvi.mask.contains(LVIF_IMAGE) {
                     lvi.iImage = self.icon_of(&m, it); // not stored in the item: a file's own icon may come later
+                }
+                if lvi.mask.contains(LVIF_STATE) {
+                    // The drop highlight, the one state kept here (the callback mask): a virtual list keeps no other.
+                    let lit = self.lit_row() == Some(lvi.iItem as usize);
+                    lvi.state = if lit { LVIS_DROPHILITED } else { LIST_VIEW_ITEM_STATE_FLAGS(0) };
                 }
                 Some(LRESULT(0))
             }
@@ -517,8 +582,8 @@ impl FileList {
             }
             NM_CUSTOMDRAW => {
                 // A pale line under each row, so the eye can follow it across the columns (5.2), drawn once the row
-                // is: not under a selected, focused or hot row, whose own frame marks it. Rows that aren't there get
-                // none.
+                // is: not under a selected, focused or hot row, or one a drag lights up, whose own frame marks it.
+                // Rows that aren't there get none.
                 let cd = unsafe { &*(nm as *const NMLVCUSTOMDRAW) };
                 let stage = cd.nmcd.dwDrawStage;
                 if stage == CDDS_PREPAINT {
@@ -530,7 +595,8 @@ impl FileList {
                 if stage == CDDS_ITEMPOSTPAINT && let Some(color) = self.line_color.get() {
                     let row = cd.nmcd.dwItemSpec;
                     let framed = (cd.nmcd.uItemState.0 & (CDIS_FOCUS.0 | CDIS_HOT.0)) != 0
-                        || send(self.hwnd, LVM_GETITEMSTATE, row, LVIS_SELECTED.0 as isize) != 0;
+                        || send(self.hwnd, LVM_GETITEMSTATE, row, LVIS_SELECTED.0 as isize) != 0
+                        || self.lit_row() == Some(row);
                     let mut r = RECT { left: LVIR_BOUNDS as i32, ..Default::default() };
                     if !framed && send(self.hwnd, LVM_GETITEMRECT, row, &mut r as *mut _ as isize) != 0 {
                         r.top = r.bottom - 1;

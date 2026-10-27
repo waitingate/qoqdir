@@ -39,7 +39,7 @@ use windows::Win32::System::Ole::{
 };
 use windows::Win32::System::SystemServices::{MK_CONTROL, MK_LBUTTON};
 use windows::Win32::UI::Controls::{
-    EM_GETCUEBANNER, LVIR_BOUNDS,
+    EM_GETCUEBANNER, LVIR_BOUNDS, LVIS_DROPHILITED, LVM_GETITEMSTATE,
     EM_SETSEL, EM_GETSEL, EM_REPLACESEL, HTREEITEM, LVIF_IMAGE, LVIR_LABEL, LVITEMW, LVM_CANCELEDITLABEL, LVM_GETBKCOLOR, LVM_GETCOUNTPERPAGE,
     LVM_GETTEXTBKCOLOR, TVM_GETBKCOLOR,
     LVM_GETITEMRECT, LVM_GETITEMW, TCIF_TEXT, TCITEMW,
@@ -519,6 +519,24 @@ impl App {
             let _ = ClientToScreen(self.tab_bar, &mut pt);
         }
         POINTL { x: pt.x, y: pt.y }
+    }
+
+    /// The middle of a row's name, in screen coordinates, where a drag is aimed.
+    fn row_point(&self, name: &str) -> POINTL {
+        let Some(row) = self.row_of(name) else { return POINTL { x: -1, y: -1 } };
+        let mut r = RECT { left: LVIR_LABEL as i32, ..Default::default() };
+        send(self.list.hwnd(), LVM_GETITEMRECT, row, &mut r as *mut _ as isize);
+        let mut pt = POINT { x: (r.left + r.right) / 2, y: (r.top + r.bottom) / 2 };
+        unsafe {
+            let _ = ClientToScreen(self.list.hwnd(), &mut pt);
+        }
+        POINTL { x: pt.x, y: pt.y }
+    }
+
+    /// A row lit up as a drop's target (5.4).
+    fn row_lit(&self, name: &str) -> bool {
+        let state = |row| send(self.list.hwnd(), LVM_GETITEMSTATE, row, LVIS_DROPHILITED.0 as isize);
+        self.row_of(name).is_some_and(|row| state(row) != 0)
     }
 
     /// Bookmarks' folder "one", the first.
@@ -2180,6 +2198,66 @@ impl App {
             },
         )
         .wait(10000);
+        // A folder in the list takes a drop too (5.4): copy only here, so nothing asks.
+        s.add(
+            "dropping a file on a folder in the list puts it in that folder, whose row lights up while the file is \
+             over it, and not afterwards (5.4)",
+            |a| {
+                write_file(&p("into.txt"));
+                let cursor = a.row_point("sub");
+                let data = data_object_at(a.wnd, &Location::dir(p("into.txt")));
+                let (Some(data), Some(target)) = (data, a.list_drop.borrow().clone()) else { return };
+                unsafe {
+                    let mut effect = DROPEFFECT_COPY;
+                    let _ = target.DragEnter(&data, MK_LBUTTON, cursor, &mut effect);
+                    effect = DROPEFFECT_COPY;
+                    let _ = target.DragOver(MK_LBUTTON, cursor, &mut effect);
+                    note(if a.row_lit("sub") { "lit while over it" } else { "not lit while over it" }.into());
+                    effect = DROPEFFECT_COPY;
+                    let _ = target.Drop(&data, MK_LBUTTON, cursor, &mut effect);
+                }
+            },
+            |a| {
+                if !exists(&p("sub\\into.txt")) || noted() != "lit while over it" || a.row_lit("sub") {
+                    return false;
+                }
+                let _ = std::fs::remove_file(p("sub\\into.txt"));
+                let _ = std::fs::remove_file(p("into.txt"));
+                true
+            },
+        )
+        .wait(10000);
+        // A drag from the list carries its selection: the folder it carries refuses, and so does a file's row, which
+        // would mean the folder the drag comes from; another folder's row takes it. No drop: a plain drop that could
+        // move asks, and only a person answers (5.4).
+        s.add(
+            "a drag from the list takes another folder's row, but not the folder it carries, nor a file's row (5.4)",
+            |a| {
+                a.select_one("sub");
+                let data = data_object_at(a.wnd, &Location::dir(p("sub")));
+                let (Some(data), Some(target)) = (data, a.list_drop.borrow().clone()) else { return };
+                let any = DROPEFFECT_COPY | DROPEFFECT_MOVE | DROPEFFECT_LINK;
+                let mut seen = Vec::new();
+                a.dragging_files.set(true); // as while the drag from the list runs
+                unsafe {
+                    let mut effect = any;
+                    let _ = target.DragEnter(&data, MK_LBUTTON, a.row_point("sub"), &mut effect);
+                    seen.push(if effect == DROPEFFECT_NONE { "sub refused" } else { "sub taken" });
+                    effect = any;
+                    let _ = target.DragOver(MK_LBUTTON, a.row_point("made"), &mut effect);
+                    let taken = effect != DROPEFFECT_NONE && a.row_lit("made");
+                    seen.push(if taken { "made taken" } else { "made refused" });
+                    effect = any;
+                    let _ = target.DragOver(MK_LBUTTON, a.row_point("file1.txt"), &mut effect);
+                    let refused = effect == DROPEFFECT_NONE && !a.row_lit("made");
+                    seen.push(if refused { "file refused" } else { "file taken" });
+                    let _ = target.DragLeave();
+                }
+                a.dragging_files.set(false);
+                note(seen.join(", "));
+            },
+            |a| noted() == "sub refused, made taken, file refused" && !a.row_lit("made"),
+        );
         s.add("(close the extra tab)", |a| a.close_tab(a.active() + 1), |a| a.idle() && a.tabs() == 1);
         s.add(
             "middle-click on a folder opens it in a new background tab",

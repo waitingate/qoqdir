@@ -200,7 +200,8 @@ Targets on an ordinary SSD laptop with a folder of 10,000 files (faster is fine)
 - Delete goes to the Recycle Bin. Shift+Delete deletes for good, after Windows'
   own question.
 - Renaming to an empty name, or to the same name, does nothing.
-- Files dragged out of Qoqdir and dropped back on the same folder do nothing.
+- Files dragged out of Qoqdir and dropped back on the same folder do nothing;
+  dropped on a folder in it, they go into that folder (5.4).
 
 ### 4.9 Quiet
 - It beeps only for user errors (a bad path, an impossible action), and never in
@@ -481,6 +482,13 @@ buttons, and the filter box, has a tooltip that names it with its key ("Back
   With Ctrl, Shift or Alt held, a drop copies, moves or makes shortcuts at once,
   as the key says, and one that can only copy (from a zip folder or a web page)
   copies at once. Dropped outside Qoqdir, files go as that program decides.
+- A folder in the list takes a drop too: while files are dragged over its row,
+  the row lights up, and the drop goes into that folder, asking first as above.
+  So does a shortcut to a folder on a local drive, for its target, as in the
+  tree (5.5). A drag from the list carries its selected rows: a folder among
+  them takes no drop, and elsewhere in the list, over a file or the empty
+  space, the files would go back to the folder they come from, so nothing
+  happens (4.8).
 - Undo is Windows' own: Ctrl+Z on the desktop or in an Explorer window takes
   back Qoqdir's last rename, move, copy or delete too, since Windows keeps one
   undo list for the session. Windows lets no other program trigger it, so Qoqdir
@@ -739,6 +747,9 @@ result:
     current one; afterwards the real current tab does again. With Ctrl held, a
     drop that could move a file copies it at once, without asking. The menu a
     plain drop shows is checked by hand: the self-test opens no menus.
+    A file dropped on the folder `sub` in the list goes into it, and the row
+    lights up while the file is over it. A drag from the list takes the row of
+    another folder, but not the folder it carries, nor a file's row.
 30. Middle-click on a folder in the list opens a new background tab with that
     folder, and the current tab doesn't change.
 31. Middle-click on a tree node opens a new background tab with that folder.

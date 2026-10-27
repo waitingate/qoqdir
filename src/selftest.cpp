@@ -174,6 +174,22 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
         ClientToScreen(tabBar_, &pt);
         return POINTL{pt.x, pt.y};
     };
+    auto rowPoint = [this](const std::wstring& name) {   // the middle of a row's name, in screen coordinates
+        POINT pt{-1, -1};
+        for (int row = 0; row < list_.count(); ++row) {
+            if (list_.at(row).name != name) continue;
+            RECT r{};
+            ListView_GetItemRect(list_.hwnd(), row, &r, LVIR_LABEL);
+            pt = {(r.left + r.right) / 2, (r.top + r.bottom) / 2};
+            ClientToScreen(list_.hwnd(), &pt);
+        }
+        return POINTL{pt.x, pt.y};
+    };
+    auto rowLit = [this](const std::wstring& name) {   // a row lit up as a drop's target (5.4)
+        for (int row = 0; row < list_.count(); ++row)
+            if (list_.at(row).name == name) return ListView_GetItemState(list_.hwnd(), row, LVIS_DROPHILITED) != 0;
+        return false;
+    };
     auto caption = [this](int index) {   // a tab's name as the tab bar shows it
         wchar_t text[128] = {};
         TCITEMW item{};
@@ -1414,6 +1430,51 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
             return true;
         },
         10000);
+    // A folder in the list takes a drop too (5.4): copy only here, so nothing asks.
+    add(L"dropping a file on a folder in the list puts it in that folder, whose row lights up while the file is over "
+        L"it, and not afterwards (5.4)",
+        [=, this] {
+            writeFile(path(L"into.txt"));
+            POINTL cursor = rowPoint(L"sub");
+            Com<IDataObject> data = dataObject(wnd_, path(L"into.txt"));
+            DWORD effect = DROPEFFECT_COPY;
+            listDrop_->DragEnter(data.get(), MK_LBUTTON, cursor, &effect);
+            effect = DROPEFFECT_COPY;
+            listDrop_->DragOver(MK_LBUTTON, cursor, &effect);
+            selfTest_->note = rowLit(L"sub") ? L"lit while over it" : L"not lit while over it";
+            effect = DROPEFFECT_COPY;
+            listDrop_->Drop(data.get(), MK_LBUTTON, cursor, &effect);
+        },
+        [=, this] {
+            bool landed = exists(path(L"sub\\into.txt")) && selfTest_->note == L"lit while over it" && !rowLit(L"sub");
+            if (!landed) return false;
+            DeleteFileW(path(L"sub\\into.txt").c_str());
+            DeleteFileW(path(L"into.txt").c_str());
+            return true;
+        },
+        10000);
+    // A drag from the list carries its selection: the folder it carries refuses, and so does a file's row, which
+    // would mean the folder the drag comes from; another folder's row takes it. No drop: a plain drop that could move
+    // asks, and only a person answers (5.4).
+    add(L"a drag from the list takes another folder's row, but not the folder it carries, nor a file's row (5.4)",
+        [=, this] {
+            list_.select({L"sub"}, L"sub");
+            Com<IDataObject> data = dataObject(wnd_, path(L"sub"));
+            DWORD any = DROPEFFECT_COPY | DROPEFFECT_MOVE | DROPEFFECT_LINK, effect = any;
+            draggingFiles_ = true;   // as while the drag from the list runs
+            listDrop_->DragEnter(data.get(), MK_LBUTTON, rowPoint(L"sub"), &effect);
+            std::wstring seen = effect == DROPEFFECT_NONE ? L"sub refused" : L"sub taken";
+            effect = any;
+            listDrop_->DragOver(MK_LBUTTON, rowPoint(L"made"), &effect);
+            seen += effect != DROPEFFECT_NONE && rowLit(L"made") ? L", made taken" : L", made refused";
+            effect = any;
+            listDrop_->DragOver(MK_LBUTTON, rowPoint(L"file1.txt"), &effect);
+            seen += effect == DROPEFFECT_NONE && !rowLit(L"made") ? L", file refused" : L", file taken";
+            listDrop_->DragLeave();
+            draggingFiles_ = false;
+            selfTest_->note = seen;
+        },
+        [=, this] { return selfTest_->note == L"sub refused, made taken, file refused" && !rowLit(L"made"); });
     add(L"(close the extra tab)", [=, this] { closeTab(active_ + 1); }, [=, this] { return idle() && tabs_.size() == 1; });
     add(L"middle-click on a folder opens it in a new background tab",
         [=, this] {
