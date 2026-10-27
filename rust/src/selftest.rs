@@ -34,8 +34,10 @@ use windows::Win32::System::DataExchange::{
 };
 use windows::Win32::System::Diagnostics::Debug::{GetErrorMode, SEM_FAILCRITICALERRORS};
 use windows::Win32::System::Memory::{GlobalLock, GlobalUnlock};
-use windows::Win32::System::Ole::{DROPEFFECT_COPY, DROPEFFECT_NONE, OleSetClipboard};
-use windows::Win32::System::SystemServices::MK_LBUTTON;
+use windows::Win32::System::Ole::{
+    DROPEFFECT_COPY, DROPEFFECT_LINK, DROPEFFECT_MOVE, DROPEFFECT_NONE, OleSetClipboard,
+};
+use windows::Win32::System::SystemServices::{MK_CONTROL, MK_LBUTTON};
 use windows::Win32::UI::Controls::{
     EM_GETCUEBANNER,
     EM_SETSEL, EM_GETSEL, EM_REPLACESEL, HTREEITEM, LVIF_IMAGE, LVIR_LABEL, LVITEMW, LVM_CANCELEDITLABEL, LVM_GETBKCOLOR, LVM_GETCOUNTPERPAGE,
@@ -2096,6 +2098,35 @@ impl App {
                     && a.drop_tab.get().is_none()
                     && noted() == "shown while over it"
                     && send(a.tab_bar, TCM_GETCURSEL, 0, 0) == a.active() as isize
+            },
+        )
+        .wait(10000);
+        // Ctrl says copy, so a drop that could move the file asks nothing: it copies at once (5.4). Without a key, the
+        // same drop would ask with Windows' menu, which only a person can answer: that is checked by hand.
+        s.add(
+            "a drop with Ctrl held copies at once, without asking, though the file could be moved (5.4)",
+            |a| {
+                write_file(&p("held.txt"));
+                let cursor = a.tab_point(a.active() + 1);
+                let data = data_object_at(a.wnd, &Location::dir(p("held.txt")));
+                let (Some(data), Some(target)) = (data, a.tab_drop.borrow().clone()) else { return };
+                let (any, keys) = (DROPEFFECT_COPY | DROPEFFECT_MOVE | DROPEFFECT_LINK, MK_LBUTTON | MK_CONTROL);
+                unsafe {
+                    let mut effect = any;
+                    let _ = target.DragEnter(&data, keys, cursor, &mut effect);
+                    effect = any;
+                    let _ = target.DragOver(keys, cursor, &mut effect);
+                    effect = any;
+                    let _ = target.Drop(&data, keys, cursor, &mut effect);
+                }
+            },
+            |_| {
+                if !exists(&p("made\\held.txt")) || !exists(&p("held.txt")) {
+                    return false; // copied, not moved
+                }
+                let _ = std::fs::remove_file(p("made\\held.txt"));
+                let _ = std::fs::remove_file(p("held.txt"));
+                true
             },
         )
         .wait(10000);

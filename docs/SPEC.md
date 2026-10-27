@@ -365,14 +365,15 @@ buttons, and the filter box, has a tooltip that names it with its key ("Back
   click, Enter, or the menu, so arrowing through Bookmarks starts nothing.
 - Right-click gives Windows' context menu for that folder (Open opens here, Open
   in new tab or window opens a background tab).
-- Files dropped on a folder in the tree are copied or moved there, exactly as
-  dropping on that folder in Explorer would; dropped on a bookmark shortcut to a
-  folder, they go to that folder (read from the shortcut alone). The node under
-  the pointer lights up, and a closed folder opens after about 0.7 s, so the
-  folders inside it can be reached. Only folders on local drives take drops: not
-  This PC, not a shortcut to a file or a web page, nothing on the network (a
-  server that is off would freeze the drag), and not the folder the files come
-  from. While the drag is over a node that refuses, the status bar says why.
+- Files dropped on a folder in the tree are copied or moved there as dropping on
+  that folder in Explorer would, asking first as 5.4 says; dropped on a bookmark
+  shortcut to a folder, they go to that folder (read from the shortcut alone).
+  The node under the pointer lights up, and a closed folder opens after about
+  0.7 s, so the folders inside it can be reached. Only folders on local drives
+  take drops: not This PC, not a shortcut to a file or a web page, nothing on
+  the network (a server that is off would freeze the drag), and not the folder
+  the files come from. While the drag is over a node that refuses, the status
+  bar says why.
 - Backspace in the tree goes up.
 - The splitter sets the tree's width, which is remembered; a drag past the
   window's edge keeps the width shown, not one past it.
@@ -426,11 +427,11 @@ buttons, and the filter box, has a tooltip that names it with its key ("Back
   A moved tab keeps its folder, history and view (nothing reloads) and stays the
   current tab. The order is the one Ctrl+S saves.
 - Drop onto a tab: dragging files over a tab shows it as the current one while
-  they are over it (the real current tab keeps its bullet), and dropping copies or
-  moves them into that tab's folder exactly as dropping on that folder in Explorer
-  would (Shift, Ctrl and Alt work as usual). Not onto This PC, not onto a tab
-  whose folder hasn't loaded here yet or failed, and not back into the folder the
-  files come from.
+  they are over it (the real current tab keeps its bullet), and dropping copies
+  or moves them into that tab's folder as dropping on that folder in Explorer
+  would, asking first as 5.4 says (Shift, Ctrl and Alt work as usual). Not onto
+  This PC, not onto a tab whose folder hasn't loaded here yet or failed, and not
+  back into the folder the files come from.
 - Tabs aren't remembered between runs by themselves. Ctrl+S saves them as
   shortcuts in `Bookmarks\Tabs`, numbered in tab order ("1 logs.lnk"); it replaces
   the shortcuts there (the status bar says so) and leaves anything else. Ctrl+O
@@ -468,9 +469,14 @@ buttons, and the filter box, has a tooltip that names it with its key ("Back
   Shift+F10 opens the menu for the focused item. Owner-drawn and cascading menus
   (Send to, New, Open with, other programs' entries) must work.
 - Properties: Alt+Enter.
-- Drag and drop: drag files out of the list to any program or folder (copy, move,
-  link), and drop files from anywhere onto the list (the current folder), onto a
-  tab, or onto a folder in the tree (5.5). A right-drag gives Windows' drop menu.
+- Drag and drop: drag files out of the list to any program or folder (copy,
+  move, link), and drop files from anywhere onto the list (the current folder),
+  onto a tab, or onto a folder in the tree (5.5). A right-drag gives Windows'
+  drop menu, and so does a plain drop into Qoqdir that could move files (Copy
+  here, Move here, Create shortcuts here, Cancel), so nothing moves by accident.
+  With Ctrl, Shift or Alt held, a drop copies, moves or makes shortcuts at once,
+  as the key says, and one that can only copy (from a zip folder or a web page)
+  copies at once. Dropped outside Qoqdir, files go as that program decides.
 - Undo is Windows' own: Ctrl+Z on the desktop or in an Explorer window takes
   back Qoqdir's last rename, move, copy or delete too, since Windows keeps one
   undo list for the session. Windows lets no other program trigger it, so Qoqdir
@@ -629,6 +635,9 @@ At least these, with concrete examples:
 - Listing a real folder: no `.` or `..`, a missing folder gives an error, This PC
   lists at least one drive, and a path that is a file is reported as one.
 - Spotting shortcuts by extension (`.lnk`, `.url`, any letter case).
+- Drops: a plain drag that could move files is passed on as a right-button drag
+  (Windows then asks); one with Ctrl, Shift or Alt held, one that can only copy,
+  a right-drag and the drop itself (no button down) are passed on as they are.
 - The crash log: a program that throws an exception nothing catches (a panic in
   the Rust version) ends with exit code 3, and the log line names the
   exception's type and message (the panic's message and place).
@@ -723,7 +732,9 @@ result:
     selected.
 29. Dropping a file (a drag simulated inside the process) on a second tab copies
     it into that tab's folder. While the file is over that tab, it shows as the
-    current one; afterwards the real current tab does again.
+    current one; afterwards the real current tab does again. With Ctrl held, a
+    drop that could move a file copies it at once, without asking. The menu a
+    plain drop shows is checked by hand: the self-test opens no menus.
 30. Middle-click on a folder in the list opens a new background tab with that
     folder, and the current tab doesn't change.
 31. Middle-click on a tree node opens a new background tab with that folder.

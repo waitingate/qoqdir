@@ -61,7 +61,9 @@ use windows::Win32::UI::WindowsAndMessaging::{
 };
 use windows::core::{GUID, HRESULT, IUnknown, Interface, PCSTR, PCWSTR, PSTR, PWSTR, Ref, Result, implement, s, w};
 
-use crate::folder::{Item, Location, SortKey, exists, extension_of, list_folder, normalize, sort_items};
+use crate::folder::{
+    Item, Location, SortKey, drop_keys, exists, extension_of, list_folder, normalize, sort_items,
+};
 use crate::util::{OwnedMenu, Pidl, copy_to, from_wide, key_down, pcwstr, wide};
 
 const CMIC_MASK_UNICODE: u32 = 0x4000; // not in the windows crate
@@ -966,6 +968,8 @@ impl DropTarget {
                 let _ = old.DragLeave();
             }
             let folder = dir.as_ref().and_then(|d| ui_object_at::<IDropTarget>(self.owner, d).ok());
+            // A plain drag that could move files reaches the folder as a right-button drag: Windows asks (5.4).
+            let keys = drop_keys(keys, *effect);
             let entered = folder.filter(|f| f.DragEnter(data.as_ref(), keys, *pt, effect).is_ok());
             if entered.is_none() {
                 *effect = DROPEFFECT_NONE;
@@ -1007,7 +1011,7 @@ impl IDropTarget_Impl for DropTarget_Impl {
         // Over a new folder, aim() has already asked it; otherwise the same folder decides again.
         if !self.aim(keys, pt, effect) {
             let folder = self.folder.borrow().clone();
-            if folder.is_none_or(|f| unsafe { f.DragOver(keys, *pt, effect) }.is_err()) {
+            if folder.is_none_or(|f| unsafe { f.DragOver(drop_keys(keys, *effect), *pt, effect) }.is_err()) {
                 unsafe { *effect = DROPEFFECT_NONE };
             }
         }
@@ -1037,7 +1041,7 @@ impl IDropTarget_Impl for DropTarget_Impl {
         }
         let folder = self.folder.borrow_mut().take(); // it gets the drop, not a DragLeave
         self.finish(); // the drag is over (e.g. remove highlights)
-        if folder.is_none_or(|f| unsafe { f.Drop(data.as_ref(), keys, *pt, effect) }.is_err()) {
+        if folder.is_none_or(|f| unsafe { f.Drop(data.as_ref(), drop_keys(keys, *effect), *pt, effect) }.is_err()) {
             unsafe { *effect = DROPEFFECT_NONE };
         }
         Ok(())

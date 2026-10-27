@@ -436,3 +436,11 @@ std::wstring errorText(DWORD error) {
     while (!s.empty() && (s.back() == L'\n' || s.back() == L'\r' || s.back() == L' ')) s.pop_back();
     return s.empty() ? L"Error " + std::to_wstring(error) : s;
 }
+
+// ---------------------------------------------------------------- drops
+
+DWORD dropKeys(DWORD keys, DWORD allowed) {
+    DWORD deliberate = MK_RBUTTON | MK_SHIFT | MK_CONTROL | MK_ALT;   // a key or button that says what to do
+    bool plain = (keys & MK_LBUTTON) && !(keys & deliberate);
+    return plain && (allowed & DROPEFFECT_MOVE) ? (keys & ~DWORD(MK_LBUTTON)) | MK_RBUTTON : keys;
+}

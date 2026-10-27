@@ -707,7 +707,7 @@ public:
     }
     HRESULT STDMETHODCALLTYPE DragOver(DWORD keys, POINTL pt, DWORD* effect) override {
         // Over a new folder, aim() has already asked it; otherwise the same folder decides again.
-        if (!aim(keys, pt, effect) && (!folder_ || FAILED(folder_->DragOver(keys, pt, effect))))
+        if (!aim(keys, pt, effect) && (!folder_ || FAILED(folder_->DragOver(dropKeys(keys, *effect), pt, effect))))
             *effect = DROPEFFECT_NONE;
         POINT p{pt.x, pt.y};
         if (helper_) helper_->DragOver(&p, *effect);
@@ -723,7 +723,7 @@ public:
         if (helper_) helper_->Drop(data, &p, *effect);
         Com<IDropTarget> folder = std::exchange(folder_, {});   // it gets the drop, not a DragLeave
         finish();   // the drag is over (e.g. remove highlights)
-        if (!folder || FAILED(folder->Drop(data, keys, pt, effect))) *effect = DROPEFFECT_NONE;
+        if (!folder || FAILED(folder->Drop(data, dropKeys(keys, *effect), pt, effect))) *effect = DROPEFFECT_NONE;
         return S_OK;
     }
 
@@ -737,7 +737,8 @@ private:
         folder_.reset();
         dir_ = dir;
         if (dir) folder_ = shellObject<IDropTarget>(owner_, *dir);
-        if (folder_ && FAILED(folder_->DragEnter(data_.get(), keys, pt, effect))) folder_.reset();
+        // A plain drag that could move files reaches the folder as a right-button drag: Windows asks (5.4).
+        if (folder_ && FAILED(folder_->DragEnter(data_.get(), dropKeys(keys, *effect), pt, effect))) folder_.reset();
         if (!folder_) *effect = DROPEFFECT_NONE;
         return true;
     }

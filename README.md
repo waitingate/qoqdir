@@ -123,10 +123,13 @@ The mouse's back and forward buttons go back and forward. Middle-click a folder
 to open it in a background tab, or double-click the empty part of the tab bar
 for a new tab. New tabs always go at the end. Drag a tab along the bar to move
 it, and turn the mouse wheel over the tabs to switch between them. A tab's
-right-click menu also has Duplicate tab and Close other tabs. Drop files on a
-tab, or on a folder or bookmark in the tree, to move or copy them there, as
-Explorer would; a closed folder in the tree opens when you hold the drag over
-it. (The tree takes drops on local drives only.)
+right-click menu also has Duplicate tab and Close other tabs. Drop files on the
+list, on a tab, or on a folder or bookmark in the tree to copy or move them
+there. A plain drop that could move them asks first, with Windows' own menu
+(Copy here, Move here, Create shortcuts here), so nothing moves by accident;
+hold Ctrl to copy, Shift to move or Alt to make shortcuts without the question.
+A closed folder in the tree opens when you hold the drag over it. (The tree
+takes drops on local drives only.)
 
 Right-click on files gives Windows' full context menu, so Send to, Open with and
 the entries of other programs are all there. Right-click the empty space for

@@ -358,6 +358,20 @@ int main(int argc, char** argv) {
         CHECK(listFolder(sys, false, [] { return false; }).items.size() > 256);
     }
 
+    // dropKeys: a plain drag that could move files goes on as a right-button drag, so Windows asks (5.4); a key held, a
+    // drag that can only copy, a right-drag and the drop itself (no button down) go on as they are.
+    {
+        DWORD any = DROPEFFECT_COPY | DROPEFFECT_MOVE | DROPEFFECT_LINK;
+        CHECK(dropKeys(MK_LBUTTON, any) == MK_RBUTTON);
+        CHECK(dropKeys(MK_LBUTTON, DROPEFFECT_MOVE) == MK_RBUTTON);
+        CHECK(dropKeys(MK_LBUTTON | MK_CONTROL, any) == (MK_LBUTTON | MK_CONTROL));
+        CHECK(dropKeys(MK_LBUTTON | MK_SHIFT, any) == (MK_LBUTTON | MK_SHIFT));
+        CHECK(dropKeys(MK_LBUTTON | MK_ALT, any) == (MK_LBUTTON | MK_ALT));
+        CHECK(dropKeys(MK_LBUTTON, DROPEFFECT_COPY | DROPEFFECT_LINK) == MK_LBUTTON);
+        CHECK(dropKeys(MK_RBUTTON, any) == MK_RBUTTON);
+        CHECK(dropKeys(0, any) == 0);
+    }
+
     // An exception nothing catches stops the program with exit code 3, and the crash log names it (4.10).
     {
         wchar_t temp[MAX_PATH] = {};

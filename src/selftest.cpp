@@ -1349,6 +1349,27 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
                    TabCtrl_GetCurSel(tabBar_) == active_;
         },
         10000);
+    // Ctrl says copy, so a drop that could move the file asks nothing: it copies at once (5.4). Without a key, the same
+    // drop would ask with Windows' menu, which only a person can answer: that is checked by hand.
+    add(L"a drop with Ctrl held copies at once, without asking, though the file could be moved (5.4)",
+        [=, this] {
+            writeFile(path(L"held.txt"));
+            POINTL cursor = tabPoint(active_ + 1);
+            Com<IDataObject> data = dataObject(wnd_, path(L"held.txt"));
+            DWORD any = DROPEFFECT_COPY | DROPEFFECT_MOVE | DROPEFFECT_LINK, effect = any;
+            tabDrop_->DragEnter(data.get(), MK_LBUTTON | MK_CONTROL, cursor, &effect);
+            effect = any;
+            tabDrop_->DragOver(MK_LBUTTON | MK_CONTROL, cursor, &effect);
+            effect = any;
+            tabDrop_->Drop(data.get(), MK_LBUTTON | MK_CONTROL, cursor, &effect);
+        },
+        [=, this] {
+            if (!exists(path(L"made\\held.txt")) || !exists(path(L"held.txt"))) return false;   // copied, not moved
+            DeleteFileW(path(L"made\\held.txt").c_str());
+            DeleteFileW(path(L"held.txt").c_str());
+            return true;
+        },
+        10000);
     add(L"(close the extra tab)", [=, this] { closeTab(active_ + 1); }, [=, this] { return idle() && tabs_.size() == 1; });
     add(L"middle-click on a folder opens it in a new background tab",
         [=, this] {

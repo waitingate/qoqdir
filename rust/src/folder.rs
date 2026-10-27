@@ -24,7 +24,9 @@ use windows::Win32::System::Diagnostics::ToolHelp::{
     CreateToolhelp32Snapshot, PROCESSENTRY32W, Process32FirstW, Process32NextW, TH32CS_SNAPPROCESS,
 };
 use windows::Win32::System::Environment::ExpandEnvironmentStringsW;
+use windows::Win32::System::Ole::{DROPEFFECT, DROPEFFECT_MOVE, MK_ALT};
 use windows::Win32::System::SystemInformation::GetSystemDirectoryW;
+use windows::Win32::System::SystemServices::{MK_CONTROL, MK_LBUTTON, MK_RBUTTON, MK_SHIFT, MODIFIERKEYS_FLAGS};
 use windows::Win32::System::Threading::GetCurrentProcessId;
 use windows::Win32::System::Time::{FileTimeToSystemTime, SystemTimeToTzSpecificLocalTime};
 use windows::Win32::UI::Shell::{
@@ -702,6 +704,21 @@ pub fn format_time(ft: u64) -> OsString {
     }
 }
 
+// ---------------------------------------------------------------- drops
+
+/// The keys a folder's drop target is told (5.4): a plain drag that could move files goes on as a right-button drag, so
+/// Windows asks with its menu (Copy here, Move here...) instead of moving them at once. Ctrl, Shift or Alt held says
+/// what to do, and a drag that can only copy has nothing to ask.
+pub fn drop_keys(keys: MODIFIERKEYS_FLAGS, allowed: DROPEFFECT) -> MODIFIERKEYS_FLAGS {
+    let deliberate = MK_RBUTTON.0 | MK_SHIFT.0 | MK_CONTROL.0 | MK_ALT; // a key or button that says what to do
+    let plain = (keys.0 & MK_LBUTTON.0) != 0 && (keys.0 & deliberate) == 0;
+    if plain && (allowed.0 & DROPEFFECT_MOVE.0) != 0 {
+        MODIFIERKEYS_FLAGS((keys.0 & !MK_LBUTTON.0) | MK_RBUTTON.0)
+    } else {
+        keys
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1030,5 +1047,21 @@ mod tests {
         let text = std::fs::read_to_string(&log).unwrap_or_default();
         assert!(text.contains("the test's own panic") && text.contains("folder.rs"), "{text}");
         let _ = std::fs::remove_dir_all(&temp);
+    }
+
+    #[test]
+    fn drop_keys_ask_only_for_a_plain_drag_that_could_move() {
+        // It goes on as a right-button drag, so Windows asks (5.4); a key held, a drag that can only copy, a right-drag
+        // and the drop itself (no button down) go on as they are.
+        use windows::Win32::System::Ole::{DROPEFFECT_COPY, DROPEFFECT_LINK};
+        let any = DROPEFFECT_COPY | DROPEFFECT_MOVE | DROPEFFECT_LINK;
+        assert_eq!(drop_keys(MK_LBUTTON, any), MK_RBUTTON);
+        assert_eq!(drop_keys(MK_LBUTTON, DROPEFFECT_MOVE), MK_RBUTTON);
+        for held in [MK_CONTROL, MK_SHIFT, MODIFIERKEYS_FLAGS(MK_ALT)] {
+            assert_eq!(drop_keys(MK_LBUTTON | held, any), MK_LBUTTON | held);
+        }
+        assert_eq!(drop_keys(MK_LBUTTON, DROPEFFECT_COPY | DROPEFFECT_LINK), MK_LBUTTON);
+        assert_eq!(drop_keys(MK_RBUTTON, any), MK_RBUTTON);
+        assert_eq!(drop_keys(MODIFIERKEYS_FLAGS(0), any), MODIFIERKEYS_FLAGS(0));
     }
 }
