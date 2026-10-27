@@ -190,6 +190,19 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
             if (list_.at(row).name == name) return ListView_GetItemState(list_.hwnd(), row, LVIS_DROPHILITED) != 0;
         return false;
     };
+    auto dragTip = [](IDataObject* data) {   // the tip a drag's data carries for its image, "" for none (5.4)
+        FORMATETC fmt{CLIPFORMAT(RegisterClipboardFormatW(CFSTR_DROPDESCRIPTION)), nullptr, DVASPECT_CONTENT, -1,
+                      TYMED_HGLOBAL};
+        STGMEDIUM med{};
+        std::wstring tip;
+        if (FAILED(data->GetData(&fmt, &med))) return tip;
+        if (auto* d = static_cast<DROPDESCRIPTION*>(GlobalLock(med.hGlobal))) {
+            if (d->type != DROPIMAGE_INVALID) tip = std::wstring(d->szMessage) + L" [" + d->szInsert + L"]";
+            GlobalUnlock(med.hGlobal);
+        }
+        ReleaseStgMedium(&med);
+        return tip;
+    };
     auto caption = [this](int index) {   // a tab's name as the tab bar shows it
         wchar_t text[128] = {};
         TCITEMW item{};
@@ -1475,6 +1488,24 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
             selfTest_->note = seen;
         },
         [=, this] { return selfTest_->note == L"sub refused, made taken, file refused" && !rowLit(L"made"); });
+    // While a drop would ask, the drag's tip says so, not Windows' "Move to". No drop here: it would ask (5.4).
+    auto tipsRight = std::make_shared<bool>(false);
+    add(L"while a drop on a folder would ask, the drag's tip says Copy or move to it; not with Ctrl held, nor once "
+        L"the drag has left (5.4)",
+        [=, this] {
+            Com<IDataObject> data = dataObject(wnd_, path(L"file1.txt"));
+            DWORD any = DROPEFFECT_COPY | DROPEFFECT_MOVE | DROPEFFECT_LINK, effect = any;
+            listDrop_->DragEnter(data.get(), MK_LBUTTON, rowPoint(L"sub"), &effect);
+            std::wstring asking = dragTip(data.get());
+            effect = any;
+            listDrop_->DragOver(MK_LBUTTON | MK_CONTROL, rowPoint(L"sub"), &effect);
+            std::wstring held = dragTip(data.get());
+            listDrop_->DragLeave();
+            std::wstring left = dragTip(data.get());
+            *tipsRight = asking == L"Copy or move to %1 [sub]" && held != asking && left.empty();
+            selfTest_->note = asking + L" / " + held + L" / " + left;
+        },
+        [=, this] { return *tipsRight; });
     add(L"(close the extra tab)", [=, this] { closeTab(active_ + 1); }, [=, this] { return idle() && tabs_.size() == 1; });
     add(L"middle-click on a folder opens it in a new background tab",
         [=, this] {

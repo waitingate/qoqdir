@@ -708,15 +708,20 @@ public:
     HRESULT STDMETHODCALLTYPE DragEnter(IDataObject* data, DWORD keys, POINTL pt, DWORD* effect) override {
         if (data) data->AddRef();
         *data_.put() = data;
+        DWORD allowed = *effect;
         if (!aim(keys, pt, effect)) *effect = DROPEFFECT_NONE;   // still no folder (each drag starts with none)
+        describe(keys, allowed, *effect);
         POINT p{pt.x, pt.y};
         if (helper_) helper_->DragEnter(owner_, data, &p, *effect);
         return S_OK;
     }
     HRESULT STDMETHODCALLTYPE DragOver(DWORD keys, POINTL pt, DWORD* effect) override {
+        DWORD allowed = *effect;
+        if (described_ && !asks(keys, allowed)) setTip(DROPIMAGE_INVALID);   // ours goes first: the folder puts its own
         // Over a new folder, aim() has already asked it; otherwise the same folder decides again.
         if (!aim(keys, pt, effect) && (!folder_ || FAILED(folder_->DragOver(dropKeys(keys, *effect), pt, effect))))
             *effect = DROPEFFECT_NONE;
+        describe(keys, allowed, *effect);
         POINT p{pt.x, pt.y};
         if (helper_) helper_->DragOver(&p, *effect);
         return S_OK;
@@ -755,7 +760,40 @@ private:
         if (folder_) folder_->DragLeave();
         folder_.reset();
         dir_.reset();
+        if (described_) setTip(DROPIMAGE_INVALID);
         data_.reset();
+    }
+
+    // A drop with these keys asks with Windows' menu, and could move the files: a plain drag passed on as a
+    // right-button one (dropKeys), or a right-drag (5.4).
+    static bool asks(DWORD keys, DWORD allowed) {
+        return (dropKeys(keys, allowed) & MK_RBUTTON) && (allowed & DROPEFFECT_MOVE);
+    }
+    // While a drop would ask, the drag's tip says "Copy or move to" its folder, not the folder's own "Move to" (5.4).
+    void describe(DWORD keys, DWORD allowed, DWORD effect) {
+        if (folder_ && dir_ && effect != DROPEFFECT_NONE && asks(keys, allowed))
+            setTip(DROPIMAGE_LABEL, L"Copy or move to %1", displayName(*dir_));
+        else if (described_)
+            setTip(DROPIMAGE_INVALID);
+    }
+    // Puts a tip in the drag's data for its image to show; DROPIMAGE_INVALID takes ours away.
+    void setTip(DROPIMAGETYPE type, const wchar_t* message = L"", const std::wstring& insert = L"") {
+        described_ = false;
+        FORMATETC fmt{CLIPFORMAT(RegisterClipboardFormatW(CFSTR_DROPDESCRIPTION)), nullptr, DVASPECT_CONTENT, -1,
+                      TYMED_HGLOBAL};
+        STGMEDIUM med{};
+        med.tymed = TYMED_HGLOBAL;
+        med.hGlobal = data_ ? GlobalAlloc(GMEM_MOVEABLE | GMEM_ZEROINIT, sizeof(DROPDESCRIPTION)) : nullptr;
+        if (auto* tip = med.hGlobal ? static_cast<DROPDESCRIPTION*>(GlobalLock(med.hGlobal)) : nullptr) {
+            tip->type = type;
+            lstrcpynW(tip->szMessage, message, MAX_PATH);
+            lstrcpynW(tip->szInsert, insert.c_str(), MAX_PATH);
+            GlobalUnlock(med.hGlobal);
+            if (FAILED(data_->SetData(&fmt, &med, TRUE))) ReleaseStgMedium(&med);
+            else described_ = type != DROPIMAGE_INVALID;
+        } else if (med.hGlobal) {
+            GlobalFree(med.hGlobal);
+        }
     }
 
     LONG refs_ = 1;
@@ -765,6 +803,7 @@ private:
     std::optional<std::wstring> dir_;   // the folder the drop currently goes to
     Com<IDropTarget> folder_;           // and its shell drop target
     Com<IDropTargetHelper> helper_;
+    bool described_ = false;            // the drag's tip is ours (describe)
 };
 
 }  // namespace

@@ -489,6 +489,9 @@ buttons, and the filter box, has a tooltip that names it with its key ("Back
   them takes no drop, and elsewhere in the list, over a file or the empty
   space, the files would go back to the folder they come from, so nothing
   happens (4.8).
+- While a drop would ask, the tip under the dragged files says "Copy or move to"
+  the folder, not Windows' "Move to"; with Ctrl, Shift or Alt held it is
+  Windows' own again.
 - Undo is Windows' own: Ctrl+Z on the desktop or in an Explorer window takes
   back Qoqdir's last rename, move, copy or delete too, since Windows keeps one
   undo list for the session. Windows lets no other program trigger it, so Qoqdir
@@ -750,6 +753,8 @@ result:
     A file dropped on the folder `sub` in the list goes into it, and the row
     lights up while the file is over it. A drag from the list takes the row of
     another folder, but not the folder it carries, nor a file's row.
+    While a drop on `sub` would ask, the drag's tip says "Copy or move to sub";
+    with Ctrl held, or once the drag has left, it doesn't.
 30. Middle-click on a folder in the list opens a new background tab with that
     folder, and the current tab doesn't change.
 31. Middle-click on a tree node opens a new background tab with that folder.

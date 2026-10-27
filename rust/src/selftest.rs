@@ -27,7 +27,7 @@ use windows::Win32::Storage::FileSystem::{
     FILE_ATTRIBUTE_HIDDEN, FILE_FLAGS_AND_ATTRIBUTES, GetFileAttributesW, GetLogicalDrives, GetLongPathNameW,
     SetFileAttributesW,
 };
-use windows::Win32::System::Com::IDataObject;
+use windows::Win32::System::Com::{DVASPECT_CONTENT, FORMATETC, IDataObject, TYMED_HGLOBAL};
 use windows::Win32::System::DataExchange::{
     CloseClipboard, GetClipboardData, GetOpenClipboardWindow, IsClipboardFormatAvailable, OpenClipboard,
     RegisterClipboardFormatW,
@@ -35,7 +35,7 @@ use windows::Win32::System::DataExchange::{
 use windows::Win32::System::Diagnostics::Debug::{GetErrorMode, SEM_FAILCRITICALERRORS};
 use windows::Win32::System::Memory::{GlobalLock, GlobalUnlock};
 use windows::Win32::System::Ole::{
-    DROPEFFECT_COPY, DROPEFFECT_LINK, DROPEFFECT_MOVE, DROPEFFECT_NONE, OleSetClipboard,
+    DROPEFFECT_COPY, DROPEFFECT_LINK, DROPEFFECT_MOVE, DROPEFFECT_NONE, OleSetClipboard, ReleaseStgMedium,
 };
 use windows::Win32::System::SystemServices::{MK_CONTROL, MK_LBUTTON};
 use windows::Win32::UI::Controls::{
@@ -56,6 +56,7 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
 use windows::Win32::System::Variant::VARIANT;
 use windows::Win32::UI::Accessibility::{AccessibleObjectFromWindow, IAccessible};
 use windows::Win32::UI::Shell::{
+    CFSTR_DROPDESCRIPTION, DROPDESCRIPTION, DROPIMAGE_INVALID,
     DROPFILES, FOLDERID_Desktop, FOLDERID_Profile, SHGFI_DISPLAYNAME, SHGFI_SMALLICON, SHGFI_SYSICONINDEX,
     StrCmpLogicalW,
 };
@@ -537,6 +538,33 @@ impl App {
     fn row_lit(&self, name: &str) -> bool {
         let state = |row| send(self.list.hwnd(), LVM_GETITEMSTATE, row, LVIS_DROPHILITED.0 as isize);
         self.row_of(name).is_some_and(|row| state(row) != 0)
+    }
+
+    /// The tip a drag's data carries for its image, "" for none (5.4).
+    fn drag_tip(data: &IDataObject) -> String {
+        let fmt = FORMATETC {
+            cfFormat: unsafe { RegisterClipboardFormatW(CFSTR_DROPDESCRIPTION) } as u16,
+            ptd: std::ptr::null_mut(),
+            dwAspect: DVASPECT_CONTENT.0,
+            lindex: -1,
+            tymed: TYMED_HGLOBAL.0 as u32,
+        };
+        unsafe {
+            let Ok(mut med) = data.GetData(&fmt) else { return String::new() };
+            let p = GlobalLock(med.u.hGlobal) as *const DROPDESCRIPTION;
+            let mut tip = String::new();
+            if !p.is_null() {
+                // Copied out whole: the struct is packed, so its fields can't be borrowed where they are.
+                let d = std::ptr::read_unaligned(p);
+                let (kind, text, name) = (d.r#type, d.szMessage, d.szInsert);
+                if kind != DROPIMAGE_INVALID {
+                    tip = format!("{} [{}]", from_wide(&text).to_string_lossy(), from_wide(&name).to_string_lossy());
+                }
+                let _ = GlobalUnlock(med.u.hGlobal);
+            }
+            ReleaseStgMedium(&mut med);
+            tip
+        }
     }
 
     /// Bookmarks' folder "one", the first.
@@ -2257,6 +2285,30 @@ impl App {
                 note(seen.join(", "));
             },
             |a| noted() == "sub refused, made taken, file refused" && !a.row_lit("made"),
+        );
+        // While a drop would ask, the drag's tip says so, not Windows' "Move to". No drop here: it would ask (5.4).
+        s.add(
+            "while a drop on a folder would ask, the drag's tip says Copy or move to it; not with Ctrl held, nor once \
+             the drag has left (5.4)",
+            |a| {
+                FLAG.set(false);
+                let data = data_object_at(a.wnd, &Location::dir(p("file1.txt")));
+                let (Some(data), Some(target)) = (data, a.list_drop.borrow().clone()) else { return };
+                let any = DROPEFFECT_COPY | DROPEFFECT_MOVE | DROPEFFECT_LINK;
+                unsafe {
+                    let mut effect = any;
+                    let _ = target.DragEnter(&data, MK_LBUTTON, a.row_point("sub"), &mut effect);
+                    let asking = App::drag_tip(&data);
+                    effect = any;
+                    let _ = target.DragOver(MK_LBUTTON | MK_CONTROL, a.row_point("sub"), &mut effect);
+                    let held = App::drag_tip(&data);
+                    let _ = target.DragLeave();
+                    let left = App::drag_tip(&data);
+                    FLAG.set(asking == "Copy or move to %1 [sub]" && held != asking && left.is_empty());
+                    note(format!("{asking} / {held} / {left}"));
+                }
+            },
+            |_| FLAG.get(),
         );
         s.add("(close the extra tab)", |a| a.close_tab(a.active() + 1), |a| a.idle() && a.tabs() == 1);
         s.add(
