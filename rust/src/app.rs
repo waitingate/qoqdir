@@ -2032,9 +2032,13 @@ impl App {
     fn on_load_failed(&self, listing: &Listing, error: &str, pending: &Pending) {
         if matches!(pending.nav, Nav::Refresh | Nav::Switch) {
             // A tab made on a file (qoqdir C:\src\main.cpp) shows the file's folder with the file selected, as explorer
-            // /select does (5.10). The switch's read gives the tab that folder, with no history entry for the file.
+            // /select does (5.10). The switch's read gives the tab that folder, with no history entry for the file. Not
+            // while a move that took over from that read is still out (State::kept, 4.2): a new switch would replace
+            // the move, which decides where the tab goes.
             let parent = listing.location.parent();
-            if listing.is_file && self.location().same(&listing.location) && matches!(parent, Location::Dir(_)) {
+            let moving = self.st.borrow().pending.is_some();
+            let on_file = listing.is_file && self.location().same(&listing.location);
+            if on_file && matches!(parent, Location::Dir(_)) && !moving {
                 return self.open(parent, Nav::Switch, ViewState::selecting(listing.location.display_name()));
             }
             return self.show_unavailable(&listing.location, error);

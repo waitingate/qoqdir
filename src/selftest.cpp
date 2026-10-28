@@ -2521,6 +2521,19 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
             readBack(ERROR_BAD_NETPATH);   // the move is still out
         },
         [=, this] { return at(path(L"sub")) && active_ == 1 && statusHas(L"the move's own hint"); });
+    // A tab made on a file shows the file's folder (5.10), unless a move took over from its read: the move decides.
+    firstTab();
+    add(L"a tab made on a file goes where a move that overtook its read goes, not to the file's folder (4.2)",
+        [=, this] {
+            tabs_[1].path = path(L"file1.txt");   // as qoqdir with a file makes it
+            overtake(L"big");
+            Listing found;
+            found.path = path(L"file1.txt");
+            found.error = ERROR_DIRECTORY;   // what reading a file as a folder answers
+            found.isFile = true;
+            onLoaded(std::move(found), kStuckRead);   // the move is still out
+        },
+        [=, this] { return at(path(L"big")) && active_ == 1; });
     add(L"(close that tab)", [=, this] { closeTab(1); }, oneTabHome);
     // A refresh a move replaced goes with the move: if the move fails, the refresh is asked for again (4.5).
     add(L"a refresh that a failed move replaced is asked for again (4.5)",

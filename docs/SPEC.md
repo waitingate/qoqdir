@@ -587,7 +587,8 @@ qoqdir [options] [folder ...]
 - With no folders, the home folder opens.
 - A file opens its folder with the file selected, as `explorer /select,` does.
   That it is a file is found when its tab loads, so a path on a server that is
-  off still never holds the start (4.1).
+  off still never holds the start (4.1); a folder opened in that tab before
+  then is shown instead.
 - `qoqdir .` opens the terminal's current folder, and `D:` means `D:\`.
 - A folder that can't be opened still gets its tab, in the "not available" state
   (4.3). That helps with network drives that connect later.
@@ -909,11 +910,12 @@ result:
     shows the tab not available at once, and a move that lands after the
     switch's read was shown goes on from that folder; a change that read saw is
     not read again in the move's folder, and a hint of the move still waits for
-    it when that read fails first. A refresh that a failed move replaced is
-    asked for again, and a move to the folder shown leaves what the user types
-    into the address bar meanwhile; a Back to that folder still sets the Back
-    and Forward buttons. A This PC tab left while its list is emptied keeps its
-    selection.
+    it when that read fails first. A tab made on a file whose read a move
+    overtook goes where the move goes, not to the file's folder. A refresh that
+    a failed move replaced is asked for again, and a move to the folder shown
+    leaves what the user types into the address bar meanwhile; a Back to that
+    folder still sets the Back and Forward buttons. A This PC tab left while its
+    list is emptied keeps its selection.
 67. Open in new window would start this exe on the folder, a title bar down
     and right of this window, the same size and not maximized. The self-test
     checks what it would start, without starting it: that would show a window.

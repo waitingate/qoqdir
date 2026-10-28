@@ -1148,8 +1148,11 @@ void App::showLocation(bool sameFolder) {
 void App::onLoadFailed(const Listing& listing, const Pending& p) {
     if (p.nav == Nav::Refresh || p.nav == Nav::Switch) {
         // A tab made on a file (qoqdir C:\src\main.cpp) shows the file's folder with the file selected, as explorer
-        // /select does (5.10). The switch's read gives the tab that folder, with no history entry for the file.
-        if (listing.isFile && samePath(tab().path, listing.path) && !parentPath(listing.path).empty()) {
+        // /select does (5.10). The switch's read gives the tab that folder, with no history entry for the file. Not
+        // while a move that took over from that read is still out (kept_, 4.2): a new switch would replace the move,
+        // which decides where the tab goes.
+        if (listing.isFile && samePath(tab().path, listing.path) && !parentPath(listing.path).empty() &&
+            !pending_.generation) {
             open(parentPath(listing.path), Nav::Switch, ViewState::selecting(leafName(listing.path)));
             return;
         }

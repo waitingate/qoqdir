@@ -15,7 +15,7 @@ use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
 
 use windows::Win32::Foundation::{
-    COLORREF, ERROR_BAD_NETPATH, HGLOBAL, HWND, LPARAM, POINT, POINTL, RECT, WPARAM,
+    COLORREF, ERROR_BAD_NETPATH, ERROR_DIRECTORY, HGLOBAL, HWND, LPARAM, POINT, POINTL, RECT, WPARAM,
 };
 use windows::Win32::Graphics::Gdi::{
     COLOR_WINDOW, ClientToScreen, GetMonitorInfoW, GetSysColor, GetSysColorBrush, MONITOR_DEFAULTTONEAREST, MONITORINFO,
@@ -3671,6 +3671,23 @@ impl App {
                 read_back(a, Some(ERROR_BAD_NETPATH.to_hresult().into()), false); // the move is still out
             },
             |a| a.at(&p("sub")) && a.active() == 1 && a.status_message().contains("the move's own hint"),
+        );
+        // A tab made on a file shows the file's folder (5.10), unless a move took over from its read: the move decides.
+        s.first_tab();
+        s.add(
+            "a tab made on a file goes where a move that overtook its read goes, not to the file's folder (4.2)",
+            |a| {
+                a.st.borrow_mut().tabs[1].location = Location::dir(p("file1.txt")); // as qoqdir with a file makes it
+                overtake(a, "big");
+                let found = Listing {
+                    location: Location::dir(p("file1.txt")),
+                    error: Some(ERROR_DIRECTORY.to_hresult().into()), // what reading a file as a folder answers
+                    is_file: true,
+                    ..Default::default()
+                };
+                a.on_loaded(found, STUCK_READ); // the move is still out
+            },
+            |a| a.at(&p("big")) && a.active() == 1,
         );
         s.add("(close that tab)", |a| a.close_tab(1), one_tab_home);
         // A refresh a move replaced goes with the move: if the move fails, the refresh is asked for again (4.5).
