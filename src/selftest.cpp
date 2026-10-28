@@ -11,6 +11,7 @@
 #include <shellapi.h>
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <cstdio>
 #include <functional>
@@ -2120,7 +2121,8 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
             int done = loadsDone_ - loadsBefore->first, wasted = loadsWasted_ - loadsBefore->second;
             selfTest_->note =
                 std::to_wstring(wasted) + L" of " + std::to_wstring(done) + L" reads ran to the end for nothing";
-            return idle() && active_ == 0 && done == 30 && wasted <= 3;
+            // One read a press; a change another program makes in the folder meanwhile can add a refresh or two.
+            return idle() && active_ == 0 && done >= 30 && done <= 32 && wasted <= 3;
         },
         30000);
     add(L"(filter the first tab down to its selected file, then switch tabs)",
@@ -2579,6 +2581,46 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
     add(L"(on This PC, in the home folder)", [=, this] { open(L"", Nav::New); },
         [=, this] { return at(L"") && samePath(terminalFolder(), knownFolder(FOLDERID_Profile)); });
     backHome(L"(back to the test folder)");
+    // Long use leaves nothing behind (4.10): opening folders and tabs again and again doesn't pile up handles, GDI or
+    // USER objects. A first round fills what is meant to stay (the system image list, the type names).
+    auto usage = [] {
+        DWORD handles = 0;
+        GetProcessHandleCount(GetCurrentProcess(), &handles);
+        return std::array<DWORD, 3>{handles, GetGuiResources(GetCurrentProcess(), GR_GDIOBJECTS),
+                                    GetGuiResources(GetCurrentProcess(), GR_USEROBJECTS)};
+    };
+    auto moves = std::make_shared<int>(0);
+    auto before = std::make_shared<std::array<DWORD, 3>>();
+    // Rounds of four moves: to sub, back to the test folder, a tab on made, closed again. Each waits for the one
+    // before to land; true once that many rounds are done.
+    auto rounds = [=, this](int n) {
+        size_t tabsNow = (*moves + 3) % 4 == 2 ? 2 : 1;   // after the newest move
+        if (!idle() || tabs_.size() != tabsNow) return false;
+        if (*moves == n * 4) return true;
+        switch ((*moves)++ % 4) {
+        case 0: open(path(L"sub"), Nav::New); break;
+        case 1: open(dir, Nav::New); break;
+        case 2: newTab(path(L"made"), true); break;
+        default: closeTab(active_); break;
+        }
+        return false;
+    };
+    add(L"(a first round of folders and a tab)", [=] { *moves = 0; }, [=] { return rounds(1); }, 20000);
+    add(L"(what the process holds then, once its workers are done)", nullptr, [=, this] {
+        *before = usage();
+        return GetTickCount64() - selfTest_->startTick >= 1000;
+    });
+    add(L"(25 rounds more)", [=] { *moves = 0; }, [=] { return rounds(25); }, 120000);
+    add(L"opening folders and tabs again and again leaves no handles, GDI or USER objects behind (4.10)", nullptr,
+        [=, this] {
+            std::array<DWORD, 3> now = usage();
+            selfTest_->note = L"handles " + std::to_wstring((*before)[0]) + L" -> " + std::to_wstring(now[0]) +
+                              L", GDI " + std::to_wstring((*before)[1]) + L" -> " + std::to_wstring(now[1]) +
+                              L", USER " + std::to_wstring((*before)[2]) + L" -> " + std::to_wstring(now[2]);
+            // A leak of one a round would be 25 more; the margin is for workers still ending.
+            return GetTickCount64() - selfTest_->startTick >= 1000 && now[0] <= (*before)[0] + 15 &&
+                   now[1] <= (*before)[1] + 4 && now[2] <= (*before)[2] + 4;
+        });
     // 4.10: a window that answers nothing for 5 s gets a line in the crash log saying where its thread is. Last: a
     // hung window gets a ghost window from Windows meanwhile, which can take the focus from the steps after it.
     // The test's own long steps (making and removing 10,000 files) leave such lines too: a new one must appear.

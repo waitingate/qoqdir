@@ -223,6 +223,9 @@ Targets on an ordinary SSD laptop with a folder of 10,000 files (faster is fine)
   line in the same log saying where its thread is: each frame of its stack as an
   exe offset or a DLL name, so a hung shell extension names itself. The program
   goes on; one line per hang.
+- Long use leaves nothing behind: opening folders and tabs again and again
+  doesn't pile up handles, GDI or USER objects (Windows lets a program have
+  10,000 of each kind of window object, and then drawing fails).
 
 ## 5. Features
 
@@ -899,7 +902,11 @@ result:
     checks what it would start, without starting it: that would show a window.
     The same for Ctrl+`: Windows Terminal (or cmd) in the folder shown, and in
     the home folder on This PC; the key itself is checked by hand.
-68. Last, a window thread stuck for 7 s leaves a line in the crash log naming
+68. After one round to fill the caches, 25 rounds of opening `sub`, going back
+    to the test folder, and opening and closing a tab on `made` leave the
+    process's handles within 15, and its GDI and USER objects within 4, of
+    what it held before them (a leak of one a round would be 25).
+69. Last, a window thread stuck for 7 s leaves a line in the crash log naming
     where it is (the self-test's crash log is in its own folder).
 
 ### 7.3 Command-line checks

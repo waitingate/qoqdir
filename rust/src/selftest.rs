@@ -38,6 +38,9 @@ use windows::Win32::System::Ole::{
     DROPEFFECT_COPY, DROPEFFECT_LINK, DROPEFFECT_MOVE, DROPEFFECT_NONE, OleSetClipboard, ReleaseStgMedium,
 };
 use windows::Win32::System::SystemServices::{MK_CONTROL, MK_LBUTTON};
+use windows::Win32::System::Threading::{
+    GR_GDIOBJECTS, GR_USEROBJECTS, GetCurrentProcess, GetGuiResources, GetProcessHandleCount,
+};
 use windows::Win32::UI::Controls::{
     EM_GETCUEBANNER, LVIR_BOUNDS, LVIS_DROPHILITED, LVM_GETHEADER, LVM_GETITEMSTATE,
     EM_SETSEL, EM_GETSEL, EM_REPLACESEL, HTREEITEM, LVIF_IMAGE, LVIR_LABEL, LVITEMW, LVM_CANCELEDITLABEL, LVM_GETBKCOLOR, LVM_GETCOUNTPERPAGE,
@@ -177,6 +180,8 @@ thread_local! {
     static LOADS: Cell<(u32, u32)> = const { Cell::new((0, 0)) };
     static FLAG: Cell<bool> = const { Cell::new(false) };
     static CUES: Cell<isize> = const { Cell::new(0) };  // the list's focus frames as they were (WM_QUERYUISTATE)
+    static MOVES: Cell<usize> = const { Cell::new(0) }; // how far rounds of folders and tabs have got
+    static USAGE: Cell<[u32; 3]> = const { Cell::new([0; 3]) }; // handles, GDI and USER objects held before them
     static NEXT: RefCell<OsString> = const { RefCell::new(OsString::new()) }; // the item after the one Delete removes
     // What `sub` held before the paste step, and anything the paste brought in that isn't the test's file (a cut made
     // elsewhere just as it started): then the test folder is kept, not deleted (7.2).
@@ -3089,7 +3094,8 @@ impl App {
                 let (done, wasted) = LOADS.get();
                 let (done, wasted) = (a.loads_done.get() - done, a.loads_wasted.get() - wasted);
                 note(format!("{wasted} of {done} reads ran to the end for nothing"));
-                a.idle() && a.active() == 0 && done == 30 && wasted <= 3
+                // One read a press; a change another program makes in the folder meanwhile can add a refresh or two.
+                a.idle() && a.active() == 0 && (30..=32).contains(&done) && wasted <= 3
             },
         )
         .wait(30000);
@@ -3736,6 +3742,53 @@ impl App {
             },
         );
         s.home("(back to the test folder)");
+        // Long use leaves nothing behind (4.10): opening folders and tabs again and again doesn't pile up handles, GDI
+        // or USER objects. A first round fills what is meant to stay (the system image list, the type names).
+        let usage = || unsafe {
+            let mut handles = 0u32;
+            let _ = GetProcessHandleCount(GetCurrentProcess(), &mut handles);
+            let gui = |kind| GetGuiResources(GetCurrentProcess(), kind);
+            [handles, gui(GR_GDIOBJECTS), gui(GR_USEROBJECTS)]
+        };
+        // Rounds of four moves: to sub, back to the test folder, a tab on made, closed again. Each waits for the one
+        // before to land; true once that many rounds are done.
+        let rounds = move |a: &App, n: usize| {
+            let tabs_now = if (MOVES.get() + 3) % 4 == 2 { 2 } else { 1 }; // after the newest move
+            if !a.idle() || a.tabs() != tabs_now {
+                return false;
+            }
+            let m = MOVES.get();
+            if m == n * 4 {
+                return true;
+            }
+            MOVES.set(m + 1);
+            match m % 4 {
+                0 => a.open(Location::dir(p("sub")), Nav::New, ViewState::default()),
+                1 => a.open(Location::dir(dir()), Nav::New, ViewState::default()),
+                2 => a.new_tab(Location::dir(p("made")), true),
+                _ => a.close_tab(a.active()),
+            }
+            false
+        };
+        s.add("(a first round of folders and a tab)", |_| MOVES.set(0), move |a| rounds(a, 1)).wait(20000);
+        s.add("(what the process holds then, once its workers are done)", |_| {}, move |_| {
+            USAGE.set(usage());
+            step_ms() >= 1000
+        });
+        s.add("(25 rounds more)", |_| MOVES.set(0), move |a| rounds(a, 25)).wait(120000);
+        s.add(
+            "opening folders and tabs again and again leaves no handles, GDI or USER objects behind (4.10)",
+            |_| {},
+            move |_| {
+                let (was, now) = (USAGE.get(), usage());
+                note(format!(
+                    "handles {} -> {}, GDI {} -> {}, USER {} -> {}",
+                    was[0], now[0], was[1], now[1], was[2], now[2]
+                ));
+                // A leak of one a round would be 25 more; the margin is for workers still ending.
+                step_ms() >= 1000 && now[0] <= was[0] + 15 && now[1] <= was[1] + 4 && now[2] <= was[2] + 4
+            },
+        );
         // 4.10: a window that answers nothing for 5 s gets a line in the crash log saying where its thread is. Last: a
         // hung window gets a ghost window from Windows meanwhile, which can take the focus from the steps after it.
         // The test's own long steps (making and removing 10,000 files) leave such lines too: a new one must appear.
