@@ -736,6 +736,8 @@ result:
 7. Ctrl+Shift+N creates "New folder" in rename mode. Typing a name and Enter
    renames it, and the new name is selected.
 8. F2 on `name.txt` selects only `name`, and typing a new name keeps `.txt`.
+   Rename on the item menu (picked as the menu would pick it), with the focus
+   moved off the selected file as Ctrl+Down moves it, renames the selected file.
 9. Delete sends the file to the Recycle Bin and it leaves the list. A Delete
    that is done after the tab went on to `sub` leaves `sub` as it is: nothing
    is read again, and its selection stays.

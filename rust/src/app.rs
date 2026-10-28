@@ -1457,7 +1457,8 @@ impl App {
         if !self.list.shows(&m.dir) || self.list.selected_names() != m.names {
             return true; // changed: do nothing
         }
-        let row = self.list.focused().or(m.rows.first().copied());
+        // The focused item when it is one the menu was for; the keyboard can leave the focus on an item not selected.
+        let row = self.list.focused().filter(|f| m.rows.contains(f)).or(m.rows.first().copied());
         if is("rename") {
             self.list.rename(row);
         } else if is("delete") {

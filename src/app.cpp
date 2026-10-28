@@ -802,7 +802,9 @@ bool App::itemVerb(const std::wstring& verb, const MenuItems& m) {
     bool open = isOpenVerb(verb), inNewTab = isNewTabVerb(verb), location = is(verb, L"opencontaining");
     if (!is(verb, L"rename") && !is(verb, L"delete") && !location && !(m.opensHere && (open || inNewTab))) return false;
     if (!list_.shows(m.dir) || list_.selectedNames() != m.names) return true;   // changed: do nothing
-    int row = list_.focused() >= 0 ? list_.focused() : m.rows[0];
+    // The focused item when it is one the menu was for; the keyboard can leave the focus on an item not selected.
+    int focus = list_.focused();
+    int row = std::find(m.rows.begin(), m.rows.end(), focus) != m.rows.end() ? focus : m.rows[0];
     if (is(verb, L"rename")) list_.rename(row);
     else if (is(verb, L"delete")) deleteSelection(GetKeyState(VK_SHIFT) < 0);   // like the Delete key (4.6)
     else if (location) openTargetLocation(list_.pathAt(row));                   // a shortcut's Open file location

@@ -629,6 +629,17 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
             selfTestKey(VK_RETURN);
         },
         [=, this] { return idle() && exists(path(L"renamed.txt")) && !exists(path(L"file2.txt")); });
+    add(L"Rename on the item menu renames the selected item, not one the keyboard left the focus on",
+        [=, this] {
+            SetWindowTextW(filter_, L"");   // the F2 step typed "file2" into it
+            SetFocus(list_.hwnd());
+            int row = list_.select({L"file1.txt"}, L"file1.txt");
+            list_.focusRow(row + 1);   // as Ctrl+Down leaves it: the focus moves, the selection stays
+            itemVerb(L"rename", menuItems());
+        },
+        [=, this] { return list_.renaming() && editText() == L"file1.txt"; });
+    add(L"(cancel that rename)", [=, this] { ListView_CancelEditLabel(list_.hwnd()); },
+        [=, this] { return !list_.renaming(); });
     add(L"a refresh that lands during a rename waits for it",
         [=, this] {
             SetWindowTextW(filter_, L"");

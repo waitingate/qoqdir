@@ -1073,6 +1073,19 @@ impl App {
             |a| a.idle() && exists(&p("renamed.txt")) && !exists(&p("file2.txt")),
         );
         s.add(
+            "Rename on the item menu renames the selected item, not one the keyboard left the focus on",
+            |a| {
+                set_text(a.filter, ""); // the F2 step typed "file2" into it
+                focus(a.list.hwnd());
+                if let Some(row) = a.select_one("file1.txt") {
+                    a.list.focus_row(row + 1); // as Ctrl+Down leaves it: the focus moves, the selection stays
+                }
+                a.item_verb("rename", &a.menu_items());
+            },
+            |a| a.list.renaming() && a.edit_text() == "file1.txt",
+        );
+        s.add("(cancel that rename)", |a| a.cancel_rename(), |a| !a.list.renaming());
+        s.add(
             "a refresh that lands during a rename waits for it",
             |a| {
                 set_text(a.filter, "");
