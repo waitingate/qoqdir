@@ -28,8 +28,8 @@ use windows::Win32::UI::Controls::{
     LVM_HITTEST, LVM_REDRAWITEMS, LVM_SETCALLBACKMASK,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    CreateWindowExW, GWL_STYLE, GetWindowLongPtrW, HMENU, PostMessageW, SetWindowLongPtrW, WINDOW_EX_STYLE, WINDOW_STYLE,
-    WS_CHILD, WS_TABSTOP, WS_VISIBLE,
+    CreateWindowExW, GWL_STYLE, GetWindowLongPtrW, GetWindowRect, HMENU, IsWindowVisible, PostMessageW, SetWindowLongPtrW,
+    WINDOW_EX_STYLE, WINDOW_STYLE, WS_CHILD, WS_TABSTOP, WS_VISIBLE,
 };
 
 use windows::core::w;
@@ -481,35 +481,43 @@ impl FileList {
 
     // ------------------------------------------------------------ drops
 
+    /// The row at a screen point, if any: none over the column header, which Windows' hit test gives to the first row
+    /// or to one scrolled behind it, and none below the last row.
+    pub fn row_at(&self, pt: POINT) -> Option<usize> {
+        let mut hit = LVHITTESTINFO { pt, ..Default::default() };
+        unsafe {
+            let _ = ScreenToClient(self.hwnd, &mut hit.pt);
+            let header = HWND(send(self.hwnd, LVM_GETHEADER, 0, 0) as _);
+            let mut r = RECT::default();
+            if !header.is_invalid() && IsWindowVisible(header).as_bool() && GetWindowRect(header, &mut r).is_ok() {
+                let mut below = POINT { x: r.left, y: r.bottom };
+                let _ = ScreenToClient(self.hwnd, &mut below);
+                if hit.pt.y < below.y {
+                    return None;
+                }
+            }
+        }
+        let row = usize::try_from(send(self.hwnd, LVM_HITTEST, 0, &mut hit as *mut _ as isize)).ok()?;
+        (row < self.count()).then_some(row)
+    }
+
     /// During a drag (5.8): the folder a drop at that screen point goes into when it is over a folder's row, or a
     /// shortcut's to a local folder; none elsewhere, nor when `pt` is none (the drag left or ended). The row lights
-    /// up, unless the drop would leave the `dragged` files where they are (4.8).
+    /// up, unless the drop would leave the `dragged` files where they are (4.8). In a folder on the network no row
+    /// takes a drop: each would be asked about on this thread as the pointer crosses it (4.1).
     pub fn drop_folder(&self, pt: Option<POINT>, dragged: &[Location]) -> Option<Location> {
-        let shown = matches!(self.model.borrow().location, Location::Dir(_));
-        let row = pt.filter(|_| shown).and_then(|pt| {
-            let mut hit = LVHITTESTINFO { pt, ..Default::default() };
-            unsafe {
-                let _ = ScreenToClient(self.hwnd, &mut hit.pt);
-            }
-            let row = usize::try_from(send(self.hwnd, LVM_HITTEST, 0, &mut hit as *mut _ as isize)).ok()?;
-            (row < self.count()).then_some(row)
-        });
+        let local = local_folder(self.location(), false).is_some();
+        let row = pt.filter(|_| local).and_then(|pt| self.row_at(pt));
         if row != self.over_row.get() {
             // A new row: what it takes is worked out once, as the tree does for a node.
             let lit = self.lit_row();
             self.over_row.set(row);
-            let into = row.and_then(|row| {
-                let m = self.model.borrow();
-                let it = m.item(row)?;
-                let path = Location::dir(m.location.join(&it.name));
-                if it.is_dir() {
-                    Some(path)
-                } else if is_shortcut(&it.name) {
-                    local_folder(path, true)
-                } else {
-                    None
-                }
-            });
+            // The row's item is copied out first: reading a shortcut calls into Windows, never with the model borrowed.
+            let into = match row.and_then(|row| self.item(row).zip(self.item_location(row))) {
+                Some((it, path)) if it.is_dir() => Some(path),
+                Some((it, path)) if is_shortcut(&it.name) => local_folder(path, true),
+                _ => None,
+            };
             self.drop_lit.set(into.as_ref().is_some_and(|d| drop_back(d, dragged).is_none()));
             *self.drop_into.borrow_mut() = into;
             for r in [lit, self.lit_row()].into_iter().flatten() {

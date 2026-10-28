@@ -376,7 +376,8 @@ buttons, and the filter box, has a tooltip that names it with its key ("Back
   in new tab or window opens a background tab).
 - Files dropped on a folder in the tree are copied or moved there as dropping on
   that folder in Explorer would, asking first as 5.8 says; dropped on a bookmark
-  shortcut to a folder, they go to that folder (read from the shortcut alone).
+  shortcut to a folder that is there, they go to that folder (read from the
+  shortcut alone).
   The node under the pointer lights up, and a closed folder opens after about
   0.7 s, so the folders inside it can be reached. Only folders on local drives
   take drops: not This PC, not a shortcut to a file or a web page, nothing on
@@ -494,6 +495,11 @@ buttons, and the filter box, has a tooltip that names it with its key ("Back
   comes from, a folder it carries takes no drop and its row doesn't light up,
   and over a file or the empty space of the folder the files are in, nothing
   happens (4.8).
+- Over a file's row, the column header or the empty space, the folder shown
+  takes the drop, as it does over a shortcut whose folder is gone. In a folder
+  on the network no row takes a drop, only the folder shown: each row would be
+  asked about as the pointer crosses it, and a server that stops answering
+  would hold the window (4.1).
 - While a drop would ask, the tip under the dragged files says "Copy or move to"
   the folder, not Windows' "Move to"; with Ctrl, Shift or Alt held it is
   Windows' own again.
@@ -763,7 +769,9 @@ result:
     program's would be, takes the row of another folder, but not `sub`'s own,
     nor a file's row or the tab of the test folder.
     While a drop on `sub` would ask, the drag's tip says "Copy or move to sub";
-    with Ctrl held, or once the drag has left, it doesn't.
+    with Ctrl held, or once the drag has left, it doesn't. Over the column
+    header the drag goes to the test folder and no row lights up, and the row of
+    a shortcut whose folder was deleted doesn't light up either.
 30. Middle-click on a folder in the list opens a new background tab with that
     folder, and the current tab doesn't change.
 31. Middle-click on a tree node opens a new background tab with that folder.

@@ -1510,6 +1510,41 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
             selfTest_->note = asking + L" / " + held + L" / " + left;
         },
         [=, this] { return *tipsRight; });
+    // Windows' hit test takes most of the column header for the first row, or for one scrolled behind it: a drag over
+    // the header goes to the folder shown, and no row lights up (5.8). No drop: it would ask.
+    add(L"a drag over the list's column header goes to the folder shown, and no row lights up (5.8)",
+        [=, this] {
+            RECT r{};
+            GetWindowRect(ListView_GetHeader(list_.hwnd()), &r);
+            POINTL header{r.left + 20, (r.top + r.bottom) / 2};   // over the Name column's title
+            // From elsewhere: nothing here refuses it.
+            Com<IDataObject> data = dataObject(wnd_, path(L"made\\file1.txt"));
+            DWORD effect = DROPEFFECT_COPY | DROPEFFECT_MOVE | DROPEFFECT_LINK;
+            listDrop_->DragEnter(data.get(), MK_LBUTTON, header, &effect);
+            selfTest_->note = dragTip(data.get()) + (rowLit(list_.at(0).name) ? L", the first row lit" : L"");
+            listDrop_->DragLeave();
+        },
+        [=, this] { return selfTest_->note == L"Copy or move to %1 [" + displayName(dir) + L"]"; });
+    // The shortcut still says folder, so only looking tells that its folder is gone. Its row is then like a file's.
+    add(L"(a shortcut in the list to a folder that is then deleted)",
+        [=, this] {
+            CreateDirectoryW(path(L"vanished").c_str(), nullptr);
+            makeShortcut(path(L"vanished.lnk"), path(L"vanished"));
+            RemoveDirectoryW(path(L"vanished").c_str());
+        },
+        [=, this] { return listed(L"vanished.lnk") && !listed(L"vanished"); });
+    add(L"a shortcut in the list whose folder is gone doesn't light up, and a drop on it goes to the folder "
+        L"shown (5.8)",
+        [=, this] {
+            Com<IDataObject> data = dataObject(wnd_, path(L"made\\file1.txt"));
+            DWORD effect = DROPEFFECT_COPY;
+            listDrop_->DragEnter(data.get(), MK_LBUTTON, rowPoint(L"vanished.lnk"), &effect);
+            selfTest_->note = std::wstring(effect == DROPEFFECT_NONE ? L"refused" : L"taken") +
+                              (rowLit(L"vanished.lnk") ? L", lit" : L", not lit");
+            listDrop_->DragLeave();
+            DeleteFileW(path(L"vanished.lnk").c_str());
+        },
+        [=, this] { return selfTest_->note == L"taken, not lit" && !listed(L"vanished.lnk"); });
     add(L"(close the extra tab)", [=, this] { closeTab(active_ + 1); }, [=, this] { return idle() && tabs_.size() == 1; });
     add(L"middle-click on a folder opens it in a new background tab",
         [=, this] {

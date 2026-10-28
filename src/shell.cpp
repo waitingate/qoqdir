@@ -678,6 +678,9 @@ std::optional<std::wstring> localFolder(std::wstring path, bool shortcut) {
     if (shortcut) path = shortcutTarget(path, &folder).value_or(L"");
     bool local = folder && path.size() >= 3 && path[1] == L':' &&
                  GetDriveTypeW(path.substr(0, 3).c_str()) != DRIVE_REMOTE;
+    // A shortcut still says folder when its folder is gone: only looking tells, which costs no more than the drop
+    // target does, as it reads that folder next.
+    if (local && shortcut) local = isDirectory(path);
     return local ? std::optional(path) : std::nullopt;
 }
 

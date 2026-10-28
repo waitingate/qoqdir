@@ -39,7 +39,7 @@ use windows::Win32::System::Ole::{
 };
 use windows::Win32::System::SystemServices::{MK_CONTROL, MK_LBUTTON};
 use windows::Win32::UI::Controls::{
-    EM_GETCUEBANNER, LVIR_BOUNDS, LVIS_DROPHILITED, LVM_GETITEMSTATE,
+    EM_GETCUEBANNER, LVIR_BOUNDS, LVIS_DROPHILITED, LVM_GETHEADER, LVM_GETITEMSTATE,
     EM_SETSEL, EM_GETSEL, EM_REPLACESEL, HTREEITEM, LVIF_IMAGE, LVIR_LABEL, LVITEMW, LVM_CANCELEDITLABEL, LVM_GETBKCOLOR, LVM_GETCOUNTPERPAGE,
     LVM_GETTEXTBKCOLOR, TVM_GETBKCOLOR,
     LVM_GETITEMRECT, LVM_GETITEMW, TCIF_TEXT, TCITEMW,
@@ -62,7 +62,7 @@ use windows::Win32::UI::Shell::{
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     BM_CLICK, CHILDID_SELF, EnumWindows, FindWindowExW, HTCLIENT, OBJID_CLIENT, GCLP_HBRBACKGROUND, GWLP_USERDATA, GetClassLongPtrW, GetWindowLongPtrW, GetWindowTextLengthW, IsWindowVisible,
-    CreateWindowExW, HWND_MESSAGE, WINDOW_EX_STYLE, WINDOW_STYLE,
+    CreateWindowExW, GetWindowRect, HWND_MESSAGE, WINDOW_EX_STYLE, WINDOW_STYLE,
     MSG, PM_NOREMOVE, PeekMessageW,
     KillTimer, PostMessageW, SW_SHOWMINNOACTIVE, SW_SHOWNOACTIVATE, SetTimer, ShowWindow, WM_CHAR, WM_CLOSE,
     WM_DEVICECHANGE, WM_DPICHANGED, WM_KEYDOWN, WM_LBUTTONDBLCLK, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONUP, WM_MOUSEMOVE, WM_MOUSEWHEEL,
@@ -2313,6 +2313,59 @@ impl App {
                 }
             },
             |_| FLAG.get(),
+        );
+        // Windows' hit test takes most of the column header for the first row, or for one scrolled behind it: a drag
+        // over the header goes to the folder shown, and no row lights up (5.8). No drop: it would ask.
+        s.add(
+            "a drag over the list's column header goes to the folder shown, and no row lights up (5.8)",
+            |a| {
+                let header = HWND(send(a.list.hwnd(), LVM_GETHEADER, 0, 0) as _);
+                let mut r = RECT::default();
+                unsafe {
+                    let _ = GetWindowRect(header, &mut r);
+                }
+                let at = POINTL { x: r.left + 20, y: (r.top + r.bottom) / 2 }; // over the Name column's title
+                // From elsewhere: nothing here refuses it.
+                let data = data_object_at(a.wnd, &Location::dir(p("made\\file1.txt")));
+                let (Some(data), Some(target)) = (data, a.list_drop.borrow().clone()) else { return };
+                let first = a.list.item(0).map(|it| it.name.to_string_lossy().into_owned()).unwrap_or_default();
+                unsafe {
+                    let mut effect = DROPEFFECT_COPY | DROPEFFECT_MOVE | DROPEFFECT_LINK;
+                    let _ = target.DragEnter(&data, MK_LBUTTON, at, &mut effect);
+                    let lit = if a.row_lit(&first) { ", the first row lit" } else { "" };
+                    note(format!("{}{lit}", App::drag_tip(&data)));
+                    let _ = target.DragLeave();
+                }
+            },
+            |a| noted() == format!("Copy or move to %1 [{}]", a.list.location().display_name().to_string_lossy()),
+        );
+        // The shortcut still says folder, so only looking tells that its folder is gone. Its row is then like a file's.
+        s.add(
+            "(a shortcut in the list to a folder that is then deleted)",
+            |_| {
+                let _ = std::fs::create_dir(p("vanished"));
+                make_shortcut(&p("vanished.lnk"), p("vanished"));
+                let _ = std::fs::remove_dir(p("vanished"));
+            },
+            |a| a.listed("vanished.lnk") && !a.listed("vanished"),
+        );
+        s.add(
+            "a shortcut in the list whose folder is gone doesn't light up, and a drop on it goes to the folder \
+             shown (5.8)",
+            |a| {
+                let data = data_object_at(a.wnd, &Location::dir(p("made\\file1.txt")));
+                let (Some(data), Some(target)) = (data, a.list_drop.borrow().clone()) else { return };
+                unsafe {
+                    let mut effect = DROPEFFECT_COPY;
+                    let _ = target.DragEnter(&data, MK_LBUTTON, a.row_point("vanished.lnk"), &mut effect);
+                    let taken = if effect == DROPEFFECT_NONE { "refused" } else { "taken" };
+                    let lit = if a.row_lit("vanished.lnk") { "lit" } else { "not lit" };
+                    note(format!("{taken}, {lit}"));
+                    let _ = target.DragLeave();
+                }
+                let _ = std::fs::remove_file(p("vanished.lnk"));
+            },
+            |a| noted() == "taken, not lit" && !a.listed("vanished.lnk"),
         );
         s.add("(close the extra tab)", |a| a.close_tab(a.active() + 1), |a| a.idle() && a.tabs() == 1);
         s.add(

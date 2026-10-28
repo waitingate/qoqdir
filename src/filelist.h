@@ -53,9 +53,13 @@ public:
     // The line under each row (5.2): drawn while the list paints, in this colour (CLR_NONE: none).
     void setLineColor(COLORREF color);
     COLORREF lineColor() const { return lineColor_; }
+    // The row at a screen point, or -1: none over the column header, which Windows' hit test gives to the first row or
+    // to one scrolled behind it, and none below the last row.
+    int rowAt(POINT screenPt) const;
     // During a drag (5.8): the folder a drop at that screen point goes into when it is over a folder's row, or a
     // shortcut's to a local folder; none elsewhere, nor when 'screenPt' is null (the drag left or ended). The row
-    // lights up, unless the drop would leave the 'dragged' files where they are (4.8).
+    // lights up, unless the drop would leave the 'dragged' files where they are (4.8). In a folder on the network no
+    // row takes a drop: each would be asked about on this thread as the pointer crosses it (4.1).
     std::optional<std::wstring> dropFolder(const POINT* screenPt, const std::vector<std::wstring>& dragged);
 
     // Handles display-only notifications. Returns false for ones the app must handle.

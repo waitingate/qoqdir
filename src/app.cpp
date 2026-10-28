@@ -682,11 +682,8 @@ void App::onTimer(UINT_PTR id) {
 void App::onMiddleClick(HWND from, POINT screenPt) {
     std::wstring path;
     if (from == list_.hwnd()) {
-        LVHITTESTINFO hit{};
-        hit.pt = screenPt;
-        ScreenToClient(from, &hit.pt);
-        int row = ListView_HitTest(from, &hit);
-        if (row >= 0 && row < list_.count() && list_.at(row).isDir()) newTab(list_.pathAt(row), false);
+        int row = list_.rowAt(screenPt);
+        if (row >= 0 && list_.at(row).isDir()) newTab(list_.pathAt(row), false);
     } else if (bool shortcut = false; from == tree_.hwnd() && tree_.pathAt(screenPt, &path, &shortcut)) {
         openNode(path, true, shortcut);
     }

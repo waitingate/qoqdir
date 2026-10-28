@@ -129,7 +129,8 @@ copy or move them there. A plain drop that could move them asks first, with
 Windows' own menu (Copy here, Move here, Create shortcuts here), so nothing
 moves by accident; hold Ctrl to copy, Shift to move or Alt to make shortcuts
 without the question. A closed folder in the tree opens when you hold the drag
-over it. (The tree takes drops on local drives only.)
+over it. (The tree takes drops on local drives only, and so do the folders in
+the list.)
 
 Right-click on files gives Windows' full context menu, so Send to, Open with and
 the entries of other programs are all there. Right-click the empty space for

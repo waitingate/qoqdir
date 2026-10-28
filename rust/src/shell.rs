@@ -65,7 +65,8 @@ use windows::Win32::UI::WindowsAndMessaging::{
 use windows::core::{GUID, HRESULT, IUnknown, Interface, PCSTR, PCWSTR, PSTR, PWSTR, Ref, Result, implement, s, w};
 
 use crate::folder::{
-    Item, Location, SortKey, drop_back, drop_keys, exists, extension_of, list_folder, normalize, sort_items,
+    Item, Location, SortKey, drop_back, drop_keys, exists, extension_of, is_directory, list_folder, normalize,
+    sort_items,
 };
 use crate::util::{OwnedMenu, Pidl, copy_to, from_wide, key_down, pcwstr, wide};
 
@@ -934,8 +935,8 @@ pub fn acknowledge_change(wp: WPARAM, lp: LPARAM) {
 // ---------------------------------------------------------------- drag and drop
 
 /// The local folder a tree node or a shortcut in the list stands for when files are dropped on it: its own, or the
-/// shortcut's target (read from the .lnk alone). None for This PC, a link to a file or a web page, and anything on the
-/// network: asking Windows about a server that is off would freeze the drag.
+/// shortcut's target (read from the .lnk alone). None for This PC, a link to a file or a web page, a shortcut whose
+/// folder is gone, and anything on the network: asking Windows about a server that is off would freeze the drag.
 pub fn local_folder(location: Location, shortcut: bool) -> Option<Location> {
     let path = location.path()?.to_path_buf(); // This PC: none
     let location = if shortcut {
@@ -950,6 +951,9 @@ pub fn local_folder(location: Location, shortcut: bool) -> Option<Location> {
     let local = w.len() >= 3
         && w[1] == u16::from(b':')
         && unsafe { GetDriveTypeW(pcwstr(&[w[0], w[1], w[2], 0])) } != DRIVE_REMOTE;
+    // A shortcut still says folder when its folder is gone: only looking tells, which costs no more than the drop
+    // target does, as it reads that folder next.
+    let local = local && (!shortcut || location.path().is_some_and(is_directory));
     local.then_some(location)
 }
 

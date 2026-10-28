@@ -35,7 +35,7 @@ use windows::Win32::System::WindowsProgramming::{GetPrivateProfileStringW, Write
 use windows::Win32::UI::Accessibility::{CLSID_AccPropServices, IAccPropServices, PROPID_ACC_NAME};
 use windows::Win32::UI::Controls::{
     EM_GETSEL, EM_REPLACESEL, EM_SETSEL, LVIR_LABEL, LVIS_SELECTED, LVM_CANCELEDITLABEL,
-    LVHITTESTINFO, LVM_GETITEMRECT, LVM_HITTEST, LVN_BEGINDRAG, LVN_BEGINRDRAG, LVN_ENDLABELEDITW, LVN_ITEMACTIVATE,
+    LVM_GETITEMRECT, LVN_BEGINDRAG, LVN_BEGINRDRAG, LVN_ENDLABELEDITW, LVN_ITEMACTIVATE,
     LVM_SETBKCOLOR, LVM_SETTEXTBKCOLOR, TVM_SETBKCOLOR, LVN_ITEMCHANGED, LVN_ODSTATECHANGED, NM_RCLICK, NMHDR, NMLVDISPINFOW, SB_GETTEXTLENGTHW, SB_GETTEXTW, SB_SETPARTS, SB_SETTEXTW,
     TCHITTESTINFO, TCIF_TEXT, TCITEMW, TCM_DELETEALLITEMS, TCM_GETCURSEL, TCM_GETITEMRECT, TCM_HITTEST, TCM_INSERTITEMW,
     TCM_SETCURSEL, TCM_SETMINTABWIDTH, TCN_SELCHANGE, TOOLTIPS_CLASSW, TTF_IDISHWND, TTF_SUBCLASS, TTM_ADDTOOLW,
@@ -1306,12 +1306,7 @@ impl App {
     /// Middle-click on a folder in the list or the tree opens it in a new tab, in the background.
     fn on_middle_click(&self, from: HWND, pt: POINT) {
         if from == self.list.hwnd() {
-            let mut hit = LVHITTESTINFO { pt, ..Default::default() };
-            unsafe {
-                let _ = ScreenToClient(from, &mut hit.pt);
-            }
-            let row = send(from, LVM_HITTEST, 0, &mut hit as *mut _ as isize);
-            let folder = usize::try_from(row).ok().filter(|&r| self.list.item(r).is_some_and(|i| i.is_dir()));
+            let folder = self.list.row_at(pt).filter(|&r| self.list.item(r).is_some_and(|i| i.is_dir()));
             if let Some(location) = folder.and_then(|r| self.list.item_location(r)) {
                 self.new_tab(location, false);
             }
