@@ -53,7 +53,7 @@ public:
     // The line under each row (5.2): drawn while the list paints, in this colour (CLR_NONE: none).
     void setLineColor(COLORREF color);
     COLORREF lineColor() const { return lineColor_; }
-    // During a drag (5.4): the folder a drop at that screen point goes into when it is over a folder's row, or a
+    // During a drag (5.8): the folder a drop at that screen point goes into when it is over a folder's row, or a
     // shortcut's to a local folder, which then lights up; none elsewhere, nor when 'screenPt' is null (the drag left
     // or ended). 'own': the drag comes from this list and carries its selected rows, so none of those takes it.
     std::optional<std::wstring> dropFolder(const POINT* screenPt, bool own);

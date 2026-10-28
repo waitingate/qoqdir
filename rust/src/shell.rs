@@ -999,7 +999,7 @@ impl DropTarget {
                 let _ = old.DragLeave();
             }
             let folder = dir.as_ref().and_then(|d| ui_object_at::<IDropTarget>(self.owner, d).ok());
-            // A plain drag that could move files reaches the folder as a right-button drag: Windows asks (5.4).
+            // A plain drag that could move files reaches the folder as a right-button drag: Windows asks (5.8).
             let keys = drop_keys(keys, *effect);
             let entered = folder.filter(|f| f.DragEnter(data.as_ref(), keys, *pt, effect).is_ok());
             if entered.is_none() {
@@ -1027,12 +1027,12 @@ impl DropTarget {
     }
 
     /// A drop with these keys asks with Windows' menu, and could move the files: a plain drag passed on as a
-    /// right-button one (drop_keys), or a right-drag (5.4).
+    /// right-button one (drop_keys), or a right-drag (5.8).
     fn asks(keys: MODIFIERKEYS_FLAGS, allowed: DROPEFFECT) -> bool {
         (drop_keys(keys, allowed).0 & MK_RBUTTON.0) != 0 && (allowed.0 & DROPEFFECT_MOVE.0) != 0
     }
 
-    /// While a drop would ask, the drag's tip says "Copy or move to" its folder, not the folder's own "Move to" (5.4).
+    /// While a drop would ask, the drag's tip says "Copy or move to" its folder, not the folder's own "Move to" (5.8).
     fn describe(&self, keys: MODIFIERKEYS_FLAGS, allowed: DROPEFFECT, effect: DROPEFFECT) {
         let into = self.dir.borrow().clone().filter(|_| self.folder.borrow().is_some());
         match into {

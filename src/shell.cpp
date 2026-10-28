@@ -750,7 +750,7 @@ private:
         folder_.reset();
         dir_ = dir;
         if (dir) folder_ = shellObject<IDropTarget>(owner_, *dir);
-        // A plain drag that could move files reaches the folder as a right-button drag: Windows asks (5.4).
+        // A plain drag that could move files reaches the folder as a right-button drag: Windows asks (5.8).
         if (folder_ && FAILED(folder_->DragEnter(data_.get(), dropKeys(keys, *effect), pt, effect))) folder_.reset();
         if (!folder_) *effect = DROPEFFECT_NONE;
         return true;
@@ -765,11 +765,11 @@ private:
     }
 
     // A drop with these keys asks with Windows' menu, and could move the files: a plain drag passed on as a
-    // right-button one (dropKeys), or a right-drag (5.4).
+    // right-button one (dropKeys), or a right-drag (5.8).
     static bool asks(DWORD keys, DWORD allowed) {
         return (dropKeys(keys, allowed) & MK_RBUTTON) && (allowed & DROPEFFECT_MOVE);
     }
-    // While a drop would ask, the drag's tip says "Copy or move to" its folder, not the folder's own "Move to" (5.4).
+    // While a drop would ask, the drag's tip says "Copy or move to" its folder, not the folder's own "Move to" (5.8).
     void describe(DWORD keys, DWORD allowed, DWORD effect) {
         if (folder_ && dir_ && effect != DROPEFFECT_NONE && asks(keys, allowed))
             setTip(DROPIMAGE_LABEL, L"Copy or move to %1", displayName(*dir_));

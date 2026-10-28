@@ -534,13 +534,13 @@ impl App {
         POINTL { x: pt.x, y: pt.y }
     }
 
-    /// A row lit up as a drop's target (5.4).
+    /// A row lit up as a drop's target (5.8).
     fn row_lit(&self, name: &str) -> bool {
         let state = |row| send(self.list.hwnd(), LVM_GETITEMSTATE, row, LVIS_DROPHILITED.0 as isize);
         self.row_of(name).is_some_and(|row| state(row) != 0)
     }
 
-    /// The tip a drag's data carries for its image, "" for none (5.4).
+    /// The tip a drag's data carries for its image, "" for none (5.8).
     fn drag_tip(data: &IDataObject) -> String {
         let fmt = FORMATETC {
             cfFormat: unsafe { RegisterClipboardFormatW(CFSTR_DROPDESCRIPTION) } as u16,
@@ -2197,10 +2197,10 @@ impl App {
             },
         )
         .wait(10000);
-        // Ctrl says copy, so a drop that could move the file asks nothing: it copies at once (5.4). Without a key, the
+        // Ctrl says copy, so a drop that could move the file asks nothing: it copies at once (5.8). Without a key, the
         // same drop would ask with Windows' menu, which only a person can answer: that is checked by hand.
         s.add(
-            "a drop with Ctrl held copies at once, without asking, though the file could be moved (5.4)",
+            "a drop with Ctrl held copies at once, without asking, though the file could be moved (5.8)",
             |a| {
                 write_file(&p("held.txt"));
                 let cursor = a.tab_point(a.active() + 1);
@@ -2226,10 +2226,10 @@ impl App {
             },
         )
         .wait(10000);
-        // A folder in the list takes a drop too (5.4): copy only here, so nothing asks.
+        // A folder in the list takes a drop too (5.8): copy only here, so nothing asks.
         s.add(
             "dropping a file on a folder in the list puts it in that folder, whose row lights up while the file is \
-             over it, and not afterwards (5.4)",
+             over it, and not afterwards (5.8)",
             |a| {
                 write_file(&p("into.txt"));
                 let cursor = a.row_point("sub");
@@ -2257,9 +2257,9 @@ impl App {
         .wait(10000);
         // A drag from the list carries its selection: the folder it carries refuses, and so does a file's row, which
         // would mean the folder the drag comes from; another folder's row takes it. No drop: a plain drop that could
-        // move asks, and only a person answers (5.4).
+        // move asks, and only a person answers (5.8).
         s.add(
-            "a drag from the list takes another folder's row, but not the folder it carries, nor a file's row (5.4)",
+            "a drag from the list takes another folder's row, but not the folder it carries, nor a file's row (5.8)",
             |a| {
                 a.select_one("sub");
                 let data = data_object_at(a.wnd, &Location::dir(p("sub")));
@@ -2286,10 +2286,10 @@ impl App {
             },
             |a| noted() == "sub refused, made taken, file refused" && !a.row_lit("made"),
         );
-        // While a drop would ask, the drag's tip says so, not Windows' "Move to". No drop here: it would ask (5.4).
+        // While a drop would ask, the drag's tip says so, not Windows' "Move to". No drop here: it would ask (5.8).
         s.add(
             "while a drop on a folder would ask, the drag's tip says Copy or move to it; not with Ctrl held, nor once \
-             the drag has left (5.4)",
+             the drag has left (5.8)",
             |a| {
                 FLAG.set(false);
                 let data = data_object_at(a.wnd, &Location::dir(p("file1.txt")));

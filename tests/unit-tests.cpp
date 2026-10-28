@@ -358,7 +358,7 @@ int main(int argc, char** argv) {
         CHECK(listFolder(sys, false, [] { return false; }).items.size() > 256);
     }
 
-    // dropKeys: a plain drag that could move files goes on as a right-button drag, so Windows asks (5.4); a key held, a
+    // dropKeys: a plain drag that could move files goes on as a right-button drag, so Windows asks (5.8); a key held, a
     // drag that can only copy, a right-drag and the drop itself (no button down) go on as they are.
     {
         DWORD any = DROPEFFECT_COPY | DROPEFFECT_MOVE | DROPEFFECT_LINK;

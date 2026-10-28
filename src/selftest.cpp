@@ -185,12 +185,12 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
         }
         return POINTL{pt.x, pt.y};
     };
-    auto rowLit = [this](const std::wstring& name) {   // a row lit up as a drop's target (5.4)
+    auto rowLit = [this](const std::wstring& name) {   // a row lit up as a drop's target (5.8)
         for (int row = 0; row < list_.count(); ++row)
             if (list_.at(row).name == name) return ListView_GetItemState(list_.hwnd(), row, LVIS_DROPHILITED) != 0;
         return false;
     };
-    auto dragTip = [](IDataObject* data) {   // the tip a drag's data carries for its image, "" for none (5.4)
+    auto dragTip = [](IDataObject* data) {   // the tip a drag's data carries for its image, "" for none (5.8)
         FORMATETC fmt{CLIPFORMAT(RegisterClipboardFormatW(CFSTR_DROPDESCRIPTION)), nullptr, DVASPECT_CONTENT, -1,
                       TYMED_HGLOBAL};
         STGMEDIUM med{};
@@ -1422,9 +1422,9 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
                    TabCtrl_GetCurSel(tabBar_) == active_;
         },
         10000);
-    // Ctrl says copy, so a drop that could move the file asks nothing: it copies at once (5.4). Without a key, the same
+    // Ctrl says copy, so a drop that could move the file asks nothing: it copies at once (5.8). Without a key, the same
     // drop would ask with Windows' menu, which only a person can answer: that is checked by hand.
-    add(L"a drop with Ctrl held copies at once, without asking, though the file could be moved (5.4)",
+    add(L"a drop with Ctrl held copies at once, without asking, though the file could be moved (5.8)",
         [=, this] {
             writeFile(path(L"held.txt"));
             POINTL cursor = tabPoint(active_ + 1);
@@ -1443,9 +1443,9 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
             return true;
         },
         10000);
-    // A folder in the list takes a drop too (5.4): copy only here, so nothing asks.
+    // A folder in the list takes a drop too (5.8): copy only here, so nothing asks.
     add(L"dropping a file on a folder in the list puts it in that folder, whose row lights up while the file is over "
-        L"it, and not afterwards (5.4)",
+        L"it, and not afterwards (5.8)",
         [=, this] {
             writeFile(path(L"into.txt"));
             POINTL cursor = rowPoint(L"sub");
@@ -1468,8 +1468,8 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
         10000);
     // A drag from the list carries its selection: the folder it carries refuses, and so does a file's row, which
     // would mean the folder the drag comes from; another folder's row takes it. No drop: a plain drop that could move
-    // asks, and only a person answers (5.4).
-    add(L"a drag from the list takes another folder's row, but not the folder it carries, nor a file's row (5.4)",
+    // asks, and only a person answers (5.8).
+    add(L"a drag from the list takes another folder's row, but not the folder it carries, nor a file's row (5.8)",
         [=, this] {
             list_.select({L"sub"}, L"sub");
             Com<IDataObject> data = dataObject(wnd_, path(L"sub"));
@@ -1488,10 +1488,10 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
             selfTest_->note = seen;
         },
         [=, this] { return selfTest_->note == L"sub refused, made taken, file refused" && !rowLit(L"made"); });
-    // While a drop would ask, the drag's tip says so, not Windows' "Move to". No drop here: it would ask (5.4).
+    // While a drop would ask, the drag's tip says so, not Windows' "Move to". No drop here: it would ask (5.8).
     auto tipsRight = std::make_shared<bool>(false);
     add(L"while a drop on a folder would ask, the drag's tip says Copy or move to it; not with Ctrl held, nor once "
-        L"the drag has left (5.4)",
+        L"the drag has left (5.8)",
         [=, this] {
             Com<IDataObject> data = dataObject(wnd_, path(L"file1.txt"));
             DWORD any = DROPEFFECT_COPY | DROPEFFECT_MOVE | DROPEFFECT_LINK, effect = any;

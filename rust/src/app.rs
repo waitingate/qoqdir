@@ -694,7 +694,7 @@ impl App {
             let _ = SetWindowSubclass(app.tree.hwnd(), Some(middle_click_proc), 1, 0);
             // Drops land in the folder row under the pointer (or a shortcut's folder), which lights up, or else in the
             // folder shown; never in This PC. Our own drag takes neither the folder it comes from nor a folder it
-            // carries (5.4).
+            // carries (5.8).
             let weak: Weak<App> = Rc::downgrade(&app);
             let drop = new_drop_target(
                 wnd,

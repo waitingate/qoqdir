@@ -102,7 +102,7 @@ std::wstring errorText(DWORD error);
 
 // ---------------------------------------------------------------- drops
 
-// The keys a folder's drop target is told (5.4): a plain drag that could move files goes on as a right-button drag, so
+// The keys a folder's drop target is told (5.8): a plain drag that could move files goes on as a right-button drag, so
 // Windows asks with its menu (Copy here, Move here...) instead of moving them at once. Ctrl, Shift or Alt held says
 // what to do, and a drag that can only copy has nothing to ask.
 DWORD dropKeys(DWORD keys, DWORD allowed);

@@ -201,7 +201,7 @@ Targets on an ordinary SSD laptop with a folder of 10,000 files (faster is fine)
   own question.
 - Renaming to an empty name, or to the same name, does nothing.
 - Files dragged out of Qoqdir and dropped back on the same folder do nothing;
-  dropped on a folder in it, they go into that folder (5.4).
+  dropped on a folder in it, they go into that folder (5.8).
 
 ### 4.9 Quiet
 - It beeps only for user errors (a bad path, an impossible action), and never in
@@ -371,7 +371,7 @@ buttons, and the filter box, has a tooltip that names it with its key ("Back
 - Right-click gives Windows' context menu for that folder (Open opens here, Open
   in new tab or window opens a background tab).
 - Files dropped on a folder in the tree are copied or moved there as dropping on
-  that folder in Explorer would, asking first as 5.4 says; dropped on a bookmark
+  that folder in Explorer would, asking first as 5.8 says; dropped on a bookmark
   shortcut to a folder, they go to that folder (read from the shortcut alone).
   The node under the pointer lights up, and a closed folder opens after about
   0.7 s, so the folders inside it can be reached. Only folders on local drives
@@ -434,7 +434,7 @@ buttons, and the filter box, has a tooltip that names it with its key ("Back
 - Drop onto a tab: dragging files over a tab shows it as the current one while
   they are over it (the real current tab keeps its bullet), and dropping copies
   or moves them into that tab's folder as dropping on that folder in Explorer
-  would, asking first as 5.4 says (Shift, Ctrl and Alt work as usual). Not onto
+  would, asking first as 5.8 says (Shift, Ctrl and Alt work as usual). Not onto
   This PC, not onto a tab whose folder hasn't loaded here yet or failed, and not
   back into the folder the files come from.
 - Tabs aren't remembered between runs by themselves. Ctrl+S saves them as
