@@ -23,7 +23,8 @@ use windows::Win32::UI::Controls::{
     LVN_ODFINDITEMW, LVNI_FOCUSED, LVNI_SELECTED, LVS_EDITLABELS, LVS_EX_DOUBLEBUFFER, LVS_EX_FULLROWSELECT,
     LVS_OWNERDATA, LVS_REPORT, LVS_SHAREIMAGELISTS, LVS_SHOWSELALWAYS, LVSIL_SMALL, NMHDR, NMLISTVIEW,
     NMLVDISPINFOW, EM_SETSEL, HEADER_CONTROL_FORMAT_FLAGS,
-    CDDS_ITEMPOSTPAINT, CDDS_ITEMPREPAINT, CDDS_PREPAINT, CDIS_FOCUS, CDIS_HOT, CDRF_DODEFAULT, CDRF_NOTIFYITEMDRAW,
+    CDDS_ITEMPOSTPAINT, CDDS_ITEMPREPAINT, CDDS_PREPAINT, CDIS_FOCUS, CDIS_HOT, CDIS_SHOWKEYBOARDCUES, CDRF_DODEFAULT,
+    CDRF_NOTIFYITEMDRAW,
     CDRF_NOTIFYPOSTPAINT, LVM_GETITEMSTATE, NM_CUSTOMDRAW, NMLVCUSTOMDRAW, LVHITTESTINFO, LVIF_STATE, LVIS_DROPHILITED,
     LVM_HITTEST, LVM_REDRAWITEMS, LVM_SETCALLBACKMASK,
 };
@@ -594,7 +595,8 @@ impl FileList {
             NM_CUSTOMDRAW => {
                 // A pale line under each row, so the eye can follow it across the columns (5.2), drawn once the row
                 // is: not under a selected, focused or hot row, or one a drag lights up, whose own frame marks it.
-                // Rows that aren't there get none.
+                // Rows that aren't there get none. The focused row has its frame only while keyboard cues show:
+                // Windows hides them until a key is pressed.
                 let cd = unsafe { &*(nm as *const NMLVCUSTOMDRAW) };
                 let stage = cd.nmcd.dwDrawStage;
                 if stage == CDDS_PREPAINT {
@@ -605,7 +607,10 @@ impl FileList {
                 }
                 if stage == CDDS_ITEMPOSTPAINT && let Some(color) = self.line_color.get() {
                     let row = cd.nmcd.dwItemSpec;
-                    let framed = (cd.nmcd.uItemState.0 & (CDIS_FOCUS.0 | CDIS_HOT.0)) != 0
+                    let state = cd.nmcd.uItemState.0;
+                    let focus_frame = state & CDIS_FOCUS.0 != 0 && state & CDIS_SHOWKEYBOARDCUES.0 != 0;
+                    let framed = focus_frame
+                        || state & CDIS_HOT.0 != 0
                         || send(self.hwnd, LVM_GETITEMSTATE, row, LVIS_SELECTED.0 as isize) != 0
                         || self.lit_row() == Some(row);
                     let mut r = RECT { left: LVIR_BOUNDS as i32, ..Default::default() };

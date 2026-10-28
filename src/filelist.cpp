@@ -337,15 +337,18 @@ bool FileList::onNotify(NMHDR* nm, LRESULT* result) {
     case NM_CUSTOMDRAW: {
         // A pale line under each row, so the eye can follow it across the columns (5.2), drawn once the row is: not
         // under a selected, focused or hot row, or one a drag lights up, whose own frame marks it. Rows that aren't
-        // there get none.
+        // there get none. The focused row has its frame only while keyboard cues show: Windows hides them until a
+        // key is pressed.
         auto* cd = reinterpret_cast<NMLVCUSTOMDRAW*>(nm);
         *result = CDRF_DODEFAULT;
         if (cd->nmcd.dwDrawStage == CDDS_PREPAINT) *result = CDRF_NOTIFYITEMDRAW;
         if (cd->nmcd.dwDrawStage == CDDS_ITEMPREPAINT) *result = CDRF_NOTIFYPOSTPAINT;
         if (cd->nmcd.dwDrawStage == CDDS_ITEMPOSTPAINT && lineColor_ != CLR_NONE) {
             int row = int(cd->nmcd.dwItemSpec);
-            bool framed = (cd->nmcd.uItemState & (CDIS_FOCUS | CDIS_HOT)) ||
-                          ListView_GetItemState(lv_, row, LVIS_SELECTED) || row == litRow();
+            UINT state = cd->nmcd.uItemState;
+            bool focusFrame = (state & CDIS_FOCUS) && (state & CDIS_SHOWKEYBOARDCUES);
+            bool framed = focusFrame || (state & CDIS_HOT) || ListView_GetItemState(lv_, row, LVIS_SELECTED) ||
+                          row == litRow();
             RECT r{};
             if (!framed && ListView_GetItemRect(lv_, row, &r, LVIR_BOUNDS)) {
                 r.top = r.bottom - 1;

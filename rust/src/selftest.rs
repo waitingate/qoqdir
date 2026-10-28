@@ -67,6 +67,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
     KillTimer, PostMessageW, SW_SHOWMINNOACTIVE, SW_SHOWNOACTIVATE, SetTimer, ShowWindow, WM_CHAR, WM_CLOSE,
     WM_DEVICECHANGE, WM_DPICHANGED, WM_KEYDOWN, WM_LBUTTONDBLCLK, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONUP, WM_MOUSEMOVE, WM_MOUSEWHEEL,
     WM_NCHITTEST, WM_SYSKEYDOWN, WM_TIMER, PRF_CLIENT, PRF_ERASEBKGND, WM_PRINTCLIENT,
+    UIS_CLEAR, UIS_SET, UISF_HIDEFOCUS, WM_QUERYUISTATE, WM_UPDATEUISTATE,
 };
 
 use crate::app::{App, Key, Nav, TIMER_LOADING, TIMER_REFRESH, ViewState};
@@ -175,6 +176,7 @@ thread_local! {
     static COUNT: Cell<u32> = const { Cell::new(0) };   // a load count to compare with
     static LOADS: Cell<(u32, u32)> = const { Cell::new((0, 0)) };
     static FLAG: Cell<bool> = const { Cell::new(false) };
+    static CUES: Cell<isize> = const { Cell::new(0) };  // the list's focus frames as they were (WM_QUERYUISTATE)
     static NEXT: RefCell<OsString> = const { RefCell::new(OsString::new()) }; // the item after the one Delete removes
     // What `sub` held before the paste step, and anything the paste brought in that isn't the test's file (a cut made
     // elsewhere just as it started): then the test folder is kept, not deleted (7.2).
@@ -775,6 +777,29 @@ impl App {
                 note(format!("{others} other row(s) lined"));
                 lined.len() == 6 && sub.is_some_and(|s| !lined[s]) && others >= 4 && !below
             },
+        );
+        // Windows hides the focus frame until a key is pressed (the window's UI state says so): the focused row then
+        // has no frame, so it keeps its line (5.2).
+        s.add(
+            "with focus frames hidden, as before a key is pressed, the focused row keeps its line (5.2)",
+            |a| {
+                focus(a.list.hwnd());
+                a.list.select(&[], Some(OsStr::new("sub"))); // focused, not selected
+                CUES.set(send(a.list.hwnd(), WM_QUERYUISTATE, 0, 0));
+                send(a.list.hwnd(), WM_UPDATEUISTATE, (UIS_SET | (UISF_HIDEFOCUS << 16)) as usize, 0);
+            },
+            |a| {
+                let (lined, _) = a.row_lines();
+                a.row_of("sub").is_some_and(|s| lined.get(s) == Some(&true))
+            },
+        );
+        s.add(
+            "(and the focus frames as they were)",
+            |a| {
+                let action = if CUES.get() & UISF_HIDEFOCUS as isize != 0 { UIS_SET } else { UIS_CLEAR };
+                send(a.list.hwnd(), WM_UPDATEUISTATE, (action | (UISF_HIDEFOCUS << 16)) as usize, 0);
+            },
+            |_| true,
         );
         s.add(
             "typing in the list filters it, and the status bar says so the first time",

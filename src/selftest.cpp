@@ -411,6 +411,28 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
             selfTest_->note = std::to_wstring(others) + L" other row(s) lined";
             return lined.size() == 6 && *subRow >= 0 && !lined[size_t(*subRow)] && others >= 4 && !below;
         });
+    // Windows hides the focus frame until a key is pressed (the window's UI state says so): the focused row then has
+    // no frame, so it keeps its line (5.2).
+    auto cues = std::make_shared<LRESULT>(0);
+    add(L"with focus frames hidden, as before a key is pressed, the focused row keeps its line (5.2)",
+        [=, this] {
+            SetFocus(list_.hwnd());
+            *subRow = list_.select({}, L"sub");   // focused, not selected
+            *cues = SendMessageW(list_.hwnd(), WM_QUERYUISTATE, 0, 0);
+            SendMessageW(list_.hwnd(), WM_UPDATEUISTATE, MAKEWPARAM(UIS_SET, UISF_HIDEFOCUS), 0);
+        },
+        [=, this] {
+            std::vector<bool> lined;
+            bool below = true;
+            rowLines(lined, below);
+            return *subRow >= 0 && size_t(*subRow) < lined.size() && lined[size_t(*subRow)];
+        });
+    add(L"(and the focus frames as they were)",
+        [=, this] {
+            int action = (*cues & UISF_HIDEFOCUS) ? UIS_SET : UIS_CLEAR;
+            SendMessageW(list_.hwnd(), WM_UPDATEUISTATE, MAKEWPARAM(action, UISF_HIDEFOCUS), 0);
+        },
+        [] { return true; });
     add(L"typing in the list filters it, and the status bar says so the first time",
         [=, this] { SetFocus(list_.hwnd()); selfTestType(L"file"); },
         [=, this] {

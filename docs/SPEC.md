@@ -249,8 +249,10 @@ buttons, and the filter box, has a tooltip that names it with its key ("Back
   own colours replace the gray, also when the theme is turned on while Qoqdir runs.
 - A pale line runs under each row of the file list, RGB(219, 219, 219), so the
   eye can follow a row across the columns: horizontal only, and none below the
-  last row. A selected, focused or hovered row has none, as its own frame marks
-  it. In a high-contrast theme the line takes the theme's gray text colour.
+  last row. A selected or hovered row has none, as its own frame marks it, nor
+  has the focused row while Windows shows its dotted focus frame (it hides it
+  until a key is pressed). In a high-contrast theme the line takes the theme's
+  gray text colour.
 - Tabs are all the same width: 150 pixels at 100% scaling while they fit, all
   narrower together as more open, down to 80; past that the bar scrolls, with
   arrows at its right end.
@@ -871,7 +873,8 @@ result:
     accessible names of 5.1. Drawn into a bitmap, the empty filter box shows its
     funnel at its right end and no word; with text in it, no funnel. The list,
     drawn the same way, has a line under each row but the selected one, and none
-    below the last row (5.2).
+    below the last row (5.2); with focus frames hidden, the focused row keeps
+    its line.
 66. Shown by a tab switch, This PC gets its own change watch and the folder shown
     before loses its, with a refresh only its changes asked for: This PC loads
     once, and a file made in that folder reloads nothing. A drive that comes
