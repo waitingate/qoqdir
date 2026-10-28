@@ -3,9 +3,11 @@
 #include "folder.h"
 
 #include <algorithm>
+#include <climits>
 #include <cstdio>
 #include <cstring>
 #include <stdexcept>
+#include <vector>
 
 static int failures = 0;
 
@@ -85,6 +87,17 @@ int main(int argc, char** argv) {
         HANDLE t = CreateThread(nullptr, 0, [](void*) -> DWORD { throw std::out_of_range("map::at"); }, nullptr, 0, nullptr);
         WaitForSingleObject(t, INFINITE);
         return 0;
+    }
+    if (argc > 1 && strcmp(argv[1], "--overflow") == 0) {   // the same for a signed int that overflows
+        installCrashLog();
+        volatile int big = INT_MAX;
+        return big + argc;
+    }
+    if (argc > 1 && strcmp(argv[1], "--bad-index") == 0) {   // and for a vector read past its end
+        installCrashLog();
+        std::vector<int> v(1);
+        volatile size_t at = 1;
+        return v[at];
     }
     if (argc > 1 && strcmp(argv[1], "--parent") == 0) {   // the parent-process test below: started by this program
         return parentProcessName() == toLower(leafName(exePath())) ? 0 : 5;
@@ -405,6 +418,14 @@ int main(int argc, char** argv) {
         CHECK(runSelf(L"--throw-in-thread", dir) == 3);
         line = readFile(log);
         CHECK(line.find("std::out_of_range") != std::string::npos && line.find("map::at") != std::string::npos);
+        // The build's own checks are in the code that runs, whatever the optimizer did across files: an int that
+        // overflows traps (an illegal instruction), and a bad index fails _GLIBCXX_ASSERTIONS' check.
+        DeleteFileW(log.c_str());
+        CHECK(DWORD(runSelf(L"--overflow", dir)) == 0xC000001D);
+        CHECK(readFile(log).find("Exception 0xC000001D") != std::string::npos);
+        DeleteFileW(log.c_str());
+        CHECK(runSelf(L"--bad-index", dir) == 3);
+        CHECK(readFile(log).find("Assertion") != std::string::npos);
         // The program this one was started from is named (main.cpp sends PowerShell, and only PowerShell, an Enter).
         CHECK(runSelf(L"--parent", dir) == 0);
         DeleteFileW(log.c_str());

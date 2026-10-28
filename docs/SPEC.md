@@ -681,7 +681,10 @@ At least these, with concrete examples:
   a folder whose name only starts the same (`sub2` for `sub`).
 - The crash log: a program that throws an exception nothing catches (a panic in
   the Rust version) ends with exit code 3, and the log line names the
-  exception's type and message (the panic's message and place).
+  exception's type and message (the panic's message and place). In the C++
+  version a signed int that overflows ends it too, logged as exception
+  0xC000001D, and so does a vector read past its end, with exit code 3 and the
+  failed check: the build's own checks are in the code that runs.
 - The parent process: a program this one started names it (its exe file name,
   lower case).
 
