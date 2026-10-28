@@ -76,7 +76,7 @@ use crate::folder::{
     is_absolute_path, is_relative_path, is_shortcut, list_folder, normalize, row_after_deleting, tab_argument,
 };
 use crate::shell::{
-    FolderWatch, IconBatch, OwnItem, acknowledge_change, fill_types, has_own_icon, read_own_icons, background_menu, bookmark_folder, copy_to_clipboard, delete_items, drag_out, open_in_explorer,
+    FolderWatch, IconBatch, OwnItem, acknowledge_change, fill_types, background_menu, bookmark_folder, copy_to_clipboard, delete_items, drag_out, open_in_explorer,
     shortcut_target, forward_menu_message, in_background, invoke_verb, item_menu, item_menu_at, known_folder, new_drop_target, open_file,
     can_paste, copy_text, paste_into, post, rename_item, run_command, save_folder_shortcuts, saved_folders, show_menu,
     start_terminal, terminal_program,
@@ -117,6 +117,7 @@ const WM_APP_BOOKMARKED: u32 = WM_APP + 15;
 const WM_APP_DELETED: u32 = WM_APP + 16;
 const WM_APP_COMMAND: u32 = WM_APP + 17;
 const WM_APP_TERMINAL: u32 = WM_APP + 18;
+const WM_APP_WANTICONS: u32 = WM_APP + 19;
 
 /// A typed command's reply from its worker (go_to_typed).
 struct CommandDone {
@@ -617,7 +618,7 @@ impl App {
             let _ = std::fs::create_dir(&bookmarks); // fails harmlessly if it exists
             let tree = FolderTree::create(wnd, ID_TREE, WM_APP_TREE, WM_APP_TREE_ICONS, Location::dir(bookmarks));
             let bookmarks_watch = FolderWatch::new(wnd, WM_APP_BOOKMARKS, tree.bookmarks());
-            let list = FileList::create(wnd, ID_LIST);
+            let list = FileList::create(wnd, ID_LIST, WM_APP_WANTICONS, WM_APP_ICONS);
             const SBARS_SIZEGRIP: u32 = 0x100;
             let status = make(w!("msctls_statusbar32"), w!(""), SBARS_SIZEGRIP, 0, ID_STATUS);
 
@@ -1023,6 +1024,11 @@ impl App {
                     // A shortcut or folder came or went in Bookmarks: a drop on its node, or another program.
                     acknowledge_change(wp, lp);
                     self.tree.refresh_folder(self.tree.bookmarks());
+                    return LRESULT(0);
+                }
+                WM_APP_WANTICONS => {
+                    // Rows drawn since the last read want their own icons.
+                    self.list.read_wanted_icons();
                     return LRESULT(0);
                 }
                 WM_APP_ICONS => {
@@ -1823,15 +1829,8 @@ impl App {
             if !replaced() {
                 fill_types(&mut listing.items); // the shell's type names and icons, off the window's thread
             }
-            let own: Vec<OsString> = listing.items.iter().filter(|it| has_own_icon(it)).map(|it| it.name.clone()).collect();
-            // Asked before the listing goes: once it is shown, a switch's read a move took over looks replaced
-            // (State::kept).
-            let icons = !own.is_empty() && !replaced();
+            // Own icons, which need a disk (or network) lookup, are read later, for the rows the list shows.
             post(wnd, WM_APP_LOADED, generation as usize, Box::new(listing));
-            // Then the icons that need a disk (or network) lookup, so they never hold up the list.
-            if icons {
-                post(wnd, WM_APP_ICONS, 0, Box::new(read_own_icons(&location, own)));
-            }
         });
     }
 

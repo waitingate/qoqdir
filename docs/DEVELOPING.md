@@ -95,10 +95,12 @@ instead of corrupting data, and the crash log says where.
   dead history entry; a typed path that is a file gets opened. A move that takes
   over from a tab switch keeps the switch's read going (`kept_`, which
   `loading()` counts): `onLoaded` applies what it finds as the switch as soon as
-  it is back, while the move still loads or after it failed. The worker decides
-  about own icons before it posts the listing, since a read shown from `kept_`
-  looks replaced afterwards. A cleared list (`FileList::clear`) shows no folder:
-  compare with `shows()`, not `dir()`.
+  it is back, while the move still loads or after it failed. A cleared list
+  (`FileList::clear`) shows no folder: compare with `shows()`, not `dir()`.
+- Own icons (a program's, a shortcut's) are read only for the rows the list
+  draws. `LVN_GETDISPINFO` notes a drawn row that lacks one and posts
+  `WM_APP_WANTICONS` once; `readWantedIcons()` then reads them on a worker, one
+  read at a time for the folder shown, and `setIcons()` adds what it found.
 - The right-click menu is modal, so Qoqdir's own commands in it only act if the
   folder and the selection are the same as when it opened.
 - Live updates: `FolderWatch` posts `WM_APP_CHANGED`, and a burst of changes

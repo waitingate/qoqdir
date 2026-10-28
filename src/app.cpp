@@ -19,7 +19,8 @@ enum : int { ID_BACK = 100, ID_FORWARD, ID_UP, ID_ADDRESS, ID_FILTER, ID_TABS, I
 enum : UINT {
     WM_APP_LOADED = WM_APP + 1, WM_APP_CHANGED, WM_APP_CLOSETAB, WM_APP_RENAME, WM_APP_ICONS, WM_APP_TREE,
     WM_APP_MIDDLECLICK, WM_APP_TABS_SAVED, WM_APP_TABS_READ, WM_APP_PRESSTAB, WM_APP_DRAGTAB, WM_APP_TREE_ICONS,
-    WM_APP_BOOKMARKS, WM_APP_NEWWINDOW, WM_APP_BOOKMARKED, WM_APP_DELETED, WM_APP_COMMAND, WM_APP_TERMINAL
+    WM_APP_BOOKMARKS, WM_APP_NEWWINDOW, WM_APP_BOOKMARKED, WM_APP_DELETED, WM_APP_COMMAND, WM_APP_TERMINAL,
+    WM_APP_WANTICONS
 };
 
 struct CommandDone {   // a typed command's reply from its worker (goToTyped)
@@ -231,7 +232,7 @@ bool App::create(HINSTANCE instance, const CommandLine& cmd, bool useSettings) {
     CreateDirectoryW(bookmarks.c_str(), nullptr);   // fails harmlessly if it exists
     tree_.create(wnd_, ID_TREE, WM_APP_TREE, WM_APP_TREE_ICONS, bookmarks);
     bookmarksWatch_ = FolderWatch(wnd_, WM_APP_BOOKMARKS, bookmarks);
-    list_.create(wnd_, ID_LIST);
+    list_.create(wnd_, ID_LIST, WM_APP_WANTICONS, WM_APP_ICONS);
     status_ = make(STATUSCLASSNAMEW, L"", SBARS_SIZEGRIP, 0, ID_STATUS);
     // Each button's tooltip, and the filter box's, says what it does and its key, and screen readers read the same as
     // its name (5.1).
@@ -474,6 +475,9 @@ LRESULT App::onMessage(UINT msg, WPARAM wp, LPARAM lp) {
     case WM_APP_BOOKMARKS:   // a shortcut or folder came or went in Bookmarks: a drop on its node, or another program
         acknowledgeChange(wp, lp);
         tree_.refreshFolder(tree_.bookmarks());
+        return 0;
+    case WM_APP_WANTICONS:   // rows drawn since the last read want their own icons
+        list_.readWantedIcons();
         return 0;
     case WM_APP_ICONS: {   // the shown folder's own icons
         std::unique_ptr<IconBatch> batch(reinterpret_cast<IconBatch*>(lp));
@@ -997,14 +1001,8 @@ void App::open(const std::wstring& path, Nav nav, ViewState view, Origin origin)
         auto replaced = [generation] { return g_newestLoad != generation && g_keptLoad != generation; };
         auto result = std::make_unique<Listing>(listFolder(path, true, replaced));
         if (!replaced()) fillTypes(result->items);   // the shell's type names and icons, off the window's thread
-        std::vector<std::wstring> own;
-        for (const Item& it : result->items)
-            if (hasOwnIcon(it)) own.push_back(it.name);
-        // Asked before the listing goes: once it is shown, a switch's read a move took over looks replaced (kept_).
-        bool icons = !own.empty() && !replaced();
+        // Own icons, which need a disk (or network) lookup, are read later, for the rows the list shows.
         post(wnd, WM_APP_LOADED, generation, std::move(result));
-        // Then the icons that need a disk (or network) lookup, so they never hold up the list.
-        if (icons) post(wnd, WM_APP_ICONS, 0, std::make_unique<IconBatch>(readOwnIcons(path, own)));
     });
 }
 

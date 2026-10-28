@@ -195,6 +195,10 @@ Targets on an ordinary SSD laptop with a folder of 10,000 files (faster is fine)
 - The window shows up well under a second after start.
 - A folder with 20,000 subfolders (`C:\Windows\WinSxS` has that many) opens in the
   tree with the window waiting under 1 s (about 0.5 s measured).
+- A folder full of programs costs only the own icons of the rows on screen:
+  `C:\Windows\System32` has about 700, and reading them all took about 2 s of
+  CPU on each open and refresh. The rows scrolled to get theirs a moment later
+  (5.4).
 
 ### 4.8 Never lose data
 - Delete goes to the Recycle Bin. Shift+Delete deletes for good, after Windows'
@@ -310,7 +314,9 @@ buttons, and the filter box, has a tooltip that names it with its key ("Back
 - Detail view with Name, Date modified, Type and Size (size right aligned, empty
   for folders). Icons are Windows' own: the type's icon shows at once, and files
   with their own icon (programs, shortcuts, icon files) get it a moment later
-  without holding up the list.
+  without holding up the list. Those icons are read for the rows on screen, a
+  screenful at a time as the list scrolls, as Explorer does (4.7); a refresh
+  keeps the icons it has while it reads them again.
 - Folders always come before files.
 - Click a column header to sort, and click again to reverse. Name and Type start A
   to Z, Date and Size start with the newest or largest. Numbers in names sort
@@ -754,7 +760,10 @@ result:
 23. A change notification while a folder is being opened doesn't cancel the
     open, and the new folder is shown.
 24. A slow refresh shows "Loading…", which goes away afterwards.
-25. In a folder with a program in it, the program's own icon arrives later.
+25. In a folder with a program in it, the program's own icon arrives later. In
+    a folder of 300 shortcuts, own icons are read for a screenful of rows, a few
+    more at most; scrolled to the end, the last rows get theirs too, and about
+    two screenfuls were read in all.
 26. Sorting by Type puts the Type column in order.
 27. The Bookmarks folder exists and is the first tree root, labelled "Bookmarks".
     While it is empty it keeps its arrow, and F5 lists a folder made in it.

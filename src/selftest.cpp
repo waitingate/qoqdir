@@ -1349,6 +1349,36 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
             }
             return false;
         });
+    // Own icons are read for the rows on screen, a screenful at a time as the list scrolls, not for the whole folder:
+    // System32 has 700 programs (4.7).
+    add(L"(a folder of 300 shortcuts, each with its own icon)",
+        [=, this] {
+            CreateDirectoryW(path(L"links").c_str(), nullptr);
+            for (int i = 0; i < 300; ++i)
+                makeShortcut(path(L"links\\link " + std::to_wstring(i) + L".lnk"), path(L"sub"));
+            open(path(L"links"), Nav::New);
+        },
+        [=, this] { return at(path(L"links")) && list_.count() == 300; }, 20000);
+    auto iconsRead = [this](int pages) {   // read for a few rows more than that many screenfuls at most
+        size_t read = list_.ownIconCount();
+        int page = ListView_GetCountPerPage(list_.hwnd());
+        selfTest_->note = std::to_wstring(read) + L" read, " + std::to_wstring(page) + L" rows to a screenful";
+        return read > 0 && read <= size_t(pages * page + 4);
+    };
+    add(L"in a folder of 300 shortcuts, own icons are read only for the rows on screen (4.7)", nullptr,
+        [=, this] {
+            return GetTickCount64() - selfTest_->startTick >= 1000 && list_.ownIconKnown(list_.at(0).name) &&
+                   iconsRead(1);
+        });
+    add(L"scrolled to the end, its last rows get their own icons too, and two screenfuls in all were read (4.7)",
+        [=, this] { ListView_EnsureVisible(list_.hwnd(), list_.count() - 1, FALSE); },
+        [=, this] { return list_.ownIconKnown(list_.at(list_.count() - 1).name) && iconsRead(2); });
+    add(L"(remove them)",
+        [=, this] {
+            open(dir, Nav::New);
+            deleteTree(path(L"links"));
+        },
+        [=, this] { return at(dir) && !exists(path(L"links")); }, 10000);
     add(L"sorting by Type puts the Type column in order",
         [=, this] {
             makeShortcut(path(L"sub-link2.lnk"), path(L"sub"));   // a few different types

@@ -8,15 +8,20 @@
 
 #include <functional>
 #include <unordered_map>
+#include <unordered_set>
 
 class FileList {
 public:
-    void create(HWND parent, int id);
+    // Own icons (a .exe's, a .lnk's) are read for the rows the list draws, a screenful at a time (4.7): a drawn row
+    // that lacks one posts `askMsg` to `parent`, which calls readWantedIcons; the read posts `iconMsg` (an
+    // IconBatch*), for setIcons.
+    void create(HWND parent, int id, UINT askMsg, UINT iconMsg);
     HWND hwnd() const { return lv_; }
 
     void setListing(Listing&& listing);   // new folder contents; keeps sort and filter
     void clear();   // no folder at all: while a tab switch reads its folder, or the folder is not available
-    void setIcons(const IconBatch& batch);   // the folder's own icons (a .exe, a .lnk), read after its listing
+    void readWantedIcons();                  // on a worker: the own icons drawn rows asked for
+    void setIcons(const IconBatch& batch);   // adds the own icons a read found
     void setFilter(std::wstring filter);
     void setShowHidden(bool show);   // hidden items are always read; they are listed only while this is on
     bool showHidden() const { return showHidden_; }
@@ -53,6 +58,9 @@ public:
     // The line under each row (5.2): drawn while the list paints, in this colour (CLR_NONE: none).
     void setLineColor(COLORREF color);
     COLORREF lineColor() const { return lineColor_; }
+    // The own icons read so far for the folder shown (the self-test).
+    size_t ownIconCount() const { return ownIcons_.size(); }
+    bool ownIconKnown(const std::wstring& name) const { return ownIcons_.count(joinPath(dir_, name)) > 0; }
     // The row at a screen point, or -1: none over the column header, which Windows' hit test gives to the first row or
     // to one scrolled behind it, and none below the last row.
     int rowAt(POINT screenPt) const;
@@ -69,14 +77,21 @@ private:
     void update(bool keepSelection, const std::function<void()>& change);
     void showSortArrow();
     int iconOf(const Item& it) const;   // its own icon if read by now, else its type's
+    void wantIcon(const std::wstring& name);   // a drawn row lacks its own icon
     int litRow() const { return dropLit_ ? overRow_ : -1; }   // the row a drag lights up, or -1
 
     HWND lv_ = nullptr;
+    HWND parent_ = nullptr;
+    UINT askMsg_ = 0, iconMsg_ = 0;
     std::wstring dir_;
     bool shown_ = false;   // dir_ is a folder that was read, not the "" of a cleared list
     std::vector<Item> items_;
     std::vector<int> view_;
     std::unordered_map<std::wstring, int> ownIcons_;   // full path -> own icon, for the folder shown
+    std::unordered_set<std::wstring> asked_;           // names whose own icon was asked for since the listing came
+    std::vector<std::wstring> wanted_;                 // ...of which these are still to read
+    bool askPosted_ = false;                           // askMsg is on its way
+    std::optional<std::wstring> readingFor_;           // the folder a read of own icons is out for
     std::wstring filter_;
     bool showHidden_ = false;
     int total_ = 0;

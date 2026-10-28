@@ -43,7 +43,7 @@ use windows::Win32::System::Threading::{
 };
 use windows::Win32::UI::Controls::{
     EM_GETCUEBANNER, LVIR_BOUNDS, LVIS_DROPHILITED, LVM_GETHEADER, LVM_GETITEMSTATE,
-    EM_SETSEL, EM_GETSEL, EM_REPLACESEL, HTREEITEM, LVIF_IMAGE, LVIR_LABEL, LVITEMW, LVM_CANCELEDITLABEL, LVM_GETBKCOLOR, LVM_GETCOUNTPERPAGE,
+    EM_SETSEL, EM_GETSEL, EM_REPLACESEL, HTREEITEM, LVIF_IMAGE, LVIR_LABEL, LVITEMW, LVM_CANCELEDITLABEL, LVM_ENSUREVISIBLE, LVM_GETBKCOLOR, LVM_GETCOUNTPERPAGE,
     LVM_GETTEXTBKCOLOR, TVM_GETBKCOLOR,
     LVM_GETITEMRECT, LVM_GETITEMW, TCIF_TEXT, TCITEMW,
     TCM_GETCURSEL, TCM_GETITEMCOUNT, TCM_GETITEMRECT, TCM_GETITEMW, TCM_SETCURFOCUS, UPDOWN_CLASSW,
@@ -2084,6 +2084,54 @@ impl App {
                 a.idle() && item.iImage == sfi.iIcon
             },
         );
+        // Own icons are read for the rows on screen, a screenful at a time as the list scrolls, not for the whole
+        // folder: System32 has 700 programs (4.7).
+        s.add(
+            "(a folder of 300 shortcuts, each with its own icon)",
+            |a| {
+                let _ = std::fs::create_dir(p("links"));
+                for i in 0..300 {
+                    make_shortcut(&p(&format!("links\\link {i}.lnk")), p("sub"));
+                }
+                a.open(Location::dir(p("links")), Nav::New, ViewState::default());
+            },
+            |a| a.at(&p("links")) && a.list.count() == 300,
+        )
+        .wait(20000);
+        // Read for a few rows more than that many screenfuls at most.
+        let icons_read = |a: &App, pages: usize| {
+            let read = a.list.own_icon_count();
+            let page = send(a.list.hwnd(), LVM_GETCOUNTPERPAGE, 0, 0) as usize;
+            note(format!("{read} read, {page} rows to a screenful"));
+            read > 0 && read <= pages * page + 4
+        };
+        s.add(
+            "in a folder of 300 shortcuts, own icons are read only for the rows on screen (4.7)",
+            |_| {},
+            move |a| {
+                let first = a.list.item(0).map(|it| it.name).unwrap_or_default();
+                step_ms() >= 1000 && a.list.own_icon_known(&first) && icons_read(a, 1)
+            },
+        );
+        s.add(
+            "scrolled to the end, its last rows get their own icons too, and two screenfuls in all were read (4.7)",
+            |a| {
+                send(a.list.hwnd(), LVM_ENSUREVISIBLE, a.list.count() - 1, 0);
+            },
+            move |a| {
+                let last = a.list.item(a.list.count() - 1).map(|it| it.name).unwrap_or_default();
+                a.list.own_icon_known(&last) && icons_read(a, 2)
+            },
+        );
+        s.add(
+            "(remove them)",
+            move |a| {
+                a.open(Location::dir(dir()), Nav::New, ViewState::default());
+                let _ = std::fs::remove_dir_all(p("links"));
+            },
+            move |a| a.at(&dir()) && !exists(&p("links")),
+        )
+        .wait(10000);
         s.add(
             "sorting by Type puts the Type column in order",
             |a| {

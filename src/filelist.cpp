@@ -13,7 +13,10 @@ constexpr int kColumnCount = 4;
 
 // ---------------------------------------------------------------- contents
 
-void FileList::create(HWND parent, int id) {
+void FileList::create(HWND parent, int id, UINT askMsg, UINT iconMsg) {
+    parent_ = parent;
+    askMsg_ = askMsg;
+    iconMsg_ = iconMsg;
     lv_ = CreateWindowExW(0, WC_LISTVIEWW, L"",
                           WS_CHILD | WS_VISIBLE | WS_TABSTOP | LVS_REPORT | LVS_OWNERDATA | LVS_SHOWSELALWAYS |
                               LVS_EDITLABELS | LVS_SHAREIMAGELISTS,
@@ -39,6 +42,11 @@ void FileList::create(HWND parent, int id) {
 
 void FileList::setListing(Listing&& listing) {
     update(false, [&] {
+        // A refresh keeps the icons it has, so rows don't flash their type's, and asks for those drawn again: a
+        // program replaced by another gets its new icon. Another folder starts with none.
+        if (!samePath(listing.path, dir_)) ownIcons_.clear();
+        asked_.clear();
+        wanted_.clear();
         dir_ = std::move(listing.path);
         shown_ = true;
         items_ = std::move(listing.items);
@@ -53,13 +61,31 @@ void FileList::clear() {
     shown_ = false;
 }
 
-// A late batch for a folder no longer shown is of no use. A batch replaces the last one: the map never outgrows a
-// folder, and a program replaced by another gets its new icon on the next read.
+void FileList::wantIcon(const std::wstring& name) {
+    if (!asked_.insert(name).second) return;
+    wanted_.push_back(name);
+    if (!std::exchange(askPosted_, true)) PostMessageW(parent_, askMsg_, 0, 0);   // once the list is drawn
+}
+
+// One read at a time for the folder shown, so scrolling asks for a screenful after another, not for each row; a read
+// out for another folder doesn't hold this one up (it may be on a server that is off).
+void FileList::readWantedIcons() {
+    askPosted_ = false;
+    if (wanted_.empty() || (readingFor_ && samePath(*readingFor_, dir_))) return;
+    readingFor_ = dir_;
+    inBackground([parent = parent_, msg = iconMsg_, dir = dir_, names = std::exchange(wanted_, {})] {
+        post(parent, msg, 0, std::make_unique<IconBatch>(readOwnIcons(dir, names)));
+    });
+}
+
+// A late batch for a folder no longer shown is of no use; the map never outgrows the folder shown.
 void FileList::setIcons(const IconBatch& batch) {
-    if (!shows(batch.dir)) return;
-    ownIcons_.clear();
-    for (const auto& [name, icon] : batch.icons) ownIcons_[joinPath(batch.dir, name)] = icon;
-    InvalidateRect(lv_, nullptr, FALSE);
+    if (readingFor_ && samePath(*readingFor_, batch.dir)) readingFor_.reset();
+    if (shows(batch.dir)) {
+        for (const auto& [name, icon] : batch.icons) ownIcons_[joinPath(batch.dir, name)] = icon;
+        InvalidateRect(lv_, nullptr, FALSE);
+    }
+    readWantedIcons();   // rows drawn meanwhile
 }
 
 void FileList::setFilter(std::wstring filter) {
@@ -308,7 +334,10 @@ bool FileList::onNotify(NMHDR* nm, LRESULT* result) {
             }
             lstrcpynW(lvi.pszText, text.c_str(), lvi.cchTextMax);
         }
-        if (lvi.mask & LVIF_IMAGE) lvi.iImage = iconOf(it);   // not stored in the item: a file's own icon may come later
+        if (lvi.mask & LVIF_IMAGE) {   // not stored in the item: a file's own icon may come later
+            lvi.iImage = iconOf(it);
+            if (it.icon < 0 && hasOwnIcon(it)) wantIcon(it.name);
+        }
         // The drop highlight, the one state kept here (the callback mask): a virtual list keeps no other.
         if (lvi.mask & LVIF_STATE) lvi.state = lvi.iItem == litRow() ? LVIS_DROPHILITED : 0;
         return true;

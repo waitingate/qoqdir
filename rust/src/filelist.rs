@@ -36,7 +36,10 @@ use windows::Win32::UI::WindowsAndMessaging::{
 use windows::core::w;
 
 use crate::folder::{Item, Listing, Location, SortKey, drop_back, equal_no_case, is_shortcut, matches_filter, sort_items, to_lower, format_size, format_time};
-use crate::shell::{IconBatch, has_own_icon, local_folder, set_theme, system_image_list, type_icon, type_name};
+use crate::shell::{
+    IconBatch, has_own_icon, in_background, local_folder, post, read_own_icons, set_theme, system_image_list, type_icon,
+    type_name,
+};
 use crate::util::{copy_to, focus, send, wide};
 
 const COLUMNS: [&str; 4] = ["Name", "Date modified", "Type", "Size"];
@@ -63,8 +66,15 @@ impl Model {
 
 pub struct FileList {
     hwnd: HWND,
+    parent: HWND,
+    ask_msg: u32,
+    icon_msg: u32,
     model: RefCell<Model>,
     own_icons: RefCell<HashMap<PathBuf, i32>>, // full path -> own icon, for the folder shown
+    asked: RefCell<HashSet<OsString>>,         // names whose own icon was asked for since the listing came
+    wanted: RefCell<Vec<OsString>>,            // ...of which these are still to read
+    ask_posted: Cell<bool>,                    // ask_msg is on its way
+    reading_for: RefCell<Option<Location>>,    // the folder a read of own icons is out for
     line_color: Cell<Option<COLORREF>>,        // the line under each row (set_line_color): none until set
     over_row: Cell<Option<usize>>,             // the row a drag is over (drop_folder)
     drop_into: RefCell<Option<Location>>,      // ...the folder it takes the drop into, if any
@@ -74,7 +84,10 @@ pub struct FileList {
 impl FileList {
     // ------------------------------------------------------------ contents
 
-    pub fn create(parent: HWND, id: i32) -> FileList {
+    /// Own icons (a .exe's, a .lnk's) are read for the rows the list draws, a screenful at a time (4.7): a drawn
+    /// row that lacks one posts `ask_msg` to `parent`, which calls read_wanted_icons; the read posts `icon_msg` (an
+    /// IconBatch), for set_icons.
+    pub fn create(parent: HWND, id: i32, ask_msg: u32, icon_msg: u32) -> FileList {
         let style = WS_CHILD.0 | WS_VISIBLE.0 | WS_TABSTOP.0 | LVS_REPORT | LVS_OWNERDATA | LVS_SHOWSELALWAYS
             | LVS_EDITLABELS | LVS_SHAREIMAGELISTS;
         let hwnd = unsafe {
@@ -117,7 +130,14 @@ impl FileList {
         }
         let list = FileList {
             hwnd,
+            parent,
+            ask_msg,
+            icon_msg,
             own_icons: RefCell::new(HashMap::new()),
+            asked: RefCell::new(HashSet::new()),
+            wanted: RefCell::new(Vec::new()),
+            ask_posted: Cell::new(false),
+            reading_for: RefCell::new(None),
             line_color: Cell::new(None),
             over_row: Cell::new(None),
             drop_into: RefCell::new(None),
@@ -144,6 +164,13 @@ impl FileList {
 
     /// New folder contents; keeps sort and filter.
     pub fn set_listing(&self, listing: Listing) {
+        // A refresh keeps the icons it has, so rows don't flash their type's, and asks for those drawn again: a
+        // program replaced by another gets its new icon. Another folder starts with none.
+        if !self.model.borrow().location.same(&listing.location) {
+            self.own_icons.borrow_mut().clear();
+        }
+        self.asked.borrow_mut().clear();
+        self.wanted.borrow_mut().clear();
         self.update(false, |m| {
             m.location = listing.location;
             m.shown = true;
@@ -170,17 +197,60 @@ impl FileList {
         m.shown && m.location.same(location)
     }
 
-    /// The folder's own icons (a .exe, a .lnk), read after its listing. A late batch for a folder no longer shown is of
-    /// no use. A batch replaces the last one: the map never outgrows a folder, and a program replaced by another gets
-    /// its new icon on the next read.
-    pub fn set_icons(&self, batch: &IconBatch) {
-        if !self.shows(&batch.dir) {
+    /// A drawn row lacks its own icon.
+    fn want_icon(&self, name: &OsStr) {
+        if !self.asked.borrow_mut().insert(name.to_os_string()) {
             return;
         }
-        *self.own_icons.borrow_mut() = batch.icons.iter().map(|(name, icon)| (batch.dir.join(name), *icon)).collect();
-        unsafe {
-            let _ = InvalidateRect(Some(self.hwnd), None, false);
+        self.wanted.borrow_mut().push(name.to_os_string());
+        if !self.ask_posted.replace(true) {
+            unsafe {
+                let _ = PostMessageW(Some(self.parent), self.ask_msg, WPARAM(0), LPARAM(0)); // once the list is drawn
+            }
         }
+    }
+
+    /// On a worker: the own icons drawn rows asked for. One read at a time for the folder shown, so scrolling asks for
+    /// a screenful after another, not for each row; a read out for another folder doesn't hold this one up (it may be
+    /// on a server that is off).
+    pub fn read_wanted_icons(&self) {
+        self.ask_posted.set(false);
+        let dir = self.location();
+        let busy = self.reading_for.borrow().as_ref().is_some_and(|r| r.same(&dir));
+        if self.wanted.borrow().is_empty() || busy {
+            return;
+        }
+        *self.reading_for.borrow_mut() = Some(dir.clone());
+        let names = std::mem::take(&mut *self.wanted.borrow_mut());
+        let (parent, msg) = (self.parent.0 as usize, self.icon_msg); // HWND is just a handle; the thread only posts
+        in_background(move || post(parent, msg, 0, Box::new(read_own_icons(&dir, names))));
+    }
+
+    /// Adds the own icons a read found. A late batch for a folder no longer shown is of no use; the map never
+    /// outgrows the folder shown.
+    pub fn set_icons(&self, batch: &IconBatch) {
+        let done = self.reading_for.borrow().as_ref().is_some_and(|r| r.same(&batch.dir));
+        if done {
+            *self.reading_for.borrow_mut() = None;
+        }
+        if self.shows(&batch.dir) {
+            self.own_icons.borrow_mut().extend(batch.icons.iter().map(|(name, icon)| (batch.dir.join(name), *icon)));
+            unsafe {
+                let _ = InvalidateRect(Some(self.hwnd), None, false);
+            }
+        }
+        self.read_wanted_icons(); // rows drawn meanwhile
+    }
+
+    /// The own icons read so far for the folder shown.
+    #[cfg(feature = "selftest")] // only the self-test asks
+    pub fn own_icon_count(&self) -> usize {
+        self.own_icons.borrow().len()
+    }
+
+    #[cfg(feature = "selftest")] // only the self-test asks
+    pub fn own_icon_known(&self, name: &OsStr) -> bool {
+        self.own_icons.borrow().contains_key(&self.model.borrow().location.join(name))
     }
 
     pub fn set_filter(&self, filter: &OsStr) {
@@ -549,6 +619,7 @@ impl FileList {
                 let lvi = unsafe { &mut (*(nm as *mut NMLVDISPINFOW)).item };
                 let m = self.model.borrow(); // held while painting: nothing below sends the list a message
                 let Some(it) = m.item(lvi.iItem as usize) else { return Some(LRESULT(0)) };
+                let mut want = None;
                 if lvi.mask.contains(LVIF_TEXT) {
                     let text: OsString = match lvi.iSubItem {
                         0 => it.shown().to_os_string(),
@@ -561,11 +632,18 @@ impl FileList {
                 }
                 if lvi.mask.contains(LVIF_IMAGE) {
                     lvi.iImage = self.icon_of(&m, it); // not stored in the item: a file's own icon may come later
+                    if it.icon < 0 && has_own_icon(it) {
+                        want = Some(it.name.clone());
+                    }
                 }
                 if lvi.mask.contains(LVIF_STATE) {
                     // The drop highlight, the one state kept here (the callback mask): a virtual list keeps no other.
                     let lit = self.lit_row() == Some(lvi.iItem as usize);
                     lvi.state = if lit { LVIS_DROPHILITED } else { LIST_VIEW_ITEM_STATE_FLAGS(0) };
+                }
+                drop(m); // asking posts a message: the model isn't borrowed across a call into Windows
+                if let Some(name) = want {
+                    self.want_icon(&name);
                 }
                 Some(LRESULT(0))
             }
