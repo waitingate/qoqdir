@@ -719,6 +719,29 @@ pub fn drop_keys(keys: MODIFIERKEYS_FLAGS, allowed: DROPEFFECT) -> MODIFIERKEYS_
     }
 }
 
+/// Why a drop into `dir` would leave the `dragged` files where they are (4.8).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DropBack {
+    /// `dir` is the folder one of them is in.
+    Source,
+    /// `dir` is one of them, or a folder inside one: a folder can't go into itself.
+    Itself,
+}
+
+/// None when a drop into `dir` puts the `dragged` files somewhere else.
+pub fn drop_back(dir: &Location, dragged: &[Location]) -> Option<DropBack> {
+    // This PC carries nothing a folder holds.
+    dragged.iter().filter(|path| path.path().is_some()).find_map(|path| {
+        if dir.same(&path.parent()) {
+            Some(DropBack::Source)
+        } else if dir.same(path) || path.child_toward(dir).is_some() {
+            Some(DropBack::Itself)
+        } else {
+            None
+        }
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1063,5 +1086,24 @@ mod tests {
         assert_eq!(drop_keys(MK_LBUTTON, DROPEFFECT_COPY | DROPEFFECT_LINK), MK_LBUTTON);
         assert_eq!(drop_keys(MK_RBUTTON, any), MK_RBUTTON);
         assert_eq!(drop_keys(MODIFIERKEYS_FLAGS(0), any), MODIFIERKEYS_FLAGS(0));
+    }
+
+    #[test]
+    fn drop_back_where_the_files_are() {
+        // A drop into the folder the files are in, into a folder they carry or into a folder inside that one leaves
+        // them where they are (4.8); a folder whose name only starts the same is another folder.
+        let d = Location::dir;
+        let file = [d(r"C:\w\a.txt")];
+        let both = [d(r"C:\w\a.txt"), d(r"C:\w\sub")];
+        assert_eq!(drop_back(&d(r"C:\w"), &file), Some(DropBack::Source));
+        assert_eq!(drop_back(&d(r"c:\W"), &file), Some(DropBack::Source));
+        assert_eq!(drop_back(&d(r"C:\w\sub"), &both), Some(DropBack::Itself));
+        assert_eq!(drop_back(&d(r"C:\w\SUB\in"), &both), Some(DropBack::Itself));
+        assert_eq!(drop_back(&d(r"C:\w\sub2"), &both), None);
+        assert_eq!(drop_back(&d(r"C:\other"), &both), None);
+        assert_eq!(drop_back(&d(r"C:\w"), &[]), None);
+        assert_eq!(drop_back(&d(r"C:\"), &[d(r"C:\a.txt")]), Some(DropBack::Source));
+        assert_eq!(drop_back(&d(r"\\srv\share"), &[d(r"\\srv\share\a.txt")]), Some(DropBack::Source));
+        assert_eq!(drop_back(&d(r"\\srv\share\d\e"), &[d(r"\\srv\share\d")]), Some(DropBack::Itself));
     }
 }

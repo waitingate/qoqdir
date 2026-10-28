@@ -2255,36 +2255,40 @@ impl App {
             },
         )
         .wait(10000);
-        // A drag from the list carries its selection: the folder it carries refuses, and so does a file's row, which
-        // would mean the folder the drag comes from; another folder's row takes it. No drop: a plain drop that could
-        // move asks, and only a person answers (5.8).
+        // What a drag carries is read from its data, so it doesn't matter where it started, this list or another
+        // window: the folder it carries refuses, and so do a file's row and the tab, which mean the folder it is in;
+        // another folder's row takes it. No drop: a plain drop that could move asks, and only a person answers (5.8).
         s.add(
-            "a drag from the list takes another folder's row, but not the folder it carries, nor a file's row (5.8)",
+            "a drag that carries the folder sub, from this list or another window, takes another folder's row, but not \
+             sub's own, nor a file's row or the tab of the folder sub is in (4.8)",
             |a| {
-                a.select_one("sub");
                 let data = data_object_at(a.wnd, &Location::dir(p("sub")));
-                let (Some(data), Some(target)) = (data, a.list_drop.borrow().clone()) else { return };
+                let (list, tab) = (a.list_drop.borrow().clone(), a.tab_drop.borrow().clone());
+                let (Some(data), Some(list), Some(tab)) = (data, list, tab) else { return };
                 let any = DROPEFFECT_COPY | DROPEFFECT_MOVE | DROPEFFECT_LINK;
                 let mut seen = Vec::new();
-                a.dragging_files.set(true); // as while the drag from the list runs
                 unsafe {
                     let mut effect = any;
-                    let _ = target.DragEnter(&data, MK_LBUTTON, a.row_point("sub"), &mut effect);
-                    seen.push(if effect == DROPEFFECT_NONE { "sub refused" } else { "sub taken" });
+                    let _ = list.DragEnter(&data, MK_LBUTTON, a.row_point("sub"), &mut effect);
+                    let refused = effect == DROPEFFECT_NONE && !a.row_lit("sub");
+                    seen.push(if refused { "sub refused" } else { "sub taken" });
                     effect = any;
-                    let _ = target.DragOver(MK_LBUTTON, a.row_point("made"), &mut effect);
+                    let _ = list.DragOver(MK_LBUTTON, a.row_point("made"), &mut effect);
                     let taken = effect != DROPEFFECT_NONE && a.row_lit("made");
                     seen.push(if taken { "made taken" } else { "made refused" });
                     effect = any;
-                    let _ = target.DragOver(MK_LBUTTON, a.row_point("file1.txt"), &mut effect);
+                    let _ = list.DragOver(MK_LBUTTON, a.row_point("file1.txt"), &mut effect);
                     let refused = effect == DROPEFFECT_NONE && !a.row_lit("made");
                     seen.push(if refused { "file refused" } else { "file taken" });
-                    let _ = target.DragLeave();
+                    let _ = list.DragLeave();
+                    effect = any;
+                    let _ = tab.DragEnter(&data, MK_LBUTTON, a.tab_point(a.active()), &mut effect);
+                    seen.push(if effect == DROPEFFECT_NONE { "tab refused" } else { "tab taken" });
+                    let _ = tab.DragLeave();
                 }
-                a.dragging_files.set(false);
                 note(seen.join(", "));
             },
-            |a| noted() == "sub refused, made taken, file refused" && !a.row_lit("made"),
+            |a| noted() == "sub refused, made taken, file refused, tab refused" && !a.row_lit("made"),
         );
         // While a drop would ask, the drag's tip says so, not Windows' "Move to". No drop here: it would ask (5.8).
         s.add(
@@ -2701,6 +2705,33 @@ impl App {
             |_| EFFECT.get() == DROPEFFECT_COPY.0 && exists(&p("sub\\renamed.txt")),
         )
         .wait(10000);
+        // Nor does a drag go back where its files are from the tree, which says why (4.8, 5.5).
+        s.add(
+            "in the tree, a drag is refused on the folder its file is in and on a bookmark to the folder it carries, \
+             and the status bar says why (4.8)",
+            |a| {
+                let file = data_object_at(a.wnd, &Location::dir(p("Bookmarks\\two\\file1.txt")));
+                let folder = data_object_at(a.wnd, &Location::dir(p("sub")));
+                let (Some(file), Some(folder), Some(target)) = (file, folder, a.tree_drop.borrow().clone()) else {
+                    return;
+                };
+                let shortcut = a.node_point(a.tree.next_sibling(a.tree_two())); // "sub", to the folder sub
+                unsafe {
+                    let mut effect = DROPEFFECT_COPY;
+                    let _ = target.DragEnter(&file, MK_LBUTTON, a.node_point(a.tree_two()), &mut effect);
+                    let two = if effect == DROPEFFECT_NONE { "two refused" } else { "two taken" };
+                    let mut seen = format!("{two}: {}", a.status_message());
+                    let _ = target.DragLeave();
+                    effect = DROPEFFECT_COPY;
+                    let _ = target.DragEnter(&folder, MK_LBUTTON, shortcut, &mut effect);
+                    let sub = if effect == DROPEFFECT_NONE { "sub refused" } else { "sub taken" };
+                    seen += &format!(" / {sub}: {}", a.status_message());
+                    let _ = target.DragLeave();
+                    note(seen);
+                }
+            },
+            |_| noted() == "two refused: The files come from there / sub refused: A folder can't go into itself",
+        );
         s.add(
             "expanding a folder with 10,000 subfolders in the tree keeps the window responsive", // WinSxS has 20,000
             |a| {

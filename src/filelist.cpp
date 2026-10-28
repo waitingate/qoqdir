@@ -101,6 +101,7 @@ void FileList::update(bool keepSelection, const std::function<void()>& change) {
     // A drop's lit row is a row, not a file: the next move over the list works it out again (dropFolder).
     overRow_ = -1;
     dropFolder_.reset();
+    dropLit_ = false;
     ListView_SetItemState(lv_, -1, 0, LVIS_SELECTED | LVIS_FOCUSED);
     ListView_SetItemCountEx(lv_, int(view_.size()), LVSICF_NOSCROLL);
     InvalidateRect(lv_, nullptr, FALSE);
@@ -259,14 +260,14 @@ void FileList::setLineColor(COLORREF color) {
 
 // ---------------------------------------------------------------- drops
 
-std::optional<std::wstring> FileList::dropFolder(const POINT* screenPt, bool own) {
+std::optional<std::wstring> FileList::dropFolder(const POINT* screenPt, const std::vector<std::wstring>& dragged) {
     int row = -1;
     if (screenPt && !dir_.empty()) {
         LVHITTESTINFO hit{};
         hit.pt = *screenPt;
         ScreenToClient(lv_, &hit.pt);
         row = ListView_HitTest(lv_, &hit);
-        if (row >= count() || (own && row >= 0 && ListView_GetItemState(lv_, row, LVIS_SELECTED))) row = -1;
+        if (row >= count()) row = -1;
     }
     if (row != overRow_) {   // a new row: what it takes is worked out once, as the tree does for a node
         int lit = litRow();
@@ -274,6 +275,7 @@ std::optional<std::wstring> FileList::dropFolder(const POINT* screenPt, bool own
         dropFolder_.reset();
         if (row >= 0 && at(row).isDir()) dropFolder_ = joinPath(dir_, at(row).name);
         else if (row >= 0 && isShortcut(at(row).name)) dropFolder_ = localFolder(joinPath(dir_, at(row).name), true);
+        dropLit_ = dropFolder_ && !dropBack(*dropFolder_, dragged);
         for (int r : {lit, litRow()})
             if (r >= 0) ListView_RedrawItems(lv_, r, r);
         UpdateWindow(lv_);

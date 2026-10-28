@@ -72,8 +72,8 @@ use windows::core::{HRESULT, PCWSTR, PWSTR, w};
 use crate::filelist::FileList;
 use crate::APP_NAME;
 use crate::folder::{
-    CommandLine, Listing, Location, SortKey, byte_size, expand_vars, folder_written, is_absolute_path,
-    is_relative_path, is_shortcut, list_folder, normalize, row_after_deleting, tab_argument,
+    CommandLine, DropBack, Listing, Location, SortKey, byte_size, drop_back, expand_vars, folder_written,
+    is_absolute_path, is_relative_path, is_shortcut, list_folder, normalize, row_after_deleting, tab_argument,
 };
 use crate::shell::{
     FolderWatch, IconBatch, OwnItem, acknowledge_change, fill_types, has_own_icon, read_own_icons, background_menu, bookmark_folder, copy_to_clipboard, delete_items, drag_out, open_in_explorer,
@@ -268,8 +268,6 @@ pub struct App {
     pub tree_width: Cell<i32>, // in 96-DPI units
     pub splitter_x: Cell<i32>,
     pub dragging: Cell<bool>,   // moving the tree/list splitter
-    pub dragging_files: Cell<bool>, // a drag started from our own list is in progress
-    drag_source: RefCell<Option<Location>>, // the folder it came from: a drop back there does nothing (even after a load)
     pub refresh_queued: Cell<bool>,
     refresh_for_watch: Cell<bool>, // ...and only a change in the folder shown asked for it (on_folder_changed)
     // Out of `st`: a watch talks to the shell as it goes, which can call straight back into on_message, so each is
@@ -650,8 +648,6 @@ impl App {
                 tree_width: Cell::new(220),
                 splitter_x: Cell::new(0),
                 dragging: Cell::new(false),
-                dragging_files: Cell::new(false),
-                drag_source: RefCell::new(None),
                 refresh_queued: Cell::new(false),
                 refresh_for_watch: Cell::new(false),
                 watch: RefCell::new(None),
@@ -693,44 +689,44 @@ impl App {
             let _ = SetWindowSubclass(app.list.hwnd(), Some(middle_click_proc), 1, 0);
             let _ = SetWindowSubclass(app.tree.hwnd(), Some(middle_click_proc), 1, 0);
             // Drops land in the folder row under the pointer (or a shortcut's folder), which lights up, or else in the
-            // folder shown; never in This PC. Our own drag takes neither the folder it comes from nor a folder it
-            // carries (5.8).
+            // folder shown; never in This PC. The drop target itself refuses a folder the files would go back to (4.8):
+            // over a file's row or the empty space, the folder they come from, and the row of a folder they carry.
             let weak: Weak<App> = Rc::downgrade(&app);
             let drop = new_drop_target(
                 wnd,
-                Box::new(move |pt| {
+                Box::new(move |pt, dragged: &[Location]| {
                     let app = weak.upgrade()?;
-                    let own = app.dragging_files.get();
-                    let row = app.list.drop_folder(pt, own);
+                    let row = app.list.drop_folder(pt, dragged);
                     let location = app.list.location();
                     if pt.is_none() || !matches!(location, Location::Dir(_)) {
                         return None;
                     }
-                    if row.is_some() || own { row } else { Some(location) }
+                    row.or(Some(location))
                 }),
             );
             let _ = RegisterDragDrop(app.list.hwnd(), &drop);
             *app.list_drop.borrow_mut() = Some(drop);
             // Dropping on a tab puts the files in that tab's folder.
             let weak: Weak<App> = Rc::downgrade(&app);
-            let tab_drop = new_drop_target(wnd, Box::new(move |pt| weak.upgrade()?.tab_drop_target(pt)));
+            let tab_drop = new_drop_target(wnd, Box::new(move |pt, _: &[Location]| weak.upgrade()?.tab_drop_target(pt)));
             let _ = RegisterDragDrop(app.tab_bar, &tab_drop);
             *app.tab_drop.borrow_mut() = Some(tab_drop);
-            // And on a folder in the tree, in that folder; not back where they come from.
+            // And on a folder in the tree, in that folder. A node that refuses says why in the status bar (5.5).
             let weak: Weak<App> = Rc::downgrade(&app);
             let tree_drop = new_drop_target(
                 wnd,
-                Box::new(move |pt| {
+                Box::new(move |pt, dragged: &[Location]| {
                     let app = weak.upgrade()?;
                     let dir = app.tree.drop_target(pt);
-                    let from_here = dir.as_ref().is_some_and(|d| {
-                        app.dragging_files.get() && app.drag_source.borrow().as_ref().is_some_and(|s| d.same(s))
-                    });
-                    // A node that refuses says why in the status bar (5.5).
-                    if (dir.is_none() || from_here) && pt.is_some_and(|pt| app.tree.location_at(pt).is_some()) {
-                        app.set_message(if from_here { "The files come from there" } else { "Only a folder on this PC takes a drop" });
+                    let back = dir.as_ref().and_then(|d| drop_back(d, dragged));
+                    if (dir.is_none() || back.is_some()) && pt.is_some_and(|pt| app.tree.location_at(pt).is_some()) {
+                        app.set_message(match back {
+                            Some(DropBack::Source) => "The files come from there",
+                            Some(DropBack::Itself) => "A folder can't go into itself",
+                            None => "Only a folder on this PC takes a drop",
+                        });
                     }
-                    if from_here { None } else { dir }
+                    dir
                 }),
             );
             let _ = RegisterDragDrop(app.tree.hwnd(), &tree_drop);
@@ -1354,10 +1350,7 @@ impl App {
                 LVN_BEGINDRAG | LVN_BEGINRDRAG => {
                     let items = self.list.selected_items();
                     if !items.is_empty() {
-                        *self.drag_source.borrow_mut() = Some(self.list.location());
-                        self.dragging_files.set(true);
                         drag_out(self.wnd, &self.list.location(), &items);
-                        self.dragging_files.set(false);
                     }
                 }
                 _ => {}
@@ -2426,10 +2419,9 @@ impl App {
             self.drop_tab.set(hover);
         }
         let (location, unavailable) = self.st.borrow().tabs.get(hover?).map(|t| (t.location.clone(), t.unavailable))?;
-        // Not into This PC, not into a folder that has not loaded here, and not back where the files come from.
-        let from_here =
-            self.dragging_files.get() && self.drag_source.borrow().as_ref().is_some_and(|s| location.same(s));
-        (matches!(location, Location::Dir(_)) && !unavailable && !from_here).then_some(location)
+        // Not into This PC, and not into a folder that has not loaded here; the drop target itself refuses the one the
+        // files come from (4.8).
+        (matches!(location, Location::Dir(_)) && !unavailable).then_some(location)
     }
 
     /// Every tab is as wide as the others: 150 (96-DPI units), all narrower when that many don't fit, down to 80, and

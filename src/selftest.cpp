@@ -1466,17 +1466,16 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
             return true;
         },
         10000);
-    // A drag from the list carries its selection: the folder it carries refuses, and so does a file's row, which
-    // would mean the folder the drag comes from; another folder's row takes it. No drop: a plain drop that could move
-    // asks, and only a person answers (5.8).
-    add(L"a drag from the list takes another folder's row, but not the folder it carries, nor a file's row (5.8)",
+    // What a drag carries is read from its data, so it doesn't matter where it started, this list or another window:
+    // the folder it carries refuses, and so do a file's row and the tab, which mean the folder it is in; another
+    // folder's row takes it. No drop: a plain drop that could move asks, and only a person answers (5.8).
+    add(L"a drag that carries the folder sub, from this list or another window, takes another folder's row, but not "
+        L"sub's own, nor a file's row or the tab of the folder sub is in (4.8)",
         [=, this] {
-            list_.select({L"sub"}, L"sub");
             Com<IDataObject> data = dataObject(wnd_, path(L"sub"));
             DWORD any = DROPEFFECT_COPY | DROPEFFECT_MOVE | DROPEFFECT_LINK, effect = any;
-            draggingFiles_ = true;   // as while the drag from the list runs
             listDrop_->DragEnter(data.get(), MK_LBUTTON, rowPoint(L"sub"), &effect);
-            std::wstring seen = effect == DROPEFFECT_NONE ? L"sub refused" : L"sub taken";
+            std::wstring seen = effect == DROPEFFECT_NONE && !rowLit(L"sub") ? L"sub refused" : L"sub taken";
             effect = any;
             listDrop_->DragOver(MK_LBUTTON, rowPoint(L"made"), &effect);
             seen += effect != DROPEFFECT_NONE && rowLit(L"made") ? L", made taken" : L", made refused";
@@ -1484,10 +1483,15 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
             listDrop_->DragOver(MK_LBUTTON, rowPoint(L"file1.txt"), &effect);
             seen += effect == DROPEFFECT_NONE && !rowLit(L"made") ? L", file refused" : L", file taken";
             listDrop_->DragLeave();
-            draggingFiles_ = false;
+            effect = any;
+            tabDrop_->DragEnter(data.get(), MK_LBUTTON, tabPoint(active_), &effect);
+            seen += effect == DROPEFFECT_NONE ? L", tab refused" : L", tab taken";
+            tabDrop_->DragLeave();
             selfTest_->note = seen;
         },
-        [=, this] { return selfTest_->note == L"sub refused, made taken, file refused" && !rowLit(L"made"); });
+        [=, this] {
+            return selfTest_->note == L"sub refused, made taken, file refused, tab refused" && !rowLit(L"made");
+        });
     // While a drop would ask, the drag's tip says so, not Windows' "Move to". No drop here: it would ask (5.8).
     auto tipsRight = std::make_shared<bool>(false);
     add(L"while a drop on a folder would ask, the drag's tip says Copy or move to it; not with Ctrl held, nor once "
@@ -1811,6 +1815,27 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
             treeDrop_->Drop(data.get(), MK_LBUTTON, shortcut, &effect);
         },
         [=, this] { return dragEffect == DROPEFFECT_COPY && exists(path(L"sub\\renamed.txt")); }, 10000);
+    // Nor does a drag go back where its files are from the tree, which says why (4.8, 5.5).
+    add(L"in the tree, a drag is refused on the folder its file is in and on a bookmark to the folder it carries, and "
+        L"the status bar says why (4.8)",
+        [=, this] {
+            Com<IDataObject> file = dataObject(wnd_, path(L"Bookmarks\\two\\file1.txt"));
+            DWORD effect = DROPEFFECT_COPY;
+            treeDrop_->DragEnter(file.get(), MK_LBUTTON, nodePoint(two()), &effect);
+            std::wstring seen = (effect == DROPEFFECT_NONE ? L"two refused: " : L"two taken: ") + statusMessage();
+            treeDrop_->DragLeave();
+            Com<IDataObject> folder = dataObject(wnd_, path(L"sub"));
+            POINTL shortcut = nodePoint(TreeView_GetNextSibling(tree_.hwnd(), two()));   // "sub", to the folder sub
+            effect = DROPEFFECT_COPY;
+            treeDrop_->DragEnter(folder.get(), MK_LBUTTON, shortcut, &effect);
+            seen += (effect == DROPEFFECT_NONE ? L" / sub refused: " : L" / sub taken: ") + statusMessage();
+            treeDrop_->DragLeave();
+            selfTest_->note = seen;
+        },
+        [=, this] {
+            return selfTest_->note ==
+                   L"two refused: The files come from there / sub refused: A folder can't go into itself";
+        });
     static double lastTick = 0, longestWait = 0;   // the longest the window went without a timer tick
     add(L"expanding a folder with 10,000 subfolders in the tree keeps the window responsive",   // WinSxS has 20,000
         [=, this] {

@@ -106,3 +106,7 @@ std::wstring errorText(DWORD error);
 // Windows asks with its menu (Copy here, Move here...) instead of moving them at once. Ctrl, Shift or Alt held says
 // what to do, and a drag that can only copy has nothing to ask.
 DWORD dropKeys(DWORD keys, DWORD allowed);
+// Why a drop into 'dir' would leave the 'dragged' files where they are (4.8): 'dir' is the folder one of them is in
+// (source), or one of them or a folder inside one (itself: a folder can't go into itself). None when it is neither.
+enum class DropBack { source, itself };
+std::optional<DropBack> dropBack(const std::wstring& dir, const std::vector<std::wstring>& dragged);

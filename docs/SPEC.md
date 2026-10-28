@@ -200,8 +200,12 @@ Targets on an ordinary SSD laptop with a folder of 10,000 files (faster is fine)
 - Delete goes to the Recycle Bin. Shift+Delete deletes for good, after Windows'
   own question.
 - Renaming to an empty name, or to the same name, does nothing.
-- Files dragged out of Qoqdir and dropped back on the same folder do nothing;
-  dropped on a folder in it, they go into that folder (5.8).
+- Files dropped back on the folder they are in do nothing, whatever key is held
+  and wherever the drag comes from (this window, another Qoqdir window,
+  Explorer), and so does a folder dropped on itself or on a folder inside it.
+  Dropped on a folder in it, files go into that folder (5.8). A drag that can
+  only make shortcuts (a drive from This PC) is let through: a shortcut may go
+  anywhere.
 
 ### 4.9 Quiet
 - It beeps only for user errors (a bad path, an impossible action), and never in
@@ -376,9 +380,10 @@ buttons, and the filter box, has a tooltip that names it with its key ("Back
   The node under the pointer lights up, and a closed folder opens after about
   0.7 s, so the folders inside it can be reached. Only folders on local drives
   take drops: not This PC, not a shortcut to a file or a web page, nothing on
-  the network (a server that is off would freeze the drag), and not the folder
-  the files come from. While the drag is over a node that refuses, the status
-  bar says why.
+  the network (a server that is off would freeze the drag), and not a folder
+  the files would go back to (4.8). While the drag is over a node that refuses,
+  the status bar says why: "Only a folder on this PC takes a drop", "The files
+  come from there" or "A folder can't go into itself".
 - Backspace in the tree goes up.
 - The splitter sets the tree's width, which is remembered; a drag past the
   window's edge keeps the width shown, not one past it.
@@ -436,7 +441,7 @@ buttons, and the filter box, has a tooltip that names it with its key ("Back
   or moves them into that tab's folder as dropping on that folder in Explorer
   would, asking first as 5.8 says (Shift, Ctrl and Alt work as usual). Not onto
   This PC, not onto a tab whose folder hasn't loaded here yet or failed, and not
-  back into the folder the files come from.
+  back into the folder the files come from (4.8).
 - Tabs aren't remembered between runs by themselves. Ctrl+S saves them as
   shortcuts in `Bookmarks\Tabs`, numbered in tab order ("1 logs.lnk"); it replaces
   the shortcuts there (the status bar says so) and leaves anything else. Ctrl+O
@@ -485,9 +490,9 @@ buttons, and the filter box, has a tooltip that names it with its key ("Back
 - A folder in the list takes a drop too: while files are dragged over its row,
   the row lights up, and the drop goes into that folder, asking first as above.
   So does a shortcut to a folder on a local drive, for its target, as in the
-  tree (5.5). A drag from the list carries its selected rows: a folder among
-  them takes no drop, and elsewhere in the list, over a file or the empty
-  space, the files would go back to the folder they come from, so nothing
+  tree (5.5). What a drag carries is read from the drag itself, so wherever it
+  comes from, a folder it carries takes no drop and its row doesn't light up,
+  and over a file or the empty space of the folder the files are in, nothing
   happens (4.8).
 - While a drop would ask, the tip under the dragged files says "Copy or move to"
   the folder, not Windows' "Move to"; with Ctrl, Shift or Alt held it is
@@ -653,6 +658,9 @@ At least these, with concrete examples:
 - Drops: a plain drag that could move files is passed on as a right-button drag
   (Windows then asks); one with Ctrl, Shift or Alt held, one that can only copy,
   a right-drag and the drop itself (no button down) are passed on as they are.
+  A drop is held back on the folder the files are in, on a folder they carry
+  and on a folder inside it, ignoring case and on network paths too, but not on
+  a folder whose name only starts the same (`sub2` for `sub`).
 - The crash log: a program that throws an exception nothing catches (a panic in
   the Rust version) ends with exit code 3, and the log line names the
   exception's type and message (the panic's message and place).
@@ -751,8 +759,9 @@ result:
     drop that could move a file copies it at once, without asking. The menu a
     plain drop shows is checked by hand: the self-test opens no menus.
     A file dropped on the folder `sub` in the list goes into it, and the row
-    lights up while the file is over it. A drag from the list takes the row of
-    another folder, but not the folder it carries, nor a file's row.
+    lights up while the file is over it. A drag that carries `sub`, made as any
+    program's would be, takes the row of another folder, but not `sub`'s own,
+    nor a file's row or the tab of the test folder.
     While a drop on `sub` would ask, the drag's tip says "Copy or move to sub";
     with Ctrl held, or once the drag has left, it doesn't.
 30. Middle-click on a folder in the list opens a new background tab with that
@@ -801,6 +810,8 @@ result:
     closed folder in Bookmarks lights up, opens after a moment while the drag is
     held over it, and a drop copies the file into it.
 48. A drop on the bookmark shortcut to `sub` in the tree copies the file into `sub`.
+    A drag of the file now in `two` is refused on `two`, and one of `sub` on
+    that bookmark, and the status bar says why each time.
 49. The current tab's name, and only its, starts with a bullet. A lone tab is 150
     wide (at 100% scaling). With more tabs than fit that wide (some with long
     names), all are one narrower width and the last ends inside the bar; with more

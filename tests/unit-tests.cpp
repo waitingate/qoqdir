@@ -372,6 +372,22 @@ int main(int argc, char** argv) {
         CHECK(dropKeys(0, any) == 0);
     }
 
+    // dropBack: a drop into the folder the files are in, into a folder they carry or into a folder inside that one
+    // leaves them where they are (4.8); a folder whose name only starts the same is another folder.
+    {
+        std::vector<std::wstring> file{L"C:\\w\\a.txt"}, both{L"C:\\w\\a.txt", L"C:\\w\\sub"};
+        CHECK(dropBack(L"C:\\w", file) == DropBack::source);
+        CHECK(dropBack(L"c:\\W", file) == DropBack::source);
+        CHECK(dropBack(L"C:\\w\\sub", both) == DropBack::itself);
+        CHECK(dropBack(L"C:\\w\\SUB\\in", both) == DropBack::itself);
+        CHECK(!dropBack(L"C:\\w\\sub2", both));
+        CHECK(!dropBack(L"C:\\other", both));
+        CHECK(!dropBack(L"C:\\w", {}));
+        CHECK(dropBack(L"C:\\", {L"C:\\a.txt"}) == DropBack::source);
+        CHECK(dropBack(L"\\\\srv\\share", {L"\\\\srv\\share\\a.txt"}) == DropBack::source);
+        CHECK(dropBack(L"\\\\srv\\share\\d\\e", {L"\\\\srv\\share\\d"}) == DropBack::itself);
+    }
+
     // An exception nothing catches stops the program with exit code 3, and the crash log names it (4.10).
     {
         wchar_t temp[MAX_PATH] = {};

@@ -34,7 +34,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
 
 use windows::core::w;
 
-use crate::folder::{Item, Listing, Location, SortKey, equal_no_case, is_shortcut, matches_filter, sort_items, to_lower, format_size, format_time};
+use crate::folder::{Item, Listing, Location, SortKey, drop_back, equal_no_case, is_shortcut, matches_filter, sort_items, to_lower, format_size, format_time};
 use crate::shell::{IconBatch, has_own_icon, local_folder, set_theme, system_image_list, type_icon, type_name};
 use crate::util::{copy_to, focus, send, wide};
 
@@ -66,7 +66,8 @@ pub struct FileList {
     own_icons: RefCell<HashMap<PathBuf, i32>>, // full path -> own icon, for the folder shown
     line_color: Cell<Option<COLORREF>>,        // the line under each row (set_line_color): none until set
     over_row: Cell<Option<usize>>,             // the row a drag is over (drop_folder)
-    drop_into: RefCell<Option<Location>>,      // ...and the folder it takes the drop into: lit while there is one
+    drop_into: RefCell<Option<Location>>,      // ...the folder it takes the drop into, if any
+    drop_lit: Cell<bool>,                      // ...and whether it lights up: not for one the files are in
 }
 
 impl FileList {
@@ -119,6 +120,7 @@ impl FileList {
             line_color: Cell::new(None),
             over_row: Cell::new(None),
             drop_into: RefCell::new(None),
+            drop_lit: Cell::new(false),
             model: RefCell::new(Model {
                 location: Location::ThisPc,
                 shown: false,
@@ -230,6 +232,7 @@ impl FileList {
         // A drop's lit row is a row, not a file: the next move over the list works it out again (drop_folder).
         self.over_row.set(None);
         *self.drop_into.borrow_mut() = None;
+        self.drop_lit.set(false);
         self.set_state(None, LIST_VIEW_ITEM_STATE_FLAGS(0), LIST_VIEW_ITEM_STATE_FLAGS(LVIS_SELECTED.0 | LVIS_FOCUSED.0));
         send(self.hwnd, LVM_SETITEMCOUNT, count, LVSICF_NOSCROLL);
         unsafe {
@@ -479,9 +482,9 @@ impl FileList {
     // ------------------------------------------------------------ drops
 
     /// During a drag (5.8): the folder a drop at that screen point goes into when it is over a folder's row, or a
-    /// shortcut's to a local folder, which then lights up; none elsewhere, nor when `pt` is none (the drag left or
-    /// ended). `own`: the drag comes from this list and carries its selected rows, so none of those takes it.
-    pub fn drop_folder(&self, pt: Option<POINT>, own: bool) -> Option<Location> {
+    /// shortcut's to a local folder; none elsewhere, nor when `pt` is none (the drag left or ended). The row lights
+    /// up, unless the drop would leave the `dragged` files where they are (4.8).
+    pub fn drop_folder(&self, pt: Option<POINT>, dragged: &[Location]) -> Option<Location> {
         let shown = matches!(self.model.borrow().location, Location::Dir(_));
         let row = pt.filter(|_| shown).and_then(|pt| {
             let mut hit = LVHITTESTINFO { pt, ..Default::default() };
@@ -489,8 +492,7 @@ impl FileList {
                 let _ = ScreenToClient(self.hwnd, &mut hit.pt);
             }
             let row = usize::try_from(send(self.hwnd, LVM_HITTEST, 0, &mut hit as *mut _ as isize)).ok()?;
-            let carried = own && send(self.hwnd, LVM_GETITEMSTATE, row, LVIS_SELECTED.0 as isize) != 0;
-            (row < self.count() && !carried).then_some(row)
+            (row < self.count()).then_some(row)
         });
         if row != self.over_row.get() {
             // A new row: what it takes is worked out once, as the tree does for a node.
@@ -508,6 +510,7 @@ impl FileList {
                     None
                 }
             });
+            self.drop_lit.set(into.as_ref().is_some_and(|d| drop_back(d, dragged).is_none()));
             *self.drop_into.borrow_mut() = into;
             for r in [lit, self.lit_row()].into_iter().flatten() {
                 send(self.hwnd, LVM_REDRAWITEMS, r, r as isize);
@@ -521,7 +524,7 @@ impl FileList {
 
     /// The row a drag lights up, if any.
     fn lit_row(&self) -> Option<usize> {
-        self.drop_into.borrow().as_ref().and(self.over_row.get())
+        self.over_row.get().filter(|_| self.drop_lit.get())
     }
 
     // ------------------------------------------------------------ notifications

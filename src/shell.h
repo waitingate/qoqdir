@@ -141,7 +141,10 @@ void acknowledgeChange(WPARAM wp, LPARAM lp);
 std::optional<std::wstring> localFolder(std::wstring path, bool shortcut);
 
 // Drops go to the folder 'target' returns for the cursor (none: refused); nullptr means the drag left or ended.
-using DropTargetFn = std::function<std::optional<std::wstring>(const POINT* screenPt)>;
+// 'dragged' has the paths of the files the drag carries, read from its data: wherever it started, the drop target
+// itself refuses a folder they would go back to (4.8), and 'target' can use them to show that, as the tree does.
+using DropTargetFn =
+    std::function<std::optional<std::wstring>(const POINT* screenPt, const std::vector<std::wstring>& dragged)>;
 Com<IDropTarget> newDropTarget(HWND owner, DropTargetFn target);
 
 // ---------------------------------------------------------------- shell process

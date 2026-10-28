@@ -260,25 +260,27 @@ bool App::create(HINSTANCE instance, const CommandLine& cmd, bool useSettings) {
     SetWindowSubclass(list_.hwnd(), middleClickProc, 1, 0);
     SetWindowSubclass(tree_.hwnd(), middleClickProc, 1, 0);
     // Drops land in the folder row under the pointer (or a shortcut's folder), which lights up, or else in the folder
-    // shown; never in This PC. Our own drag takes neither the folder it comes from nor a folder it carries (5.8).
-    listDrop_ = newDropTarget(wnd_, [this](const POINT* pt) -> std::optional<std::wstring> {
-        std::optional<std::wstring> row = list_.dropFolder(pt, draggingFiles_);
+    // shown; never in This PC. The drop target itself refuses a folder the files would go back to (4.8): over a file's
+    // row or the empty space, the folder they come from, and the row of a folder they carry.
+    listDrop_ = newDropTarget(wnd_, [this](const POINT* pt, const auto& dragged) -> std::optional<std::wstring> {
+        std::optional<std::wstring> row = list_.dropFolder(pt, dragged);
         if (!pt || list_.dir().empty()) return std::nullopt;
-        if (row || draggingFiles_) return row;
-        return list_.dir();
+        return row ? row : list_.dir();
     });
     RegisterDragDrop(list_.hwnd(), listDrop_.get());
     // Dropping on a tab puts the files in that tab's folder.
-    tabDrop_ = newDropTarget(wnd_, [this](const POINT* pt) { return tabDropTarget(pt); });
+    tabDrop_ = newDropTarget(wnd_, [this](const POINT* pt, const auto&) { return tabDropTarget(pt); });
     RegisterDragDrop(tabBar_, tabDrop_.get());
-    // And on a folder in the tree, in that folder; not back where they come from.
-    treeDrop_ = newDropTarget(wnd_, [this](const POINT* pt) -> std::optional<std::wstring> {
+    // And on a folder in the tree, in that folder. A node that refuses says why in the status bar (5.5).
+    treeDrop_ = newDropTarget(wnd_, [this](const POINT* pt, const auto& dragged) -> std::optional<std::wstring> {
         std::optional<std::wstring> dir = tree_.dropTarget(pt);
-        bool fromHere = dir && draggingFiles_ && samePath(*dir, dragSource_);
-        std::wstring over;   // a node that refuses says why in the status bar (5.5)
-        if ((!dir || fromHere) && pt && tree_.pathAt(*pt, &over))
-            setMessage(fromHere ? L"The files come from there" : L"Only a folder on this PC takes a drop");
-        return fromHere ? std::nullopt : dir;
+        std::optional<DropBack> back = dir ? dropBack(*dir, dragged) : std::nullopt;
+        std::wstring over;
+        if ((!dir || back) && pt && tree_.pathAt(*pt, &over))
+            setMessage(back == DropBack::source ? L"The files come from there"
+                       : back                    ? L"A folder can't go into itself"
+                                                 : L"Only a folder on this PC takes a drop");
+        return dir;
     });
     RegisterDragDrop(tree_.hwnd(), treeDrop_.get());
 
@@ -714,12 +716,7 @@ LRESULT App::onNotify(NMHDR* nm) {
         case LVN_BEGINDRAG:
         case LVN_BEGINRDRAG: {
             std::vector<Item> items = list_.selectedItems();
-            if (!items.empty()) {
-                dragSource_ = list_.dir();
-                draggingFiles_ = true;
-                dragOut(wnd_, dragSource_, items);
-                draggingFiles_ = false;
-            }
+            if (!items.empty()) dragOut(wnd_, list_.dir(), items);
             break;
         }
         }
@@ -1428,8 +1425,9 @@ std::optional<std::wstring> App::tabDropTarget(const POINT* screenPt) {
     }
     if (hover < 0 || hover >= int(tabs_.size())) return std::nullopt;
     const Tab& t = tabs_[size_t(hover)];
-    // Not into This PC, not into a folder that has not loaded here, and not back where the files come from.
-    if (t.path.empty() || t.unavailable || (draggingFiles_ && samePath(t.path, dragSource_))) return std::nullopt;
+    // Not into This PC, and not into a folder that has not loaded here; the drop target itself refuses the one the
+    // files come from (4.8).
+    if (t.path.empty() || t.unavailable) return std::nullopt;
     return t.path;
 }
 

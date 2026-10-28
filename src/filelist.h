@@ -54,9 +54,9 @@ public:
     void setLineColor(COLORREF color);
     COLORREF lineColor() const { return lineColor_; }
     // During a drag (5.8): the folder a drop at that screen point goes into when it is over a folder's row, or a
-    // shortcut's to a local folder, which then lights up; none elsewhere, nor when 'screenPt' is null (the drag left
-    // or ended). 'own': the drag comes from this list and carries its selected rows, so none of those takes it.
-    std::optional<std::wstring> dropFolder(const POINT* screenPt, bool own);
+    // shortcut's to a local folder; none elsewhere, nor when 'screenPt' is null (the drag left or ended). The row
+    // lights up, unless the drop would leave the 'dragged' files where they are (4.8).
+    std::optional<std::wstring> dropFolder(const POINT* screenPt, const std::vector<std::wstring>& dragged);
 
     // Handles display-only notifications. Returns false for ones the app must handle.
     bool onNotify(NMHDR* nm, LRESULT* result);
@@ -65,7 +65,7 @@ private:
     void update(bool keepSelection, const std::function<void()>& change);
     void showSortArrow();
     int iconOf(const Item& it) const;   // its own icon if read by now, else its type's
-    int litRow() const { return dropFolder_ ? overRow_ : -1; }   // the row a drag lights up, or -1
+    int litRow() const { return dropLit_ ? overRow_ : -1; }   // the row a drag lights up, or -1
 
     HWND lv_ = nullptr;
     std::wstring dir_;
@@ -80,5 +80,6 @@ private:
     bool asc_ = true;
     COLORREF lineColor_ = CLR_NONE;   // the line under each row (setLineColor)
     int overRow_ = -1;                         // the row a drag is over (dropFolder), or -1
-    std::optional<std::wstring> dropFolder_;   // ...and the folder it takes the drop into: lit while there is one
+    std::optional<std::wstring> dropFolder_;   // ...the folder it takes the drop into, if any
+    bool dropLit_ = false;                     // ...and whether it lights up: not for one the files are in
 };

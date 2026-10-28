@@ -7,6 +7,7 @@ use std::ffi::{OsStr, OsString};
 use std::mem::ManuallyDrop;
 use std::os::windows::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
+use std::rc::Rc;
 
 use windows::Win32::Foundation::{
     CloseHandle, E_FAIL, E_INVALIDARG, ERROR_CANCELLED, FILETIME, GlobalFree, HANDLE, HWND, LPARAM, LRESULT, MAX_PATH,
@@ -26,7 +27,7 @@ use windows::Win32::System::DataExchange::{
     SetClipboardData,
 };
 use windows::Win32::System::LibraryLoader::{GetProcAddress, LOAD_LIBRARY_SEARCH_SYSTEM32, LoadLibraryExW};
-use windows::Win32::System::Memory::{GMEM_MOVEABLE, GlobalAlloc, GlobalLock, GlobalUnlock};
+use windows::Win32::System::Memory::{GMEM_MOVEABLE, GlobalAlloc, GlobalLock, GlobalSize, GlobalUnlock};
 use windows::Win32::System::Ole::{
     CF_HDROP, CF_UNICODETEXT, DROPEFFECT, DROPEFFECT_COPY, DROPEFFECT_LINK, DROPEFFECT_MOVE, DROPEFFECT_NONE,
     IDropSource, IDropTarget, IDropTarget_Impl, OleSetClipboard, ReleaseStgMedium,
@@ -38,7 +39,7 @@ use windows::Win32::UI::Controls::HIMAGELIST;
 use windows::Win32::UI::Input::KeyboardAndMouse::{VK_CONTROL, VK_SHIFT};
 use windows::Win32::UI::Shell::Common::ITEMIDLIST;
 use windows::Win32::UI::Shell::{
-    CFSTR_DROPDESCRIPTION, DROPDESCRIPTION, DROPIMAGE_INVALID, DROPIMAGE_LABEL, DROPIMAGETYPE,
+    CFSTR_DROPDESCRIPTION, DROPDESCRIPTION, DROPFILES, DROPIMAGE_INVALID, DROPIMAGE_LABEL, DROPIMAGETYPE,
     ASSOCF_OPEN_BYEXENAME, ASSOCSTR_EXECUTABLE, AssocQueryStringW,
     CMF_CANRENAME, CMF_EXTENDEDVERBS, CMF_NORMAL, CMIC_MASK_CONTROL_DOWN, CMIC_MASK_PTINVOKE, CMIC_MASK_SHIFT_DOWN,
     CMINVOKECOMMANDINFO, CMINVOKECOMMANDINFOEX, CLSID_DragDropHelper, FOF_ALLOWUNDO,
@@ -64,7 +65,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
 use windows::core::{GUID, HRESULT, IUnknown, Interface, PCSTR, PCWSTR, PSTR, PWSTR, Ref, Result, implement, s, w};
 
 use crate::folder::{
-    Item, Location, SortKey, drop_keys, exists, extension_of, list_folder, normalize, sort_items,
+    Item, Location, SortKey, drop_back, drop_keys, exists, extension_of, list_folder, normalize, sort_items,
 };
 use crate::util::{OwnedMenu, Pidl, copy_to, from_wide, key_down, pcwstr, wide};
 
@@ -952,14 +953,56 @@ pub fn local_folder(location: Location, shortcut: bool) -> Option<Location> {
     local.then_some(location)
 }
 
-/// The folder a drop goes to, for the cursor (None: refused); called with None when the drag leaves or ends.
-pub type DropTargetFn = Box<dyn Fn(Option<POINT>) -> Option<Location>>;
+/// The folder a drop goes to, for the cursor (None: refused); called with None when the drag leaves or ends. The
+/// second argument has the paths of the files the drag carries, read from its data: wherever it started, the drop
+/// target itself refuses a folder they would go back to (4.8), and the closure can use them to show that, as the
+/// tree does.
+pub type DropTargetFn = Box<dyn Fn(Option<POINT>, &[Location]) -> Option<Location>>;
+
+/// The paths of the files a drag carries, read once as it enters. None for items without one (from a zip folder or a
+/// phone), and none for a drag that can only make shortcuts (a drive from This PC): a shortcut may go anywhere.
+fn dragged_paths(data: Option<&IDataObject>, allowed: DROPEFFECT) -> Vec<Location> {
+    let mut paths = Vec::new();
+    let fmt = FORMATETC {
+        cfFormat: CF_HDROP.0,
+        ptd: std::ptr::null_mut(),
+        dwAspect: DVASPECT_CONTENT.0,
+        lindex: -1,
+        tymed: TYMED_HGLOBAL.0 as u32,
+    };
+    let Some(data) = data.filter(|_| (allowed.0 & (DROPEFFECT_COPY | DROPEFFECT_MOVE).0) != 0) else { return paths };
+    unsafe {
+        let Ok(mut med) = data.GetData(&fmt) else { return paths };
+        // The names one after another, read straight (DragQueryFileW(i) starts from the first name each time), and no
+        // further than the memory goes: another program wrote them.
+        let size = GlobalSize(med.u.hGlobal);
+        let drop = if size > size_of::<DROPFILES>() { GlobalLock(med.u.hGlobal) as *const u8 } else { std::ptr::null() };
+        if !drop.is_null() {
+            let files = std::ptr::read_unaligned(drop.cast::<DROPFILES>());
+            let start = files.pFiles as usize;
+            if files.fWide.as_bool() && start < size {
+                let bytes = std::slice::from_raw_parts(drop.add(start), size - start);
+                let text: Vec<u16> = bytes.as_chunks::<2>().0.iter().map(|&b| u16::from_le_bytes(b)).collect();
+                let mut names = &text[..];
+                // Each ends in a nul; an empty one ends the list, and one cut short is left out.
+                while let Some(end) = names.iter().position(|&c| c == 0).filter(|&end| end > 0) {
+                    paths.push(normalize(&from_wide(&names[..end])));
+                    names = &names[end + 1..];
+                }
+            }
+            let _ = GlobalUnlock(med.u.hGlobal);
+        }
+        ReleaseStgMedium(&mut med);
+    }
+    paths
+}
 
 #[implement(IDropTarget)]
 struct DropTarget {
     owner: HWND,
     target: DropTargetFn,
     data: RefCell<Option<IDataObject>>,
+    dragged: RefCell<Rc<[Location]>>,     // the paths of the files it carries (dragged_paths)
     dir: RefCell<Option<Location>>,       // the folder the drop currently goes to
     folder: RefCell<Option<IDropTarget>>, // and its shell drop target
     helper: Option<IDropTargetHelper>,
@@ -972,6 +1015,7 @@ pub fn new_drop_target(owner: HWND, target: DropTargetFn) -> IDropTarget {
         owner,
         target,
         data: RefCell::new(None),
+        dragged: RefCell::new(Rc::from([])),
         dir: RefCell::new(None),
         folder: RefCell::new(None),
         helper,
@@ -983,9 +1027,12 @@ pub fn new_drop_target(owner: HWND, target: DropTargetFn) -> IDropTarget {
 impl DropTarget {
     /// Aims the drop at the folder under the cursor; true if it changed (that folder has been told already).
     fn aim(&self, keys: MODIFIERKEYS_FLAGS, pt: &POINTL, effect: *mut DROPEFFECT) -> bool {
-        let dir = (self.target)(Some(POINT { x: pt.x, y: pt.y }));
+        let dragged = self.dragged.borrow().clone();
+        let dir = (self.target)(Some(POINT { x: pt.x, y: pt.y }), &dragged)
+            .filter(|d| drop_back(d, &dragged).is_none()); // never back where the files are, whoever asks (4.8)
+        // Compared exactly, as the C++ version does: a folder can hold both "a" and "A".
         let unchanged = match (&dir, &*self.dir.borrow()) {
-            (Some(a), Some(b)) => a.same(b),
+            (Some(a), Some(b)) => a.path().map(Path::as_os_str) == b.path().map(Path::as_os_str),
             (None, None) => true,
             _ => false,
         };
@@ -1012,7 +1059,7 @@ impl DropTarget {
     }
 
     fn finish(&self) {
-        (self.target)(None);
+        (self.target)(None, &[]);
         let folder = self.folder.borrow_mut().take();
         if let Some(folder) = folder {
             unsafe {
@@ -1024,6 +1071,7 @@ impl DropTarget {
             self.set_tip(DROPIMAGE_INVALID, "", OsStr::new(""));
         }
         *self.data.borrow_mut() = None;
+        *self.dragged.borrow_mut() = Rc::from([]);
     }
 
     /// A drop with these keys asks with Windows' menu, and could move the files: a plain drag passed on as a
@@ -1085,6 +1133,7 @@ impl IDropTarget_Impl for DropTarget_Impl {
     fn DragEnter(&self, data: Ref<IDataObject>, keys: MODIFIERKEYS_FLAGS, pt: &POINTL, effect: *mut DROPEFFECT) -> Result<()> {
         *self.data.borrow_mut() = data.as_ref().cloned();
         let allowed = unsafe { *effect };
+        *self.dragged.borrow_mut() = dragged_paths(data.as_ref(), allowed).into();
         if !self.aim(keys, pt, effect) {
             unsafe { *effect = DROPEFFECT_NONE }; // still no folder (each drag starts with none)
         }

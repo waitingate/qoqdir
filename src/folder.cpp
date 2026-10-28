@@ -444,3 +444,12 @@ DWORD dropKeys(DWORD keys, DWORD allowed) {
     bool plain = (keys & MK_LBUTTON) && !(keys & deliberate);
     return plain && (allowed & DROPEFFECT_MOVE) ? (keys & ~DWORD(MK_LBUTTON)) | MK_RBUTTON : keys;
 }
+
+std::optional<DropBack> dropBack(const std::wstring& dir, const std::vector<std::wstring>& dragged) {
+    for (const std::wstring& path : dragged) {
+        if (path.empty()) continue;   // This PC carries nothing a folder holds
+        if (samePath(dir, parentPath(path))) return DropBack::source;
+        if (samePath(dir, path) || !childToward(path, dir).empty()) return DropBack::itself;
+    }
+    return std::nullopt;
+}

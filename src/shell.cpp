@@ -683,6 +683,33 @@ std::optional<std::wstring> localFolder(std::wstring path, bool shortcut) {
 
 namespace {
 
+// The paths of the files a drag carries, read once as it enters. None for items without one (from a zip folder or a
+// phone), and none for a drag that can only make shortcuts (a drive from This PC): a shortcut may go anywhere.
+std::vector<std::wstring> draggedPaths(IDataObject* data, DWORD allowed) {
+    std::vector<std::wstring> paths;
+    FORMATETC fmt{CF_HDROP, nullptr, DVASPECT_CONTENT, -1, TYMED_HGLOBAL};
+    STGMEDIUM med{};
+    if (!data || !(allowed & (DROPEFFECT_COPY | DROPEFFECT_MOVE)) || FAILED(data->GetData(&fmt, &med))) return paths;
+    // The names one after another, read straight (DragQueryFileW(i) starts from the first name each time), and no
+    // further than the memory goes: another program wrote them.
+    size_t size = GlobalSize(med.hGlobal);
+    if (auto* drop = size > sizeof(DROPFILES) ? static_cast<const char*>(GlobalLock(med.hGlobal)) : nullptr) {
+        auto* files = reinterpret_cast<const DROPFILES*>(drop);
+        if (files->fWide && files->pFiles < size) {
+            auto* p = reinterpret_cast<const wchar_t*>(drop + files->pFiles);
+            const wchar_t* end = p + (size - files->pFiles) / sizeof(wchar_t);
+            for (const wchar_t* name = p; p < end; name = ++p) {
+                while (p < end && *p) ++p;
+                if (p == end || p == name) break;   // cut short, or the empty name that ends the list
+                paths.push_back(normalizePath(std::wstring(name, p)));
+            }
+        }
+        GlobalUnlock(med.hGlobal);
+    }
+    ReleaseStgMedium(&med);
+    return paths;
+}
+
 class DropTarget final : public IDropTarget {
 public:
     DropTarget(HWND owner, DropTargetFn target) : owner_(owner), target_(std::move(target)) {
@@ -709,6 +736,7 @@ public:
         if (data) data->AddRef();
         *data_.put() = data;
         DWORD allowed = *effect;
+        dragged_ = draggedPaths(data, allowed);
         if (!aim(keys, pt, effect)) *effect = DROPEFFECT_NONE;   // still no folder (each drag starts with none)
         describe(keys, allowed, *effect);
         POINT p{pt.x, pt.y};
@@ -744,7 +772,8 @@ private:
     // Aims the drop at the folder under the cursor; true if it changed (that folder has been told already).
     bool aim(DWORD keys, POINTL pt, DWORD* effect) {
         POINT p{pt.x, pt.y};
-        std::optional<std::wstring> dir = target_(&p);
+        std::optional<std::wstring> dir = target_(&p, dragged_);
+        if (dir && dropBack(*dir, dragged_)) dir.reset();   // never back where the files are, whoever asks (4.8)
         if (dir == dir_) return false;
         if (folder_) folder_->DragLeave();
         folder_.reset();
@@ -756,12 +785,13 @@ private:
         return true;
     }
     void finish() {
-        target_(nullptr);
+        target_(nullptr, {});
         if (folder_) folder_->DragLeave();
         folder_.reset();
         dir_.reset();
         if (described_) setTip(DROPIMAGE_INVALID);
         data_.reset();
+        dragged_.clear();
     }
 
     // A drop with these keys asks with Windows' menu, and could move the files: a plain drag passed on as a
@@ -800,10 +830,11 @@ private:
     HWND owner_;
     DropTargetFn target_;
     Com<IDataObject> data_;
-    std::optional<std::wstring> dir_;   // the folder the drop currently goes to
-    Com<IDropTarget> folder_;           // and its shell drop target
+    std::vector<std::wstring> dragged_;   // the paths of the files it carries (draggedPaths)
+    std::optional<std::wstring> dir_;     // the folder the drop currently goes to
+    Com<IDropTarget> folder_;             // and its shell drop target
     Com<IDropTargetHelper> helper_;
-    bool described_ = false;            // the drag's tip is ours (describe)
+    bool described_ = false;              // the drag's tip is ours (describe)
 };
 
 }  // namespace
