@@ -56,7 +56,7 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
 use windows::Win32::System::Variant::VARIANT;
 use windows::Win32::UI::Accessibility::{AccessibleObjectFromWindow, IAccessible};
 use windows::Win32::UI::Shell::{
-    CFSTR_DROPDESCRIPTION, DROPDESCRIPTION, DROPIMAGE_INVALID,
+    CFSTR_DROPDESCRIPTION, DROPDESCRIPTION, DROPIMAGE_INVALID, DROPIMAGE_NOIMAGE,
     DROPFILES, FOLDERID_Desktop, FOLDERID_Profile, SHGFI_DISPLAYNAME, SHGFI_SMALLICON, SHGFI_SYSICONINDEX,
     StrCmpLogicalW,
 };
@@ -540,7 +540,8 @@ impl App {
         self.row_of(name).is_some_and(|row| state(row) != 0)
     }
 
-    /// The tip a drag's data carries for its image, "" for none (5.8).
+    /// The tip a drag's data carries for its image, "" for none (5.8). An icon beside it shows as the number Windows
+    /// gives it, "(1) Copy to %1 [sub]"; a tip with no icon has none.
     fn drag_tip(data: &IDataObject) -> String {
         let fmt = FORMATETC {
             cfFormat: unsafe { RegisterClipboardFormatW(CFSTR_DROPDESCRIPTION) } as u16,
@@ -557,8 +558,11 @@ impl App {
                 // Copied out whole: the struct is packed, so its fields can't be borrowed where they are.
                 let d = std::ptr::read_unaligned(p);
                 let (kind, text, name) = (d.r#type, d.szMessage, d.szInsert);
+                if kind != DROPIMAGE_INVALID && kind != DROPIMAGE_NOIMAGE {
+                    tip = format!("({}) ", kind.0);
+                }
                 if kind != DROPIMAGE_INVALID {
-                    tip = format!("{} [{}]", from_wide(&text).to_string_lossy(), from_wide(&name).to_string_lossy());
+                    tip += &format!("{} [{}]", from_wide(&text).to_string_lossy(), from_wide(&name).to_string_lossy());
                 }
                 let _ = GlobalUnlock(med.u.hGlobal);
             }
@@ -2290,10 +2294,11 @@ impl App {
             },
             |a| noted() == "sub refused, made taken, file refused, tab refused" && !a.row_lit("made"),
         );
-        // While a drop would ask, the drag's tip says so, not Windows' "Move to". No drop here: it would ask (5.8).
+        // While a drop would ask, the drag's tip says so, with no icon, not Windows' "Move to" with its arrow. With
+        // Ctrl held it is the folder's own, which it writes again as the drag moves. No drop here: it would ask (5.8).
         s.add(
-            "while a drop on a folder would ask, the drag's tip says Copy or move to it; not with Ctrl held, nor once \
-             the drag has left (5.8)",
+            "while a drop on a folder would ask, the drag's tip says Copy or move to it, with no icon; with Ctrl held \
+             it is Windows' own, and once the drag has left there is none (5.8)",
             |a| {
                 FLAG.set(false);
                 let data = data_object_at(a.wnd, &Location::dir(p("file1.txt")));
@@ -2308,7 +2313,7 @@ impl App {
                     let held = App::drag_tip(&data);
                     let _ = target.DragLeave();
                     let left = App::drag_tip(&data);
-                    FLAG.set(asking == "Copy or move to %1 [sub]" && held != asking && left.is_empty());
+                    FLAG.set(asking == "Copy or move to %1 [sub]" && held == "(1) Copy to %1 [sub]" && left.is_empty());
                     note(format!("{asking} / {held} / {left}"));
                 }
             },

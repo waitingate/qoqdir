@@ -501,7 +501,8 @@ buttons, and the filter box, has a tooltip that names it with its key ("Back
   asked about as the pointer crosses it, and a server that stops answering
   would hold the window (4.1).
 - While a drop would ask, the tip under the dragged files says "Copy or move to"
-  the folder, not Windows' "Move to"; with Ctrl, Shift or Alt held it is
+  the folder, with no icon, not Windows' "Move to" with its arrow: none of
+  Windows' icons says that a menu comes. With Ctrl, Shift or Alt held it is
   Windows' own again.
 - Undo is Windows' own: Ctrl+Z on the desktop or in an Explorer window takes
   back Qoqdir's last rename, move, copy or delete too, since Windows keeps one
@@ -768,10 +769,11 @@ result:
     lights up while the file is over it. A drag that carries `sub`, made as any
     program's would be, takes the row of another folder, but not `sub`'s own,
     nor a file's row or the tab of the test folder.
-    While a drop on `sub` would ask, the drag's tip says "Copy or move to sub";
-    with Ctrl held, or once the drag has left, it doesn't. Over the column
-    header the drag goes to the test folder and no row lights up, and the row of
-    a shortcut whose folder was deleted doesn't light up either.
+    While a drop on `sub` would ask, the drag's tip says "Copy or move to sub"
+    with no icon; with Ctrl held it is Windows' own "Copy to sub", and once the
+    drag has left there is none. Over the column header the drag goes to the
+    test folder and no row lights up, and the row of a shortcut whose folder was
+    deleted doesn't light up either.
 30. Middle-click on a folder in the list opens a new background tab with that
     folder, and the current tab doesn't change.
 31. Middle-click on a tree node opens a new background tab with that folder.

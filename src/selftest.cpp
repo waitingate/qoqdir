@@ -190,14 +190,18 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
             if (list_.at(row).name == name) return ListView_GetItemState(list_.hwnd(), row, LVIS_DROPHILITED) != 0;
         return false;
     };
-    auto dragTip = [](IDataObject* data) {   // the tip a drag's data carries for its image, "" for none (5.8)
+    // The tip a drag's data carries for its image, "" for none (5.8). An icon beside it shows as the number Windows
+    // gives it, "(1) Copy to %1 [sub]"; a tip with no icon has none.
+    auto dragTip = [](IDataObject* data) {
         FORMATETC fmt{CLIPFORMAT(RegisterClipboardFormatW(CFSTR_DROPDESCRIPTION)), nullptr, DVASPECT_CONTENT, -1,
                       TYMED_HGLOBAL};
         STGMEDIUM med{};
         std::wstring tip;
         if (FAILED(data->GetData(&fmt, &med))) return tip;
         if (auto* d = static_cast<DROPDESCRIPTION*>(GlobalLock(med.hGlobal))) {
-            if (d->type != DROPIMAGE_INVALID) tip = std::wstring(d->szMessage) + L" [" + d->szInsert + L"]";
+            if (d->type != DROPIMAGE_INVALID && d->type != DROPIMAGE_NOIMAGE)
+                tip = L"(" + std::to_wstring(d->type) + L") ";
+            if (d->type != DROPIMAGE_INVALID) tip += std::wstring(d->szMessage) + L" [" + d->szInsert + L"]";
             GlobalUnlock(med.hGlobal);
         }
         ReleaseStgMedium(&med);
@@ -1492,10 +1496,11 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
         [=, this] {
             return selfTest_->note == L"sub refused, made taken, file refused, tab refused" && !rowLit(L"made");
         });
-    // While a drop would ask, the drag's tip says so, not Windows' "Move to". No drop here: it would ask (5.8).
+    // While a drop would ask, the drag's tip says so, with no icon, not Windows' "Move to" with its arrow. With Ctrl
+    // held it is the folder's own, which it writes again as the drag moves. No drop here: it would ask (5.8).
     auto tipsRight = std::make_shared<bool>(false);
-    add(L"while a drop on a folder would ask, the drag's tip says Copy or move to it; not with Ctrl held, nor once "
-        L"the drag has left (5.8)",
+    add(L"while a drop on a folder would ask, the drag's tip says Copy or move to it, with no icon; with Ctrl held it "
+        L"is Windows' own, and once the drag has left there is none (5.8)",
         [=, this] {
             Com<IDataObject> data = dataObject(wnd_, path(L"file1.txt"));
             DWORD any = DROPEFFECT_COPY | DROPEFFECT_MOVE | DROPEFFECT_LINK, effect = any;
@@ -1506,7 +1511,7 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
             std::wstring held = dragTip(data.get());
             listDrop_->DragLeave();
             std::wstring left = dragTip(data.get());
-            *tipsRight = asking == L"Copy or move to %1 [sub]" && held != asking && left.empty();
+            *tipsRight = asking == L"Copy or move to %1 [sub]" && held == L"(1) Copy to %1 [sub]" && left.empty();
             selfTest_->note = asking + L" / " + held + L" / " + left;
         },
         [=, this] { return *tipsRight; });

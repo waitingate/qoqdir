@@ -39,7 +39,7 @@ use windows::Win32::UI::Controls::HIMAGELIST;
 use windows::Win32::UI::Input::KeyboardAndMouse::{VK_CONTROL, VK_SHIFT};
 use windows::Win32::UI::Shell::Common::ITEMIDLIST;
 use windows::Win32::UI::Shell::{
-    CFSTR_DROPDESCRIPTION, DROPDESCRIPTION, DROPFILES, DROPIMAGE_INVALID, DROPIMAGE_LABEL, DROPIMAGETYPE,
+    CFSTR_DROPDESCRIPTION, DROPDESCRIPTION, DROPFILES, DROPIMAGE_INVALID, DROPIMAGE_NOIMAGE, DROPIMAGETYPE,
     ASSOCF_OPEN_BYEXENAME, ASSOCSTR_EXECUTABLE, AssocQueryStringW,
     CMF_CANRENAME, CMF_EXTENDEDVERBS, CMF_NORMAL, CMIC_MASK_CONTROL_DOWN, CMIC_MASK_PTINVOKE, CMIC_MASK_SHIFT_DOWN,
     CMINVOKECOMMANDINFO, CMINVOKECOMMANDINFOEX, CLSID_DragDropHelper, FOF_ALLOWUNDO,
@@ -471,31 +471,40 @@ pub fn invoke_verb(owner: HWND, cm: Option<IContextMenu>, verb: &str) {
 /// False when the clipboard could not be set: a path too long for the shell, or another program holds it.
 pub fn copy_to_clipboard(owner: HWND, dir: &Location, items: &[Item], cut: bool) -> bool {
     let Ok(obj) = ui_object_of::<IDataObject>(owner, dir, items) else { return false };
+    // Tells the paste target whether to move (cut) or copy; a copy also allows Paste shortcut.
+    let effect = if cut { DROPEFFECT_MOVE } else { DROPEFFECT_COPY | DROPEFFECT_LINK };
+    set_data(&obj, unsafe { RegisterClipboardFormatW(w!("Preferred DropEffect")) }, &effect.0.to_ne_bytes());
+    unsafe { OleSetClipboard(&obj).is_ok() }
+}
+
+/// Puts the bytes into a data object as `format`, which then owns them; false if it took nothing.
+fn set_data(data: &IDataObject, format: u32, bytes: &[u8]) -> bool {
+    let fmt = FORMATETC {
+        cfFormat: format as u16,
+        ptd: std::ptr::null_mut(),
+        dwAspect: DVASPECT_CONTENT.0,
+        lindex: -1,
+        tymed: TYMED_HGLOBAL.0 as u32,
+    };
     unsafe {
-        // Tells the paste target whether to move (cut) or copy.
-        let fmt = FORMATETC {
-            cfFormat: RegisterClipboardFormatW(w!("Preferred DropEffect")) as u16,
-            ptd: std::ptr::null_mut(),
-            dwAspect: DVASPECT_CONTENT.0,
-            lindex: -1,
-            tymed: TYMED_HGLOBAL.0 as u32,
-        };
-        if let Ok(h) = GlobalAlloc(GMEM_MOVEABLE, size_of::<u32>()) {
-            let p = GlobalLock(h) as *mut u32;
-            if !p.is_null() {
-                *p = if cut { DROPEFFECT_MOVE.0 } else { (DROPEFFECT_COPY | DROPEFFECT_LINK).0 }; // a copy also allows Paste shortcut
-                let _ = GlobalUnlock(h);
-            }
-            let mut med = STGMEDIUM {
-                tymed: TYMED_HGLOBAL.0 as u32,
-                u: STGMEDIUM_0 { hGlobal: h },
-                pUnkForRelease: ManuallyDrop::new(None),
-            };
-            if p.is_null() || obj.SetData(&fmt, &med, true).is_err() {
-                ReleaseStgMedium(&mut med);
-            }
+        let Ok(h) = GlobalAlloc(GMEM_MOVEABLE, bytes.len()) else { return false };
+        let p = GlobalLock(h) as *mut u8;
+        if p.is_null() {
+            let _ = GlobalFree(Some(h));
+            return false;
         }
-        OleSetClipboard(&obj).is_ok()
+        std::ptr::copy_nonoverlapping(bytes.as_ptr(), p, bytes.len());
+        let _ = GlobalUnlock(h);
+        let mut med = STGMEDIUM {
+            tymed: TYMED_HGLOBAL.0 as u32,
+            u: STGMEDIUM_0 { hGlobal: h },
+            pUnkForRelease: ManuallyDrop::new(None),
+        };
+        if data.SetData(&fmt, &med, true).is_ok() {
+            return true;
+        }
+        ReleaseStgMedium(&mut med);
+        false
     }
 }
 
@@ -1071,9 +1080,7 @@ impl DropTarget {
             }
         }
         *self.dir.borrow_mut() = None;
-        if self.described.get() {
-            self.set_tip(DROPIMAGE_INVALID, "", OsStr::new(""));
-        }
+        self.clear_tip();
         *self.data.borrow_mut() = None;
         *self.dragged.borrow_mut() = Rc::from([]);
     }
@@ -1084,15 +1091,22 @@ impl DropTarget {
         (drop_keys(keys, allowed).0 & MK_RBUTTON.0) != 0 && (allowed.0 & DROPEFFECT_MOVE.0) != 0
     }
 
-    /// While a drop would ask, the drag's tip says "Copy or move to" its folder, not the folder's own "Move to" (5.8).
-    fn describe(&self, keys: MODIFIERKEYS_FLAGS, allowed: DROPEFFECT, effect: DROPEFFECT) {
+    /// While a drop would ask, the drag's tip says "Copy or move to" its folder, not the folder's own "Move to", and
+    /// shows no icon: none of Windows' icons says that a menu comes (5.8).
+    fn describe(&self, ask: bool, effect: DROPEFFECT) {
         let into = self.dir.borrow().clone().filter(|_| self.folder.borrow().is_some());
         match into {
-            Some(dir) if effect != DROPEFFECT_NONE && Self::asks(keys, allowed) => {
-                self.set_tip(DROPIMAGE_LABEL, "Copy or move to %1", &dir.display_name());
+            Some(dir) if effect != DROPEFFECT_NONE && ask => {
+                self.set_tip(DROPIMAGE_NOIMAGE, "Copy or move to %1", &dir.display_name());
             }
-            _ if self.described.get() => self.set_tip(DROPIMAGE_INVALID, "", OsStr::new("")),
-            _ => {}
+            _ => self.clear_tip(),
+        }
+    }
+
+    /// Takes ours away, so the folder's own tip shows again.
+    fn clear_tip(&self) {
+        if self.described.get() {
+            self.set_tip(DROPIMAGE_INVALID, "", OsStr::new(""));
         }
     }
 
@@ -1105,31 +1119,11 @@ impl DropTarget {
         unsafe {
             copy_to(text.as_mut_ptr(), text.len() as i32, message);
             copy_to(name.as_mut_ptr(), name.len() as i32, insert);
-            let tip = DROPDESCRIPTION { r#type: kind, szMessage: text, szInsert: name };
-            let fmt = FORMATETC {
-                cfFormat: RegisterClipboardFormatW(CFSTR_DROPDESCRIPTION) as u16,
-                ptd: std::ptr::null_mut(),
-                dwAspect: DVASPECT_CONTENT.0,
-                lindex: -1,
-                tymed: TYMED_HGLOBAL.0 as u32,
-            };
-            let Ok(h) = GlobalAlloc(GMEM_MOVEABLE, size_of::<DROPDESCRIPTION>()) else { return };
-            let p = GlobalLock(h) as *mut DROPDESCRIPTION;
-            if !p.is_null() {
-                *p = tip;
-                let _ = GlobalUnlock(h);
-            }
-            let mut med = STGMEDIUM {
-                tymed: TYMED_HGLOBAL.0 as u32,
-                u: STGMEDIUM_0 { hGlobal: h },
-                pUnkForRelease: ManuallyDrop::new(None),
-            };
-            if p.is_null() || data.SetData(&fmt, &med, true).is_err() {
-                ReleaseStgMedium(&mut med);
-            } else {
-                self.described.set(kind != DROPIMAGE_INVALID);
-            }
         }
+        let tip = DROPDESCRIPTION { r#type: kind, szMessage: text, szInsert: name };
+        let bytes = unsafe { std::slice::from_raw_parts((&raw const tip).cast::<u8>(), size_of::<DROPDESCRIPTION>()) };
+        let format = unsafe { RegisterClipboardFormatW(CFSTR_DROPDESCRIPTION) };
+        self.described.set(set_data(&data, format, bytes) && kind != DROPIMAGE_INVALID);
     }
 }
 
@@ -1141,7 +1135,7 @@ impl IDropTarget_Impl for DropTarget_Impl {
         if !self.aim(keys, pt, effect) {
             unsafe { *effect = DROPEFFECT_NONE }; // still no folder (each drag starts with none)
         }
-        self.describe(keys, allowed, unsafe { *effect });
+        self.describe(DropTarget::asks(keys, allowed), unsafe { *effect });
         unsafe {
             if let Some(h) = &self.helper {
                 let _ = h.DragEnter(self.owner, data.as_ref(), &POINT { x: pt.x, y: pt.y }, *effect);
@@ -1151,9 +1145,9 @@ impl IDropTarget_Impl for DropTarget_Impl {
     }
 
     fn DragOver(&self, keys: MODIFIERKEYS_FLAGS, pt: &POINTL, effect: *mut DROPEFFECT) -> Result<()> {
-        let allowed = unsafe { *effect };
-        if self.described.get() && !DropTarget::asks(keys, allowed) {
-            self.set_tip(DROPIMAGE_INVALID, "", OsStr::new("")); // ours goes first: the folder puts its own
+        let ask = DropTarget::asks(keys, unsafe { *effect });
+        if !ask {
+            self.clear_tip(); // ours goes first: the folder puts its own
         }
         // Over a new folder, aim() has already asked it; otherwise the same folder decides again.
         if !self.aim(keys, pt, effect) {
@@ -1162,7 +1156,7 @@ impl IDropTarget_Impl for DropTarget_Impl {
                 unsafe { *effect = DROPEFFECT_NONE };
             }
         }
-        self.describe(keys, allowed, unsafe { *effect });
+        self.describe(ask, unsafe { *effect });
         unsafe {
             if let Some(h) = &self.helper {
                 let _ = h.DragOver(&POINT { x: pt.x, y: pt.y }, *effect);

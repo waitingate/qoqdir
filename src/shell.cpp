@@ -321,22 +321,34 @@ void invokeVerb(HWND owner, IContextMenu* cm, const char* verb) {
 
 // ---------------------------------------------------------------- file operations
 
+namespace {
+
+// Puts the bytes into a data object as 'format', which then owns them; false if it took nothing.
+bool setData(IDataObject* data, UINT format, const void* bytes, size_t size) {
+    FORMATETC fmt{CLIPFORMAT(format), nullptr, DVASPECT_CONTENT, -1, TYMED_HGLOBAL};
+    STGMEDIUM med{};
+    med.tymed = TYMED_HGLOBAL;
+    med.hGlobal = GlobalAlloc(GMEM_MOVEABLE, size);
+    void* p = med.hGlobal ? GlobalLock(med.hGlobal) : nullptr;
+    if (!p) {
+        if (med.hGlobal) GlobalFree(med.hGlobal);
+        return false;
+    }
+    CopyMemory(p, bytes, size);
+    GlobalUnlock(med.hGlobal);
+    if (SUCCEEDED(data->SetData(&fmt, &med, TRUE))) return true;
+    ReleaseStgMedium(&med);
+    return false;
+}
+
+}  // namespace
+
 bool copyToClipboard(HWND owner, const std::wstring& dir, const std::vector<Item>& items, bool cut) {
     Com<IDataObject> obj = shellObject<IDataObject>(owner, dir, items);
     if (!obj) return false;
-    // Tells the paste target whether to move (cut) or copy.
-    FORMATETC fmt{CLIPFORMAT(RegisterClipboardFormatW(CFSTR_PREFERREDDROPEFFECT)), nullptr, DVASPECT_CONTENT, -1,
-                  TYMED_HGLOBAL};
-    STGMEDIUM med{};
-    med.tymed = TYMED_HGLOBAL;
-    med.hGlobal = GlobalAlloc(GMEM_MOVEABLE, sizeof(DWORD));
-    if (auto* effect = med.hGlobal ? static_cast<DWORD*>(GlobalLock(med.hGlobal)) : nullptr) {
-        *effect = cut ? DROPEFFECT_MOVE : DROPEFFECT_COPY | DROPEFFECT_LINK;   // a copy also allows Paste shortcut
-        GlobalUnlock(med.hGlobal);
-        if (FAILED(obj->SetData(&fmt, &med, TRUE))) ReleaseStgMedium(&med);
-    } else if (med.hGlobal) {
-        GlobalFree(med.hGlobal);
-    }
+    // Tells the paste target whether to move (cut) or copy; a copy also allows Paste shortcut.
+    DWORD effect = cut ? DROPEFFECT_MOVE : DROPEFFECT_COPY | DROPEFFECT_LINK;
+    setData(obj.get(), RegisterClipboardFormatW(CFSTR_PREFERREDDROPEFFECT), &effect, sizeof(effect));
     return SUCCEEDED(OleSetClipboard(obj.get()));
 }
 
@@ -741,18 +753,18 @@ public:
         DWORD allowed = *effect;
         dragged_ = draggedPaths(data, allowed);
         if (!aim(keys, pt, effect)) *effect = DROPEFFECT_NONE;   // still no folder (each drag starts with none)
-        describe(keys, allowed, *effect);
+        describe(asks(keys, allowed), *effect);
         POINT p{pt.x, pt.y};
         if (helper_) helper_->DragEnter(owner_, data, &p, *effect);
         return S_OK;
     }
     HRESULT STDMETHODCALLTYPE DragOver(DWORD keys, POINTL pt, DWORD* effect) override {
-        DWORD allowed = *effect;
-        if (described_ && !asks(keys, allowed)) setTip(DROPIMAGE_INVALID);   // ours goes first: the folder puts its own
+        bool ask = asks(keys, *effect);
+        if (!ask) clearTip();   // ours goes first: the folder puts its own
         // Over a new folder, aim() has already asked it; otherwise the same folder decides again.
         if (!aim(keys, pt, effect) && (!folder_ || FAILED(folder_->DragOver(dropKeys(keys, *effect), pt, effect))))
             *effect = DROPEFFECT_NONE;
-        describe(keys, allowed, *effect);
+        describe(ask, *effect);
         POINT p{pt.x, pt.y};
         if (helper_) helper_->DragOver(&p, *effect);
         return S_OK;
@@ -792,7 +804,7 @@ private:
         if (folder_) folder_->DragLeave();
         folder_.reset();
         dir_.reset();
-        if (described_) setTip(DROPIMAGE_INVALID);
+        clearTip();
         data_.reset();
         dragged_.clear();
     }
@@ -802,31 +814,25 @@ private:
     static bool asks(DWORD keys, DWORD allowed) {
         return (dropKeys(keys, allowed) & MK_RBUTTON) && (allowed & DROPEFFECT_MOVE);
     }
-    // While a drop would ask, the drag's tip says "Copy or move to" its folder, not the folder's own "Move to" (5.8).
-    void describe(DWORD keys, DWORD allowed, DWORD effect) {
-        if (folder_ && dir_ && effect != DROPEFFECT_NONE && asks(keys, allowed))
-            setTip(DROPIMAGE_LABEL, L"Copy or move to %1", displayName(*dir_));
-        else if (described_)
-            setTip(DROPIMAGE_INVALID);
+    // While a drop would ask, the drag's tip says "Copy or move to" its folder, not the folder's own "Move to", and
+    // shows no icon: none of Windows' icons says that a menu comes (5.8).
+    void describe(bool ask, DWORD effect) {
+        if (folder_ && dir_ && effect != DROPEFFECT_NONE && ask)
+            setTip(DROPIMAGE_NOIMAGE, L"Copy or move to %1", displayName(*dir_));
+        else
+            clearTip();
+    }
+    void clearTip() {   // takes ours away, so the folder's own shows again
+        if (described_) setTip(DROPIMAGE_INVALID);
     }
     // Puts a tip in the drag's data for its image to show; DROPIMAGE_INVALID takes ours away.
     void setTip(DROPIMAGETYPE type, const wchar_t* message = L"", const std::wstring& insert = L"") {
-        described_ = false;
-        FORMATETC fmt{CLIPFORMAT(RegisterClipboardFormatW(CFSTR_DROPDESCRIPTION)), nullptr, DVASPECT_CONTENT, -1,
-                      TYMED_HGLOBAL};
-        STGMEDIUM med{};
-        med.tymed = TYMED_HGLOBAL;
-        med.hGlobal = data_ ? GlobalAlloc(GMEM_MOVEABLE | GMEM_ZEROINIT, sizeof(DROPDESCRIPTION)) : nullptr;
-        if (auto* tip = med.hGlobal ? static_cast<DROPDESCRIPTION*>(GlobalLock(med.hGlobal)) : nullptr) {
-            tip->type = type;
-            lstrcpynW(tip->szMessage, message, MAX_PATH);
-            lstrcpynW(tip->szInsert, insert.c_str(), MAX_PATH);
-            GlobalUnlock(med.hGlobal);
-            if (FAILED(data_->SetData(&fmt, &med, TRUE))) ReleaseStgMedium(&med);
-            else described_ = type != DROPIMAGE_INVALID;
-        } else if (med.hGlobal) {
-            GlobalFree(med.hGlobal);
-        }
+        DROPDESCRIPTION tip{};
+        tip.type = type;
+        lstrcpynW(tip.szMessage, message, MAX_PATH);
+        lstrcpynW(tip.szInsert, insert.c_str(), MAX_PATH);
+        UINT format = RegisterClipboardFormatW(CFSTR_DROPDESCRIPTION);
+        described_ = data_ && setData(data_.get(), format, &tip, sizeof(tip)) && type != DROPIMAGE_INVALID;
     }
 
     LONG refs_ = 1;
