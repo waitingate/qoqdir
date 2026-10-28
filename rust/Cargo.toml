@@ -1,6 +1,6 @@
 [package]
 name = "qoqdir" # also the exe name; in the code the app name is APP_NAME (main.rs)
-version = "0.2.0"
+version = "0.3.0"
 edition = "2024"
 rust-version = "1.91"   # clippy checks the code against this (the self-test's thread_local consts need 1.91)
 description = "A light, fast, portable file manager for Windows"
