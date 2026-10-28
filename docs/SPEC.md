@@ -624,7 +624,8 @@ qoqdir [options] [folder ...]
 
 ### 5.11 Settings (`qoqdir.ini`)
 Saved when the window closes and loaded at start:
-- window position and size (the normal, restored size) and whether it was
+- window position and size (the normal, restored size, on the screen: a taskbar
+  at the top or left doesn't move it at each start) and whether it was
   maximized (also when it was minimized from maximized);
 - tree width;
 - column widths (stored independent of DPI);

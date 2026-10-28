@@ -2785,9 +2785,15 @@ impl App {
 
             let mut wp = WINDOWPLACEMENT { length: size_of::<WINDOWPLACEMENT>() as u32, ..Default::default() };
             let _ = GetWindowPlacement(self.wnd, &mut wp);
+            // Windows counts the place from the work area's corner, and create makes the window at screen
+            // coordinates: saved as they are, a taskbar at the top or left would move the window by its size at every
+            // start (as new_window knows).
+            let mut mi = MONITORINFO { cbSize: size_of::<MONITORINFO>() as u32, ..Default::default() };
+            let _ = GetMonitorInfoW(MonitorFromWindow(self.wnd, MONITOR_DEFAULTTONEAREST), &mut mi);
+            let (dx, dy) = (mi.rcWork.left - mi.rcMonitor.left, mi.rcWork.top - mi.rcMonitor.top);
             let r = wp.rcNormalPosition;
-            number("X", r.left);
-            number("Y", r.top);
+            number("X", r.left + dx);
+            number("Y", r.top + dy);
             number("Width", r.right - r.left);
             number("Height", r.bottom - r.top);
             // Also true when closed while minimized from a maximized window.

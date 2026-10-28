@@ -1704,7 +1704,13 @@ void App::saveSettings() {
     WINDOWPLACEMENT wp{};
     wp.length = sizeof wp;
     GetWindowPlacement(wnd_, &wp);
-    const RECT& r = wp.rcNormalPosition;
+    // Windows counts the place from the work area's corner, and create makes the window at screen coordinates: saved
+    // as they are, a taskbar at the top or left would move the window by its size at every start (as newWindow knows).
+    MONITORINFO mi{};
+    mi.cbSize = sizeof mi;
+    GetMonitorInfoW(MonitorFromWindow(wnd_, MONITOR_DEFAULTTONEAREST), &mi);
+    RECT r = wp.rcNormalPosition;
+    OffsetRect(&r, mi.rcWork.left - mi.rcMonitor.left, mi.rcWork.top - mi.rcMonitor.top);
     number(L"X", r.left);
     number(L"Y", r.top);
     number(L"Width", r.right - r.left);
