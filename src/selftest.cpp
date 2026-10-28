@@ -2136,6 +2136,22 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
             list_.setSort(SortKey::Name, true);
         },
         [=, this] { return list_.count() == 10000 && keyMs < 200; });   // 4.7: each under 0.1 s, with a margin
+    add(L"sorts 10,000 files with all of them selected, and they stay selected (4.7)",
+        [=, this] {
+            list_.selectAll();
+            keyMs = 0;
+            selfTest_->note = L"sort";
+            for (auto [key, name] : {std::pair(SortKey::Name, L"name"), std::pair(SortKey::Size, L"size")}) {
+                t0 = nowMs();
+                list_.setSort(key, false);
+                double ms = nowMs() - t0;
+                keyMs = std::max(keyMs, ms);
+                selfTest_->note += std::wstring(L" ") + name + L" " + std::to_wstring(int(ms));
+            }
+            selfTest_->note += L" ms";
+            list_.setSort(SortKey::Name, true);
+        },
+        [=, this] { return list_.selectedNames().size() == 10000 && keyMs < 200; });
     add(L"a refresh that asks for an item brings it on screen (as after a rename or a new folder)",
         [=, this] {
             list_.ensureVisible(9999);                       // scrolled to the bottom

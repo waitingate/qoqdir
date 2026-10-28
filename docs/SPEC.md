@@ -814,7 +814,8 @@ result:
     change gets `one` read once more.
 37. A 10,000-file folder loads within the target of 4.7.
 38. Filtering while scrolled to the bottom shows the matches from the top.
-39. Filtering and sorting 10,000 files are within the targets of 4.7.
+39. Filtering and sorting 10,000 files are within the targets of 4.7, sorting
+    also with all of them selected, which then stay selected.
 40. Copying 10,000 selected files to the clipboard is within the target of 4.7,
     and the clipboard then holds 10,000 files.
 41. With three tabs (the test folder, `sub`, This PC), Ctrl+S leaves one shortcut

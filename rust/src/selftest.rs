@@ -3138,6 +3138,25 @@ impl App {
             |a| a.list.count() == 10000 && KEY_MS.get() < 200, // 4.7: each under 0.1 s, with a margin
         );
         s.add(
+            "sorts 10,000 files with all of them selected, and they stay selected (4.7)",
+            |a| {
+                a.list.select_all();
+                let mut text = String::from("sort");
+                let mut slowest = 0u128;
+                for (key, name) in [(SortKey::Name, "name"), (SortKey::Size, "size")] {
+                    let t = Instant::now();
+                    a.list.set_sort(key, false);
+                    let ms = t.elapsed().as_millis();
+                    slowest = slowest.max(ms);
+                    text += &format!(" {name} {ms}");
+                }
+                KEY_MS.set(slowest);
+                note(text + " ms");
+                a.list.set_sort(SortKey::Name, true);
+            },
+            |a| a.list.selected_names().len() == 10000 && KEY_MS.get() < 200,
+        );
+        s.add(
             "a refresh that asks for an item brings it on screen (as after a rename or a new folder)",
             |a| {
                 a.list.ensure_visible(Some(9999)); // scrolled to the bottom

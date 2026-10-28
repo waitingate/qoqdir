@@ -414,17 +414,13 @@ impl FileList {
             let m = self.model.borrow();
             // A wanted name takes its own exact-case row when the listing has one, so in a case-sensitive folder
             // (WSL makes them) "readme" and "README" each take only their own, not both. A name no row matches
-            // exactly falls back to case-insensitive, needed for the folder you came from in another letter case.
-            let listed = |n: &OsStr| m.view.iter().any(|&i| m.items[i].name == *n);
-            let mut exact: HashSet<&OsStr> = HashSet::new();
-            let mut loose: HashSet<Vec<u16>> = HashSet::new();
-            for n in names {
-                if listed(n) {
-                    exact.insert(n.as_os_str());
-                } else {
-                    loose.insert(to_lower(n));
-                }
-            }
+            // exactly falls back to case-insensitive, needed for the folder you came from in another letter case. One
+            // pass over the rows: with all of 10,000 selected (Ctrl+A, then a sort), a pass for each name is 10,000.
+            let wanted: HashSet<&OsStr> = names.iter().map(OsString::as_os_str).collect();
+            let exact: HashSet<&OsStr> =
+                m.view.iter().map(|&i| m.items[i].name.as_os_str()).filter(|n| wanted.contains(n)).collect();
+            let loose: HashSet<Vec<u16>> =
+                names.iter().filter(|n| !exact.contains(n.as_os_str())).map(|n| to_lower(n)).collect();
             let focus_lower = focus.map(to_lower);
             let mut rows = Vec::new();
             let mut focus_row = None;

@@ -196,14 +196,13 @@ int FileList::select(const std::vector<std::wstring>& names, const std::wstring&
     if (!names.empty() || !focus.empty()) {
         // A wanted name takes its own exact-case row when the listing has one, so in a case-sensitive folder (WSL
         // makes them) "readme" and "README" each take only their own, not both. A name no row matches exactly falls
-        // back to case-insensitive, needed for the folder you came from when its letter case differs (go up).
-        std::unordered_set<std::wstring> exact, loose;
-        for (const std::wstring& n : names) {
-            bool present = false;
-            for (int row = 0; row < count() && !present; ++row) present = at(row).name == n;
-            if (present) exact.insert(n);
-            else loose.insert(toLower(n));
-        }
+        // back to case-insensitive, needed for the folder you came from when its letter case differs (go up). One pass
+        // over the rows: with all of 10,000 selected (Ctrl+A, then a sort), a pass for each name is 10,000 of them.
+        std::unordered_set<std::wstring> wanted(names.begin(), names.end()), exact, loose;
+        for (int row = 0; row < count(); ++row)
+            if (wanted.count(at(row).name)) exact.insert(at(row).name);
+        for (const std::wstring& n : names)
+            if (!exact.count(n)) loose.insert(toLower(n));
         std::wstring focusLower = toLower(focus);
         std::vector<int> rows;
         for (int row = 0; row < count(); ++row) {
