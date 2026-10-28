@@ -662,6 +662,36 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
                    selfTest_->note.empty();
         },
         10000);
+    // A big delete takes minutes: what it selects afterwards is about its own folder, not one shown since.
+    auto readsSince = std::make_shared<UINT>(0);
+    auto keptName = std::make_shared<std::wstring>();
+    add(L"(a file to delete)", [=, this] { writeFile(path(L"doomed.txt")); refresh(); },
+        [=, this] { return idle() && listed(L"doomed.txt"); });
+    add(L"(Delete it, and open sub before the delete is done)",
+        [=, this] {
+            SetFocus(list_.hwnd());
+            list_.select({L"doomed.txt"}, L"doomed.txt");
+            selfTestKey(VK_DELETE);
+            open(path(L"sub"), Nav::New);
+            *readsSince = generation_;
+        },
+        [=, this] {
+            if (!at(path(L"sub")) || exists(path(L"doomed.txt"))) return false;
+            *keptName = list_.count() > 0 ? list_.at(list_.count() - 1).name : L"";
+            list_.select({*keptName}, *keptName);
+            return true;
+        },
+        10000);
+    add(L"a Delete that is done after the tab went to another folder leaves that folder as it is (4.6)", nullptr,
+        [=, this] {
+            selfTest_->note = std::to_wstring(generation_ - *readsSince) + L" read(s)";
+            std::vector<std::wstring> kept;
+            if (!keptName->empty()) kept.push_back(*keptName);
+            // 0.8 s of nothing: the delete's reply comes as soon as the file is gone.
+            return GetTickCount64() - selfTest_->startTick >= 800 && generation_ == *readsSince &&
+                   list_.selectedNames() == kept;
+        });
+    backHome(L"(back to the test folder)");
     add(L"files created by other programs appear by themselves, and the selection stays (4.5)",
         [=, this] {
             SetWindowTextW(filter_, L"");

@@ -175,7 +175,8 @@ These describe what the user sees. Each must hold in every situation.
 
 ### 4.6 Selection and focus
 - Going up (or back to a parent) selects the folder you came from.
-- After a delete, the item that followed the deleted ones is selected.
+- After a delete, the item that followed the deleted ones is selected, if the
+  tab still shows their folder; a folder shown since keeps its own selection.
 - After creating or renaming an item, that item is selected.
 - Something in the list always has the keyboard focus, so arrow keys work at once.
 - Switching tabs brings back each tab's selection, focus and scroll position.
@@ -735,7 +736,9 @@ result:
 7. Ctrl+Shift+N creates "New folder" in rename mode. Typing a name and Enter
    renames it, and the new name is selected.
 8. F2 on `name.txt` selects only `name`, and typing a new name keeps `.txt`.
-9. Delete sends the file to the Recycle Bin and it leaves the list.
+9. Delete sends the file to the Recycle Bin and it leaves the list. A Delete
+   that is done after the tab went on to `sub` leaves `sub` as it is: nothing
+   is read again, and its selection stays.
 10. Another program creates a file in the shown folder: it shows up by itself.
 11. Another program deletes the shown folder: the tab stays on it with an empty
     list and the "not available … (F5 tries again)" message. The folder comes

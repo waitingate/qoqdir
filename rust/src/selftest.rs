@@ -183,6 +183,7 @@ thread_local! {
     static MOVES: Cell<usize> = const { Cell::new(0) }; // how far rounds of folders and tabs have got
     static USAGE: Cell<[u32; 3]> = const { Cell::new([0; 3]) }; // handles, GDI and USER objects held before them
     static NEXT: RefCell<OsString> = const { RefCell::new(OsString::new()) }; // the item after the one Delete removes
+    static KEPT: RefCell<OsString> = const { RefCell::new(OsString::new()) }; // selected there while a delete is out
     // What `sub` held before the paste step, and anything the paste brought in that isn't the test's file (a cut made
     // elsewhere just as it started): then the test folder is kept, not deleted (7.2).
     static SUB_BEFORE: RefCell<BTreeSet<OsString>> = const { RefCell::new(BTreeSet::new()) };
@@ -1113,6 +1114,48 @@ impl App {
             },
         )
         .wait(10000);
+        // A big delete takes minutes: what it selects afterwards is about its own folder, not one shown since.
+        s.add(
+            "(a file to delete)",
+            |a| {
+                write_file(&p("doomed.txt"));
+                a.refresh(ViewState::default());
+            },
+            |a| a.idle() && a.listed("doomed.txt"),
+        );
+        s.add(
+            "(Delete it, and open sub before the delete is done)",
+            |a| {
+                focus(a.list.hwnd());
+                a.select_one("doomed.txt");
+                a.press(VK_DELETE, 0);
+                a.open(Location::dir(p("sub")), Nav::New, ViewState::default());
+                COUNT.set(a.generation.get());
+            },
+            |a| {
+                if !a.at(&p("sub")) || exists(&p("doomed.txt")) {
+                    return false;
+                }
+                let last = a.list.count().checked_sub(1).and_then(|row| a.list.item(row));
+                let name = last.map(|it| it.name).unwrap_or_default();
+                a.list.select(std::slice::from_ref(&name), Some(name.as_os_str()));
+                KEPT.with(|k| *k.borrow_mut() = name);
+                true
+            },
+        )
+        .wait(10000);
+        s.add(
+            "a Delete that is done after the tab went to another folder leaves that folder as it is (4.6)",
+            |_| {},
+            |a| {
+                note(format!("{} read(s)", a.generation.get() - COUNT.get()));
+                let kept = KEPT.with(|k| k.borrow().clone());
+                let kept: Vec<OsString> = Some(kept).filter(|n| !n.is_empty()).into_iter().collect();
+                // 0.8 s of nothing: the delete's reply comes as soon as the file is gone.
+                step_ms() >= 800 && a.generation.get() == COUNT.get() && a.list.selected_names() == kept
+            },
+        );
+        s.home("(back to the test folder)");
         s.add(
             "files created by other programs appear by themselves, and the selection stays (4.5)",
             |a| {

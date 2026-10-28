@@ -29,6 +29,11 @@ struct CommandDone {   // a typed command's reply from its worker (goToTyped)
     std::wstring text;   // as typed
 };
 
+struct Deleted {   // a delete's reply from its worker (deleteSelection)
+    std::wstring dir;   // the folder the items were in
+    ViewState view;     // what to select there afterwards
+};
+
 constexpr size_t kMaxHistory = 100;
 
 // The newest load, for the load threads: a replaced one stops reading (4.2). Global: a thread can outlive the window.
@@ -510,8 +515,10 @@ LRESULT App::onMessage(UINT msg, WPARAM wp, LPARAM lp) {
         else warn(L"Can't make the bookmark");
         return 0;
     case WM_APP_DELETED: {   // the recycle finished on a worker (deleteSelection); select what followed (4.6)
-        std::unique_ptr<ViewState> v(reinterpret_cast<ViewState*>(lp));
-        if (wp && v) refresh(*v);   // nothing deleted (No, or it failed): the selection was already cleared
+        std::unique_ptr<Deleted> d(reinterpret_cast<Deleted*>(lp));
+        // Nothing deleted (No, or it failed): the selection was already cleared. A big delete takes minutes (4.7): in
+        // a folder shown since, the selection and scroll stay its own (the folder's watch sees a change).
+        if (wp && list_.shows(d->dir)) refresh(std::move(d->view));
         return 0;
     }
     case WM_APP_TERMINAL:   // Ctrl+`'s terminal was looked for and started on a worker (openTerminal)
@@ -1509,7 +1516,7 @@ void App::deleteSelection(bool permanently) {
     list_.select({}, v.focus);
     inBackground([wnd = wnd_, dir, items, permanently, v = std::move(v)]() mutable {
         bool ok = deleteItems(wnd, dir, items, permanently);
-        post(wnd, WM_APP_DELETED, ok, std::make_unique<ViewState>(std::move(v)));
+        post(wnd, WM_APP_DELETED, ok, std::make_unique<Deleted>(Deleted{dir, std::move(v)}));
     });
 }
 

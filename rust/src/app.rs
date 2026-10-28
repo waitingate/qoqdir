@@ -1071,10 +1071,14 @@ impl App {
                 }
                 WM_APP_DELETED => {
                     // the recycle finished on a worker (delete_selection); select what followed (4.6). A null pointer
-                    // means nothing was deleted (No, or it failed): the selection was already cleared.
+                    // means nothing was deleted (No, or it failed): the selection was already cleared. A big delete
+                    // takes minutes (4.7): in a folder shown since, the selection and scroll stay its own (the
+                    // folder's watch sees a change).
                     if lp.0 != 0 {
-                        let view = *Box::from_raw(lp.0 as *mut ViewState);
-                        self.refresh(view);
+                        let (dir, view) = *Box::from_raw(lp.0 as *mut (Location, ViewState));
+                        if self.list.shows(&dir) {
+                            self.refresh(view);
+                        }
                     }
                     return LRESULT(0);
                 }
@@ -2526,7 +2530,7 @@ impl App {
         let wnd = self.wnd.0 as usize;
         in_background(move || {
             let ok = delete_items(HWND(wnd as _), &dir, &items, permanently);
-            let view = if ok { Box::into_raw(Box::new(view)) as isize } else { 0 };
+            let view = if ok { Box::into_raw(Box::new((dir, view))) as isize } else { 0 };
             let _ = unsafe { PostMessageW(Some(HWND(wnd as _)), WM_APP_DELETED, WPARAM(usize::from(ok)), LPARAM(view)) };
         });
     }
