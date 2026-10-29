@@ -126,17 +126,12 @@ public:
     bool watchesChildOf(const std::wstring& dir) const {
         return dir_ && !dir_->empty() && samePath(parentPath(*dir_), dir);
     }
-    // Sets it up again. After a burst of changes (10,000 folders made below it), some systems (GitHub's Windows Server
-    // 2025) pass nothing more on to the watch, saying so with SHCNE_UPDATEDIR (too much to list one by one) or not.
-    void renew();
 
 private:
-    HWND owner_ = nullptr;
-    UINT msg_ = 0;
     ULONG ids_[2] = {};
     std::optional<std::wstring> dir_;   // none: it watches nothing, or Windows refused it (the next load tries again)
 };
-LONG acknowledgeChange(WPARAM wp, LPARAM lp);   // lets Windows free the notice; returns its SHCNE_ event
+void acknowledgeChange(WPARAM wp, LPARAM lp);
 
 // ---------------------------------------------------------------- drag and drop
 

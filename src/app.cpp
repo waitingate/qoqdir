@@ -395,8 +395,6 @@ void App::layout() {
 // ---------------------------------------------------------------- messages
 
 LRESULT App::onMessage(UINT msg, WPARAM wp, LPARAM lp) {
-    static const UINT taskbarCreated = RegisterWindowMessageW(L"TaskbarCreated");
-    if (msg == taskbarCreated) ++shellRestarts_;
     // These carry a heap object made on a worker in lParam. Another program broadcasting one of their numbers (apps
     // do broadcast in the WM_APP range) would hand a null or stray pointer; ignore one with no pointer (4.10).
     if (!lp && (msg == WM_APP_LOADED || msg == WM_APP_ICONS || msg == WM_APP_TREE || msg == WM_APP_TREE_ICONS ||
@@ -476,15 +474,12 @@ LRESULT App::onMessage(UINT msg, WPARAM wp, LPARAM lp) {
         return 0;
     }
     case WM_APP_CHANGED:
-        if (acknowledgeChange(wp, lp) & SHCNE_UPDATEDIR) watch_.renew();   // too much to list: the watch may stop
+        acknowledgeChange(wp, lp);
         onFolderChanged();
         return 0;
     case WM_APP_BOOKMARKS:   // a shortcut or folder came or went in Bookmarks: a drop on its node, or another program
-        lastBookmarkEvent_ = acknowledgeChange(wp, lp);
+        acknowledgeChange(wp, lp);
         ++bookmarkNotices_;
-        // Once the changes settle the watch is set up again: after a burst of them below Bookmarks, Windows may pass
-        // nothing more on to the old one, not always with SHCNE_UPDATEDIR first. Bookmarks changes seldom: cheap.
-        SetTimer(wnd_, kBookmarksTimer, 1000, nullptr);
         tree_.refreshFolder(tree_.bookmarks());
         return 0;
     case WM_APP_WANTICONS:   // rows drawn since the last read want their own icons
@@ -680,10 +675,6 @@ void App::onTimer(UINT_PTR id) {
         // What a delete, rename or new folder asked to select, if its folder is still shown. Not available: F5 (4.3).
         QueuedView q = std::exchange(queuedView_, {});
         if (!tab().unavailable) refresh(list_.shows(q.dir) ? std::move(q.view) : ViewState{});
-    } else if (id == kBookmarksTimer) {
-        KillTimer(wnd_, kBookmarksTimer);
-        bookmarksWatch_.renew();
-        ++bookmarksRenewed_;
     } else if (id == kStatusTimer) {
         KillTimer(wnd_, kStatusTimer);
         showStatus();

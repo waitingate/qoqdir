@@ -47,17 +47,14 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
     VK_DOWN, VK_ESCAPE, VK_F1, VK_F2, VK_F3, VK_F4, VK_F5, VK_LEFT, VK_MENU, VK_NEXT, VK_OEM_3, VK_PRIOR, VK_RETURN,
     VK_RIGHT, VK_SHIFT, VK_TAB, VK_UP,
 };
-use windows::Win32::UI::Shell::{
-    DefSubclassProc, FOLDERID_Profile, SHACF_FILESYS_DIRS, SHAutoComplete, SHCNE_UPDATEDIR, SetWindowSubclass,
-};
+use windows::Win32::UI::Shell::{DefSubclassProc, FOLDERID_Profile, SHACF_FILESYS_DIRS, SHAutoComplete, SetWindowSubclass};
 use windows::Win32::UI::WindowsAndMessaging::{
     AppendMenuW, CHILDID_SELF, CW_USEDEFAULT, CreatePopupMenu, CreateWindowExW, DefWindowProcW, DestroyWindow, GCLP_HBRBACKGROUND,
     GWLP_USERDATA, GetParent, GetWindowLongPtrW, GetWindowPlacement, IsZoomed,
     HMENU, HTCLIENT, IDC_ARROW, IDC_SIZEWE, IsChild, KillTimer, WPF_RESTORETOMAXIMIZED, LoadCursorW, LoadIconW, MB_ICONQUESTION,
     IDCANCEL, IDYES, MB_ICONWARNING, MB_OKCANCEL, MB_YESNOCANCEL, MF_GRAYED, MF_SEPARATOR, MF_STRING, MINMAXINFO, MSG,
     MessageBoxW, MoveWindow,
-    NONCLIENTMETRICSW, OBJID_CLIENT, PostMessageW, PostQuitMessage, RegisterClassExW, RegisterWindowMessageW,
-    SIZE_MINIMIZED, SM_CXPADDEDBORDER,
+    NONCLIENTMETRICSW, OBJID_CLIENT, PostMessageW, PostQuitMessage, RegisterClassExW, SIZE_MINIMIZED, SM_CXPADDEDBORDER,
     SM_CYCAPTION, SM_CYSIZEFRAME, SPI_GETHIGHCONTRAST,
     SHOW_WINDOW_CMD, SPI_GETNONCLIENTMETRICS, SW_SHOWMAXIMIZED, SW_SHOWMINNOACTIVE, SW_SHOWNA, SW_SHOWNOACTIVATE,
     SW_SHOWNORMAL, SWP_NOACTIVATE, SWP_NOZORDER, SetClassLongPtrW,
@@ -132,7 +129,6 @@ struct CommandDone {
 pub const TIMER_REFRESH: usize = 1;
 const TIMER_STATUS: usize = 2;
 pub const TIMER_LOADING: usize = 3;
-const TIMER_BOOKMARKS: usize = 4;
 
 const MAX_HISTORY: usize = 100;
 /// Soft gray (#EBEBEB): less glare than white.
@@ -288,10 +284,6 @@ pub struct App {
     pub loads_wasted: Cell<u32>, // ...of which a newer load had replaced, yet they read the whole folder (self-test)
     pub uncounted_load: Cell<u32>, // a read the self-test leaves stuck on a network timeout: in neither count
     pub bookmark_notices: Cell<u32>, // changes the Bookmarks watch passed on (self-test)
-    pub last_bookmark_event: Cell<i32>, // ...the last one's SHCNE_ event (self-test)
-    pub bookmarks_renewed: Cell<u32>, // times that watch was set up again (self-test)
-    pub shell_restarts: Cell<u32>, // Explorer started again, so "TaskbarCreated" came (self-test)
-    taskbar_created: u32,
     use_settings: bool,
     ini: Vec<u16>, // settings file
     pub st: RefCell<State>,
@@ -394,17 +386,6 @@ fn ini_number(ini: &[u16], key: &str, fallback: i32) -> i32 {
     unsafe { GetPrivateProfileStringW(w!("Window"), pcwstr(&k), w!(""), Some(&mut buf), pcwstr(ini)) };
     let value: Option<i32> = from_wide(&buf).to_string_lossy().trim().parse().ok();
     value.filter(|v| (-100_000..=100_000).contains(v)).unwrap_or(fallback)
-}
-
-/// FolderWatch::renew with nothing borrowed meanwhile: Windows can call back in. A watch put there since stays.
-fn renew(slot: &RefCell<Option<FolderWatch>>) {
-    if let Some(mut watch) = slot.take() {
-        watch.renew();
-        let mut slot = slot.borrow_mut();
-        if slot.is_none() {
-            *slot = Some(watch);
-        }
-    }
 }
 
 /// A shortcut's target that opens in a tab: a folder path, or This PC. Anything else is for Windows.
@@ -682,10 +663,6 @@ impl App {
                 loads_wasted: Cell::new(0),
                 uncounted_load: Cell::new(0),
                 bookmark_notices: Cell::new(0),
-                last_bookmark_event: Cell::new(0),
-                bookmarks_renewed: Cell::new(0),
-                shell_restarts: Cell::new(0),
-                taskbar_created: RegisterWindowMessageW(w!("TaskbarCreated")),
                 use_settings,
                 ini,
                 st: RefCell::new(State {
@@ -941,9 +918,6 @@ impl App {
 
     fn on_message(&self, msg: u32, wp: WPARAM, lp: LPARAM) -> LRESULT {
         let dpi = self.dpi.get();
-        if msg == self.taskbar_created {
-            self.shell_restarts.set(self.shell_restarts.get() + 1);
-        }
         // These carry a heap object made on a worker in lParam. Another program broadcasting one of their numbers
         // (apps do broadcast in the WM_APP range) would hand a null or stray pointer; ignore one with no pointer.
         if lp.0 == 0
@@ -1044,20 +1018,14 @@ impl App {
                     return LRESULT(0);
                 }
                 WM_APP_CHANGED => {
-                    if acknowledge_change(wp, lp) & SHCNE_UPDATEDIR.0 as i32 != 0 {
-                        renew(&self.watch); // too much to list: the watch may stop
-                    }
+                    acknowledge_change(wp, lp);
                     self.on_folder_changed();
                     return LRESULT(0);
                 }
                 WM_APP_BOOKMARKS => {
                     // A shortcut or folder came or went in Bookmarks: a drop on its node, or another program.
-                    self.last_bookmark_event.set(acknowledge_change(wp, lp));
+                    acknowledge_change(wp, lp);
                     self.bookmark_notices.set(self.bookmark_notices.get() + 1);
-                    // Once the changes settle the watch is set up again: after a burst of them below Bookmarks,
-                    // Windows may pass nothing more on to the old one, not always with SHCNE_UPDATEDIR first.
-                    // Bookmarks changes seldom: cheap.
-                    SetTimer(Some(self.wnd), TIMER_BOOKMARKS, 1000, None);
                     self.tree.refresh_folder(self.tree.bookmarks());
                     return LRESULT(0);
                 }
@@ -1325,11 +1293,6 @@ impl App {
                             self.refresh(view.unwrap_or_default());
                         }
                     }
-                }
-                TIMER_BOOKMARKS => {
-                    let _ = KillTimer(Some(self.wnd), TIMER_BOOKMARKS);
-                    renew(&self.bookmarks_watch);
-                    self.bookmarks_renewed.set(self.bookmarks_renewed.get() + 1);
                 }
                 TIMER_STATUS => {
                     let _ = KillTimer(Some(self.wnd), TIMER_STATUS);

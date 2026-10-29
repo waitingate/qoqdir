@@ -662,7 +662,7 @@ ULONG watch(HWND owner, UINT msg, const std::wstring& dir, LONG events) {
 }
 }  // namespace
 
-FolderWatch::FolderWatch(HWND owner, UINT msg, const std::wstring& dir) : owner_(owner), msg_(msg) {
+FolderWatch::FolderWatch(HWND owner, UINT msg, const std::wstring& dir) {
     ids_[0] = watch(owner, msg, dir,
                     SHCNE_CREATE | SHCNE_DELETE | SHCNE_MKDIR | SHCNE_RMDIR | SHCNE_RENAMEITEM | SHCNE_RENAMEFOLDER |
                         SHCNE_UPDATEITEM | SHCNE_UPDATEDIR | SHCNE_ATTRIBUTES | SHCNE_DRIVEADD | SHCNE_DRIVEREMOVED |
@@ -679,32 +679,19 @@ FolderWatch::~FolderWatch() {
 }
 
 FolderWatch::FolderWatch(FolderWatch&& o) noexcept {
-    std::swap(owner_, o.owner_);
-    std::swap(msg_, o.msg_);
     std::swap(ids_, o.ids_);
     std::swap(dir_, o.dir_);
 }
 
 FolderWatch& FolderWatch::operator=(FolderWatch&& o) noexcept {
-    std::swap(owner_, o.owner_);
-    std::swap(msg_, o.msg_);
     std::swap(ids_, o.ids_);
     std::swap(dir_, o.dir_);
     return *this;
 }
 
-void FolderWatch::renew() {
-    if (!dir_) return;
-    std::wstring dir = *dir_;
-    *this = FolderWatch(owner_, msg_, dir);   // the new one first: no change falls between the two
-}
-
-LONG acknowledgeChange(WPARAM wp, LPARAM lp) {
-    PIDLIST_ABSOLUTE* items = nullptr;
-    LONG event = 0;
-    HANDLE lock = SHChangeNotification_Lock(reinterpret_cast<HANDLE>(wp), DWORD(lp), &items, &event);
+void acknowledgeChange(WPARAM wp, LPARAM lp) {
+    HANDLE lock = SHChangeNotification_Lock(reinterpret_cast<HANDLE>(wp), DWORD(lp), nullptr, nullptr);
     if (lock) SHChangeNotification_Unlock(lock);
-    return event;
 }
 
 // ---------------------------------------------------------------- drag and drop
