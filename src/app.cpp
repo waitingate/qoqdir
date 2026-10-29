@@ -476,11 +476,12 @@ LRESULT App::onMessage(UINT msg, WPARAM wp, LPARAM lp) {
         return 0;
     }
     case WM_APP_CHANGED:
-        acknowledgeChange(wp, lp);
+        if (acknowledgeChange(wp, lp) & SHCNE_UPDATEDIR) watch_.renew();   // too much to list: the watch may stop
         onFolderChanged();
         return 0;
     case WM_APP_BOOKMARKS:   // a shortcut or folder came or went in Bookmarks: a drop on its node, or another program
-        acknowledgeChange(wp, lp);
+        lastBookmarkEvent_ = acknowledgeChange(wp, lp);
+        if (lastBookmarkEvent_ & SHCNE_UPDATEDIR) bookmarksWatch_.renew();
         ++bookmarkNotices_;
         tree_.refreshFolder(tree_.bookmarks());
         return 0;

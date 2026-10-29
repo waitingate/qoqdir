@@ -887,6 +887,8 @@ pub fn post<T>(wnd: usize, msg: u32, wp: usize, object: Box<T>) {
 
 /// Posts `msg` to `owner` when something in `dir` changes, or `dir` itself goes; stops when dropped.
 pub struct FolderWatch {
+    owner: HWND,
+    msg: u32,
     ids: [u32; 2],
     location: Option<Location>, // none: Windows refused it (the next load tries again)
 }
@@ -907,7 +909,7 @@ impl FolderWatch {
         if let Location::Dir(_) = dir {
             ids[1] = watch(&dir.parent(), itself.0 as i32);
         }
-        FolderWatch { ids, location: (ids[0] != 0).then(|| dir.clone()) }
+        FolderWatch { owner, msg, ids, location: (ids[0] != 0).then(|| dir.clone()) }
     }
 
     pub fn watches(&self, location: &Location) -> bool {
@@ -917,6 +919,14 @@ impl FolderWatch {
     /// Its folder is in `location`, which it watches too, for that folder going.
     pub fn watches_child_of(&self, location: &Location) -> bool {
         self.location.as_ref().is_some_and(|l| matches!(l, Location::Dir(_)) && l.parent().same(location))
+    }
+
+    /// Sets it up again. After a change too big to list one by one (10,000 folders made below it), Windows says only
+    /// SHCNE_UPDATEDIR, and on some systems (GitHub's Windows Server 2025) then passes nothing more on to that watch.
+    pub fn renew(&mut self) {
+        if let Some(dir) = self.location.clone() {
+            *self = FolderWatch::new(self.owner, self.msg, &dir); // the new one first: no change falls between the two
+        }
     }
 }
 
@@ -932,13 +942,17 @@ impl Drop for FolderWatch {
     }
 }
 
-pub fn acknowledge_change(wp: WPARAM, lp: LPARAM) {
+/// Lets Windows free the notice; returns its SHCNE_ event.
+pub fn acknowledge_change(wp: WPARAM, lp: LPARAM) -> i32 {
+    let mut items: *mut *mut ITEMIDLIST = std::ptr::null_mut();
+    let mut event = 0;
     unsafe {
-        let lock = SHChangeNotification_Lock(HANDLE(wp.0 as _), lp.0 as u32, None, None);
+        let lock = SHChangeNotification_Lock(HANDLE(wp.0 as _), lp.0 as u32, Some(&mut items), Some(&mut event));
         if !lock.is_invalid() {
             let _ = SHChangeNotification_Unlock(lock);
         }
     }
+    event
 }
 
 // ---------------------------------------------------------------- drag and drop

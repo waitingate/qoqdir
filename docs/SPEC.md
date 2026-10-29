@@ -165,10 +165,13 @@ These describe what the user sees. Each must hold in every situation.
 - Changes made by other programs (files created, deleted, renamed, changed) show
   up by themselves within about half a second, keeping the selection, focus and
   scroll position. A burst of changes causes one refresh, not hundreds, and the
-  watch stays while the folder shown stays. When another folder is shown, a
-  refresh that only the old one's changes asked for is dropped, unless the old
-  one is in it. A change made while the folder was still being read is caught
-  too: the folder's own modified time is compared once the watch is in place.
+  watch stays while the folder shown stays, unless Windows says the folder
+  changed too much to list one by one: then the watch is set up again, as on
+  some systems the old one hears nothing after that. When another folder is
+  shown, a refresh that only the old one's changes asked for is dropped, unless
+  the old one is in it. A change made while the folder was still being read is
+  caught too: the folder's own modified time is compared once the watch is in
+  place.
 - If the shown folder itself is deleted or renamed by another program, the tab
   notices and shows the "not available" state (4.3).
 - Plugging in or removing a drive updates the tree and This PC.
@@ -806,12 +809,13 @@ result:
 34. With a subfolder `one` and a shortcut `sub.lnk` in Bookmarks, rebuilding the
     tree as at startup: Bookmarks is open and lists "one", then "sub" (no `.lnk`).
 35. Moving to the "sub" bookmark with the keyboard opens the `sub` folder.
-36. Creating `Bookmarks\two` shows "one", "two", "sub" in the tree by itself. Of
-    a subfolder and a hidden one made in `Bookmarks\one`, which no watch sees,
-    collapsing and expanding it with the Left and Right keys shows the new one
-    and not the hidden one. A subfolder made there while `one` is being read
-    again, after that read listed the folder, shows once the read is in: the
-    change gets `one` read once more.
+36. Creating `Bookmarks\two` shows "one", "two", "sub" in the tree by itself, and
+    after Windows says Bookmarks changed too much to list one by one, a folder
+    made in it still does. Of a subfolder and a hidden one made in
+    `Bookmarks\one`, which no watch sees, collapsing and expanding it with the
+    Left and Right keys shows the new one and not the hidden one. A subfolder
+    made there while `one` is being read again, after that read listed the
+    folder, shows once the read is in: the change gets `one` read once more.
 37. A 10,000-file folder loads within the target of 4.7.
 38. Filtering while scrolled to the bottom shows the matches from the top.
 39. Filtering and sorting 10,000 files are within the targets of 4.7, sorting

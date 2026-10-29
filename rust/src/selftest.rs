@@ -60,8 +60,8 @@ use windows::Win32::System::Variant::VARIANT;
 use windows::Win32::UI::Accessibility::{AccessibleObjectFromWindow, IAccessible};
 use windows::Win32::UI::Shell::{
     CFSTR_DROPDESCRIPTION, DROPDESCRIPTION, DROPIMAGE_INVALID, DROPIMAGE_NOIMAGE,
-    DROPFILES, FOLDERID_Desktop, FOLDERID_Profile, SHGFI_DISPLAYNAME, SHGFI_SMALLICON, SHGFI_SYSICONINDEX,
-    StrCmpLogicalW,
+    DROPFILES, FOLDERID_Desktop, FOLDERID_Profile, SHCNE_UPDATEDIR, SHCNF_PATHW, SHChangeNotify, SHGFI_DISPLAYNAME,
+    SHGFI_SMALLICON, SHGFI_SYSICONINDEX, StrCmpLogicalW,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     BM_CLICK, CHILDID_SELF, EnumWindows, FindWindowExW, HTCLIENT, OBJID_CLIENT, GCLP_HBRBACKGROUND, GWLP_USERDATA, GetClassLongPtrW, GetWindowLongPtrW, GetWindowTextLengthW, IsWindowVisible,
@@ -2635,6 +2635,36 @@ impl App {
             },
             |a| a.bookmark_nodes() == "one,two,sub",
         );
+        // Windows' word for a change too big to list one by one: the watch is set up again, and still follows (4.5).
+        s.add(
+            "after Windows says Bookmarks changed too much to list one by one, a folder made there still shows in the \
+             tree by itself (5.5)",
+            |a| {
+                a.last_bookmark_event.set(0);
+                FLAG.set(false); // the folder isn't made yet
+                let bookmarks = wide(p("Bookmarks"));
+                unsafe { SHChangeNotify(SHCNE_UPDATEDIR, SHCNF_PATHW, Some(bookmarks.as_ptr() as _), None) };
+            },
+            |a| {
+                if !FLAG.get() {
+                    if a.last_bookmark_event.get() & SHCNE_UPDATEDIR.0 as i32 == 0 {
+                        return false;
+                    }
+                    let _ = std::fs::create_dir(p("Bookmarks\\three"));
+                    FLAG.set(true);
+                    return false;
+                }
+                a.bookmark_nodes() == "one,three,two,sub"
+            },
+        );
+        s.add(
+            "(remove it)",
+            |a| {
+                let _ = std::fs::remove_dir(p("Bookmarks\\three"));
+                a.tree.refresh_folder(a.tree.bookmarks());
+            },
+            |a| a.bookmark_nodes() == "one,two,sub",
+        );
         s.add(
             "collapsing a node while a child is being read drops the late result",
             |a| {
@@ -3065,8 +3095,9 @@ impl App {
             let read = if a.tree.reading_bookmarks() { ", a read out" } else { "" };
             let last = with_test(|t| t.steps[t.last_notice].name);
             note(format!(
-                "{} notice(s){read}; the last came in: {last}; Explorer restarts: {}",
+                "{} notice(s){read}; the last came in: {last} (event {:x}); Explorer restarts: {}",
                 a.bookmark_notices.get() - NOTICES.get(),
+                a.last_bookmark_event.get() as u32,
                 a.shell_restarts.get()
             ));
         }

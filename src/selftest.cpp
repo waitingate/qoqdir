@@ -1759,6 +1759,30 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
             CreateDirectoryW(path(L"Bookmarks\\two").c_str(), nullptr);
         },
         [=] { return bookmarkNodes() == L"one,two,sub"; });
+    // Windows' word for a change too big to list one by one: the watch is set up again, and still follows (4.5).
+    auto threeMade = std::make_shared<bool>(false);
+    add(L"after Windows says Bookmarks changed too much to list one by one, a folder made there still shows in the "
+        L"tree by itself (5.5)",
+        [=, this] {
+            lastBookmarkEvent_ = 0;
+            *threeMade = false;
+            SHChangeNotify(SHCNE_UPDATEDIR, SHCNF_PATHW, path(L"Bookmarks").c_str(), nullptr);
+        },
+        [=, this] {
+            if (!*threeMade) {
+                if (!(lastBookmarkEvent_ & SHCNE_UPDATEDIR)) return false;
+                CreateDirectoryW(path(L"Bookmarks\\three").c_str(), nullptr);
+                *threeMade = true;
+                return false;
+            }
+            return bookmarkNodes() == L"one,three,two,sub";
+        });
+    add(L"(remove it)",
+        [=, this] {
+            RemoveDirectoryW(path(L"Bookmarks\\three").c_str());
+            tree_.refreshFolder(tree_.bookmarks());
+        },
+        [=, this] { return bookmarkNodes() == L"one,two,sub"; });
     add(L"collapsing a node while a child is being read drops the late result",
         [=, this] {
             CreateDirectoryW(path(L"Bookmarks\\one\\deep").c_str(), nullptr);
@@ -2081,10 +2105,12 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
     // in which step the watch last passed one on, and whether Explorer started again (its watches go with it).
     auto noticesBefore = std::make_shared<int>(0);
     auto noticesNote = [=, this] {
+        wchar_t event[16];
+        swprintf(event, std::size(event), L"%lx", static_cast<unsigned long>(lastBookmarkEvent_));
         selfTest_->note = std::to_wstring(bookmarkNotices_ - *noticesBefore) + L" notice(s)" +
                           (tree_.readingBookmarks() ? L", a read out" : L"") + L"; the last came in: " +
-                          selfTest_->steps[selfTest_->lastNotice].name + L"; Explorer restarts: " +
-                          std::to_wstring(shellRestarts_);
+                          selfTest_->steps[selfTest_->lastNotice].name + L" (event " + event +
+                          L"); Explorer restarts: " + std::to_wstring(shellRestarts_);
     };
     add(L"a shortcut another program makes in Bookmarks (or an Alt+drag onto its node) shows in the tree while another "
         L"folder is shown (5.5)",

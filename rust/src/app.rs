@@ -47,7 +47,9 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
     VK_DOWN, VK_ESCAPE, VK_F1, VK_F2, VK_F3, VK_F4, VK_F5, VK_LEFT, VK_MENU, VK_NEXT, VK_OEM_3, VK_PRIOR, VK_RETURN,
     VK_RIGHT, VK_SHIFT, VK_TAB, VK_UP,
 };
-use windows::Win32::UI::Shell::{DefSubclassProc, FOLDERID_Profile, SHACF_FILESYS_DIRS, SHAutoComplete, SetWindowSubclass};
+use windows::Win32::UI::Shell::{
+    DefSubclassProc, FOLDERID_Profile, SHACF_FILESYS_DIRS, SHAutoComplete, SHCNE_UPDATEDIR, SetWindowSubclass,
+};
 use windows::Win32::UI::WindowsAndMessaging::{
     AppendMenuW, CHILDID_SELF, CW_USEDEFAULT, CreatePopupMenu, CreateWindowExW, DefWindowProcW, DestroyWindow, GCLP_HBRBACKGROUND,
     GWLP_USERDATA, GetParent, GetWindowLongPtrW, GetWindowPlacement, IsZoomed,
@@ -285,6 +287,7 @@ pub struct App {
     pub loads_wasted: Cell<u32>, // ...of which a newer load had replaced, yet they read the whole folder (self-test)
     pub uncounted_load: Cell<u32>, // a read the self-test leaves stuck on a network timeout: in neither count
     pub bookmark_notices: Cell<u32>, // changes the Bookmarks watch passed on (self-test)
+    pub last_bookmark_event: Cell<i32>, // ...the last one's SHCNE_ event (self-test)
     pub shell_restarts: Cell<u32>, // Explorer started again, so "TaskbarCreated" came (self-test)
     taskbar_created: u32,
     use_settings: bool,
@@ -389,6 +392,17 @@ fn ini_number(ini: &[u16], key: &str, fallback: i32) -> i32 {
     unsafe { GetPrivateProfileStringW(w!("Window"), pcwstr(&k), w!(""), Some(&mut buf), pcwstr(ini)) };
     let value: Option<i32> = from_wide(&buf).to_string_lossy().trim().parse().ok();
     value.filter(|v| (-100_000..=100_000).contains(v)).unwrap_or(fallback)
+}
+
+/// FolderWatch::renew with nothing borrowed meanwhile: Windows can call back in. A watch put there since stays.
+fn renew(slot: &RefCell<Option<FolderWatch>>) {
+    if let Some(mut watch) = slot.take() {
+        watch.renew();
+        let mut slot = slot.borrow_mut();
+        if slot.is_none() {
+            *slot = Some(watch);
+        }
+    }
 }
 
 /// A shortcut's target that opens in a tab: a folder path, or This PC. Anything else is for Windows.
@@ -666,6 +680,7 @@ impl App {
                 loads_wasted: Cell::new(0),
                 uncounted_load: Cell::new(0),
                 bookmark_notices: Cell::new(0),
+                last_bookmark_event: Cell::new(0),
                 shell_restarts: Cell::new(0),
                 taskbar_created: RegisterWindowMessageW(w!("TaskbarCreated")),
                 use_settings,
@@ -1026,13 +1041,19 @@ impl App {
                     return LRESULT(0);
                 }
                 WM_APP_CHANGED => {
-                    acknowledge_change(wp, lp);
+                    if acknowledge_change(wp, lp) & SHCNE_UPDATEDIR.0 as i32 != 0 {
+                        renew(&self.watch); // too much to list: the watch may stop
+                    }
                     self.on_folder_changed();
                     return LRESULT(0);
                 }
                 WM_APP_BOOKMARKS => {
                     // A shortcut or folder came or went in Bookmarks: a drop on its node, or another program.
-                    acknowledge_change(wp, lp);
+                    let event = acknowledge_change(wp, lp);
+                    self.last_bookmark_event.set(event);
+                    if event & SHCNE_UPDATEDIR.0 as i32 != 0 {
+                        renew(&self.bookmarks_watch);
+                    }
                     self.bookmark_notices.set(self.bookmark_notices.get() + 1);
                     self.tree.refresh_folder(self.tree.bookmarks());
                     return LRESULT(0);
