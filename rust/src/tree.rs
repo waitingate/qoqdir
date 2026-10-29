@@ -341,6 +341,12 @@ impl FolderTree {
         self.batch_msg
     }
 
+    /// A read of Bookmarks is out (self-test).
+    #[cfg(feature = "selftest")] // only the self-test uses it
+    pub fn reading_bookmarks(&self) -> bool {
+        self.reading.borrow().contains_key(&self.root())
+    }
+
     pub fn add_children(&self, batch: TreeBatch) {
         // Nodes in `reading` are alive (deleted ones leave in TVN_DELETEITEM); the read number spots a reused handle.
         if self.reading.borrow().get(&batch.node) != Some(&batch.read) {

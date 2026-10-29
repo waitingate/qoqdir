@@ -479,6 +479,7 @@ LRESULT App::onMessage(UINT msg, WPARAM wp, LPARAM lp) {
         return 0;
     case WM_APP_BOOKMARKS:   // a shortcut or folder came or went in Bookmarks: a drop on its node, or another program
         acknowledgeChange(wp, lp);
+        ++bookmarkNotices_;
         tree_.refreshFolder(tree_.bookmarks());
         return 0;
     case WM_APP_WANTICONS:   // rows drawn since the last read want their own icons

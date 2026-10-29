@@ -177,6 +177,7 @@ thread_local! {
     static EFFECT: Cell<u32> = const { Cell::new(0) };  // what a simulated drag was allowed to do
     static DRAGGED: RefCell<Option<IDataObject>> = const { RefCell::new(None) }; // what a simulated drag carries
     static COUNT: Cell<u32> = const { Cell::new(0) };   // a load count to compare with
+    static NOTICES: Cell<u32> = const { Cell::new(0) }; // Bookmarks notices before the step
     static LOADS: Cell<(u32, u32)> = const { Cell::new((0, 0)) };
     static FLAG: Cell<bool> = const { Cell::new(false) };
     static CUES: Cell<isize> = const { Cell::new(0) };  // the list's focus frames as they were (WM_QUERYUISTATE)
@@ -3055,20 +3056,35 @@ impl App {
         );
         // These two wait for Explorer to pass on another program's change, which has taken it more than 5 s here
         // after this test's own floods of changes (10,000 folders, 300 shortcuts): not a false alarm when the
-        // machine is busy.
+        // machine is busy. The note tells a notice Windows never sent from a read of Bookmarks still out, or one the
+        // tree didn't show.
+        fn notices_note(a: &App) {
+            let read = if a.tree.reading_bookmarks() { ", a read out" } else { "" };
+            note(format!("{} notice(s){read}", a.bookmark_notices.get() - NOTICES.get()));
+        }
         s.add(
             "a shortcut another program makes in Bookmarks (or an Alt+drag onto its node) shows in the tree while another \
              folder is shown (5.5)",
-            |_| make_shortcut(&p("Bookmarks\\dropped.lnk"), p("sub")),
-            |a| a.bookmark_nodes() == "one,two,dropped,sub",
+            |a| {
+                NOTICES.set(a.bookmark_notices.get());
+                make_shortcut(&p("Bookmarks\\dropped.lnk"), p("sub"));
+            },
+            |a| {
+                notices_note(a);
+                a.bookmark_nodes() == "one,two,dropped,sub"
+            },
         )
         .wait(20000);
         s.add(
             "(and leaves the tree when deleted)",
-            |_| {
+            |a| {
+                NOTICES.set(a.bookmark_notices.get());
                 let _ = std::fs::remove_file(p("Bookmarks\\dropped.lnk"));
             },
-            |a| a.bookmark_nodes() == "one,two,sub",
+            |a| {
+                notices_note(a);
+                a.bookmark_nodes() == "one,two,sub"
+            },
         )
         .wait(20000);
 

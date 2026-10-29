@@ -283,6 +283,7 @@ pub struct App {
     pub loads_done: Cell<u32>,   // folder reads that reported back (self-test)
     pub loads_wasted: Cell<u32>, // ...of which a newer load had replaced, yet they read the whole folder (self-test)
     pub uncounted_load: Cell<u32>, // a read the self-test leaves stuck on a network timeout: in neither count
+    pub bookmark_notices: Cell<u32>, // changes the Bookmarks watch passed on (self-test)
     use_settings: bool,
     ini: Vec<u16>, // settings file
     pub st: RefCell<State>,
@@ -661,6 +662,7 @@ impl App {
                 loads_done: Cell::new(0),
                 loads_wasted: Cell::new(0),
                 uncounted_load: Cell::new(0),
+                bookmark_notices: Cell::new(0),
                 use_settings,
                 ini,
                 st: RefCell::new(State {
@@ -1023,6 +1025,7 @@ impl App {
                 WM_APP_BOOKMARKS => {
                     // A shortcut or folder came or went in Bookmarks: a drop on its node, or another program.
                     acknowledge_change(wp, lp);
+                    self.bookmark_notices.set(self.bookmark_notices.get() + 1);
                     self.tree.refresh_folder(self.tree.bookmarks());
                     return LRESULT(0);
                 }

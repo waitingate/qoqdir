@@ -2075,13 +2075,33 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
         [=, this] { return bookmarkNodes() == L"one,two,sub"; });
     // These two wait for Explorer to pass on another program's change, which has taken it more than 5 s here after
     // this test's own floods of changes (10,000 folders, 300 shortcuts): not a false alarm when the machine is busy.
+    // The note tells a notice Windows never sent from a read of Bookmarks still out, or one the tree didn't show.
+    auto noticesBefore = std::make_shared<int>(0);
+    auto noticesNote = [=, this] {
+        selfTest_->note = std::to_wstring(bookmarkNotices_ - *noticesBefore) + L" notice(s)" +
+                          (tree_.readingBookmarks() ? L", a read out" : L"");
+    };
     add(L"a shortcut another program makes in Bookmarks (or an Alt+drag onto its node) shows in the tree while another "
         L"folder is shown (5.5)",
-        [=, this] { makeShortcut(path(L"Bookmarks\\dropped.lnk"), path(L"sub")); },
-        [=, this] { return bookmarkNodes() == L"one,two,dropped,sub"; }, 20000);
+        [=, this] {
+            *noticesBefore = bookmarkNotices_;
+            makeShortcut(path(L"Bookmarks\\dropped.lnk"), path(L"sub"));
+        },
+        [=, this] {
+            noticesNote();
+            return bookmarkNodes() == L"one,two,dropped,sub";
+        },
+        20000);
     add(L"(and leaves the tree when deleted)",
-        [=, this] { DeleteFileW(path(L"Bookmarks\\dropped.lnk").c_str()); },
-        [=, this] { return bookmarkNodes() == L"one,two,sub"; }, 20000);
+        [=, this] {
+            *noticesBefore = bookmarkNotices_;
+            DeleteFileW(path(L"Bookmarks\\dropped.lnk").c_str());
+        },
+        [=, this] {
+            noticesNote();
+            return bookmarkNodes() == L"one,two,sub";
+        },
+        20000);
 
     // Speed: a folder with 10,000 files.
     add(L"loads a 10,000-file folder",

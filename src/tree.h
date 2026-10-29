@@ -34,6 +34,7 @@ public:
     void refreshFolder(const std::wstring& dir);   // the same for that folder's nodes alone
     void addChildren(const TreeBatch& batch);
     UINT batchMessage() const { return batchMsg_; }   // what a read's result comes back as (self-test)
+    bool readingBookmarks() const { return reading_.count(TreeView_GetRoot(tv_)) > 0; }   // a read is out (self-test)
     void setIcons(HTREEITEM node, const IconBatch& batch);
 
     // Path of the node under a screen point, or of the selected node when pt is (-1,-1). 'shortcut', when given,
