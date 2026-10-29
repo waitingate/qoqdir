@@ -132,6 +132,7 @@ struct CommandDone {
 pub const TIMER_REFRESH: usize = 1;
 const TIMER_STATUS: usize = 2;
 pub const TIMER_LOADING: usize = 3;
+const TIMER_BOOKMARKS: usize = 4;
 
 const MAX_HISTORY: usize = 100;
 /// Soft gray (#EBEBEB): less glare than white.
@@ -288,6 +289,7 @@ pub struct App {
     pub uncounted_load: Cell<u32>, // a read the self-test leaves stuck on a network timeout: in neither count
     pub bookmark_notices: Cell<u32>, // changes the Bookmarks watch passed on (self-test)
     pub last_bookmark_event: Cell<i32>, // ...the last one's SHCNE_ event (self-test)
+    pub bookmarks_renewed: Cell<u32>, // times that watch was set up again (self-test)
     pub shell_restarts: Cell<u32>, // Explorer started again, so "TaskbarCreated" came (self-test)
     taskbar_created: u32,
     use_settings: bool,
@@ -681,6 +683,7 @@ impl App {
                 uncounted_load: Cell::new(0),
                 bookmark_notices: Cell::new(0),
                 last_bookmark_event: Cell::new(0),
+                bookmarks_renewed: Cell::new(0),
                 shell_restarts: Cell::new(0),
                 taskbar_created: RegisterWindowMessageW(w!("TaskbarCreated")),
                 use_settings,
@@ -1049,12 +1052,12 @@ impl App {
                 }
                 WM_APP_BOOKMARKS => {
                     // A shortcut or folder came or went in Bookmarks: a drop on its node, or another program.
-                    let event = acknowledge_change(wp, lp);
-                    self.last_bookmark_event.set(event);
-                    if event & SHCNE_UPDATEDIR.0 as i32 != 0 {
-                        renew(&self.bookmarks_watch);
-                    }
+                    self.last_bookmark_event.set(acknowledge_change(wp, lp));
                     self.bookmark_notices.set(self.bookmark_notices.get() + 1);
+                    // Once the changes settle the watch is set up again: after a burst of them below Bookmarks,
+                    // Windows may pass nothing more on to the old one, not always with SHCNE_UPDATEDIR first.
+                    // Bookmarks changes seldom: cheap.
+                    SetTimer(Some(self.wnd), TIMER_BOOKMARKS, 1000, None);
                     self.tree.refresh_folder(self.tree.bookmarks());
                     return LRESULT(0);
                 }
@@ -1322,6 +1325,11 @@ impl App {
                             self.refresh(view.unwrap_or_default());
                         }
                     }
+                }
+                TIMER_BOOKMARKS => {
+                    let _ = KillTimer(Some(self.wnd), TIMER_BOOKMARKS);
+                    renew(&self.bookmarks_watch);
+                    self.bookmarks_renewed.set(self.bookmarks_renewed.get() + 1);
                 }
                 TIMER_STATUS => {
                     let _ = KillTimer(Some(self.wnd), TIMER_STATUS);

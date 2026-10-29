@@ -377,7 +377,9 @@ buttons, and the filter box, has a tooltip that names it with its key ("Back
   its shortcuts) change, by Qoqdir or another program, its node is read again as
   F5 would. The Bookmarks node is followed whatever is shown, so a shortcut
   dropped on it, or made in its folder by another program, shows at once (a
-  group folder inside Bookmarks is followed while shown, like any other). After
+  group folder inside Bookmarks is followed while shown, like any other). Its
+  watch is set up again a second after each change there, as after a burst of
+  changes below it some systems pass nothing more on to the old one. After
   a command from a node's menu, the node's parent is read again, so a folder
   deleted there leaves the tree. A change that comes while a node is being read
   gets it read once more after, as that read may have listed the folder before
@@ -810,12 +812,12 @@ result:
     tree as at startup: Bookmarks is open and lists "one", then "sub" (no `.lnk`).
 35. Moving to the "sub" bookmark with the keyboard opens the `sub` folder.
 36. Creating `Bookmarks\two` shows "one", "two", "sub" in the tree by itself, and
-    after Windows says Bookmarks changed too much to list one by one, a folder
-    made in it still does. Of a subfolder and a hidden one made in
-    `Bookmarks\one`, which no watch sees, collapsing and expanding it with the
-    Left and Right keys shows the new one and not the hidden one. A subfolder
-    made there while `one` is being read again, after that read listed the
-    folder, shows once the read is in: the change gets `one` read once more.
+    once a change there has its watch set up again, a folder made in it still
+    does. Of a subfolder and a hidden one made in `Bookmarks\one`, which no
+    watch sees, collapsing and expanding it with the Left and Right keys shows
+    the new one and not the hidden one. A subfolder made there while `one` is
+    being read again, after that read listed the folder, shows once the read is
+    in: the change gets `one` read once more.
 37. A 10,000-file folder loads within the target of 4.7.
 38. Filtering while scrolled to the bottom shows the matches from the top.
 39. Filtering and sorting 10,000 files are within the targets of 4.7, sorting

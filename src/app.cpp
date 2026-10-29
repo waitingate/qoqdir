@@ -481,8 +481,10 @@ LRESULT App::onMessage(UINT msg, WPARAM wp, LPARAM lp) {
         return 0;
     case WM_APP_BOOKMARKS:   // a shortcut or folder came or went in Bookmarks: a drop on its node, or another program
         lastBookmarkEvent_ = acknowledgeChange(wp, lp);
-        if (lastBookmarkEvent_ & SHCNE_UPDATEDIR) bookmarksWatch_.renew();
         ++bookmarkNotices_;
+        // Once the changes settle the watch is set up again: after a burst of them below Bookmarks, Windows may pass
+        // nothing more on to the old one, not always with SHCNE_UPDATEDIR first. Bookmarks changes seldom: cheap.
+        SetTimer(wnd_, kBookmarksTimer, 1000, nullptr);
         tree_.refreshFolder(tree_.bookmarks());
         return 0;
     case WM_APP_WANTICONS:   // rows drawn since the last read want their own icons
@@ -678,6 +680,10 @@ void App::onTimer(UINT_PTR id) {
         // What a delete, rename or new folder asked to select, if its folder is still shown. Not available: F5 (4.3).
         QueuedView q = std::exchange(queuedView_, {});
         if (!tab().unavailable) refresh(list_.shows(q.dir) ? std::move(q.view) : ViewState{});
+    } else if (id == kBookmarksTimer) {
+        KillTimer(wnd_, kBookmarksTimer);
+        bookmarksWatch_.renew();
+        ++bookmarksRenewed_;
     } else if (id == kStatusTimer) {
         KillTimer(wnd_, kStatusTimer);
         showStatus();

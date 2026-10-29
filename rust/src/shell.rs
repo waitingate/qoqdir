@@ -921,8 +921,8 @@ impl FolderWatch {
         self.location.as_ref().is_some_and(|l| matches!(l, Location::Dir(_)) && l.parent().same(location))
     }
 
-    /// Sets it up again. After a change too big to list one by one (10,000 folders made below it), Windows says only
-    /// SHCNE_UPDATEDIR, and on some systems (GitHub's Windows Server 2025) then passes nothing more on to that watch.
+    /// Sets it up again. After a burst of changes (10,000 folders made below it), some systems (GitHub's Windows Server
+    /// 2025) pass nothing more on to the watch, saying so with SHCNE_UPDATEDIR (too much to list one by one) or not.
     pub fn renew(&mut self) {
         if let Some(dir) = self.location.clone() {
             *self = FolderWatch::new(self.owner, self.msg, &dir); // the new one first: no change falls between the two

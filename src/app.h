@@ -182,7 +182,8 @@ private:
     void selfTestKey(WPARAM vk, bool ctrl = false, bool shift = false, bool alt = false);
     void selfTestType(const std::wstring& text);
 
-    static constexpr UINT_PTR kRefreshTimer = 1, kStatusTimer = 2, kLoadingTimer = 3, kSelfTestTimer = 50;
+    static constexpr UINT_PTR kRefreshTimer = 1, kStatusTimer = 2, kLoadingTimer = 3, kBookmarksTimer = 4,
+                              kSelfTestTimer = 50;
     int exitCode_ = 1;   // a run that never finishes (closed by hand, no window) has not passed
     bool useSettings_ = true;
 
@@ -241,6 +242,7 @@ private:
     UINT uncountedLoad_ = 0;   // a read the self-test leaves stuck on a network timeout: in neither count
     int bookmarkNotices_ = 0;   // changes the Bookmarks watch passed on (self-test)
     LONG lastBookmarkEvent_ = 0;   // ...the last one's SHCNE_ event (self-test)
+    int bookmarksRenewed_ = 0;     // times that watch was set up again (self-test)
     int shellRestarts_ = 0;     // Explorer started again, so "TaskbarCreated" came (self-test)
 
     struct Rename {                 // done after the edit box has closed

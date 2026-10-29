@@ -1759,24 +1759,27 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
             CreateDirectoryW(path(L"Bookmarks\\two").c_str(), nullptr);
         },
         [=] { return bookmarkNodes() == L"one,two,sub"; });
-    // Windows' word for a change too big to list one by one: the watch is set up again, and still follows (4.5).
+    // A change in Bookmarks gets its watch set up again once it settles (5.5); the new one must follow as well. The
+    // change is Windows' word for too much to list one by one, which a burst of changes below it may bring.
+    auto renewedBefore = std::make_shared<int>(0);
     auto threeMade = std::make_shared<bool>(false);
-    add(L"after Windows says Bookmarks changed too much to list one by one, a folder made there still shows in the "
-        L"tree by itself (5.5)",
+    add(L"a change in Bookmarks gets its watch set up again once it settles, and a folder made there after that still "
+        L"shows in the tree by itself (5.5)",
         [=, this] {
-            lastBookmarkEvent_ = 0;
+            *renewedBefore = bookmarksRenewed_;
             *threeMade = false;
             SHChangeNotify(SHCNE_UPDATEDIR, SHCNF_PATHW, path(L"Bookmarks").c_str(), nullptr);
         },
         [=, this] {
             if (!*threeMade) {
-                if (!(lastBookmarkEvent_ & SHCNE_UPDATEDIR)) return false;
+                if (bookmarksRenewed_ == *renewedBefore) return false;
                 CreateDirectoryW(path(L"Bookmarks\\three").c_str(), nullptr);
                 *threeMade = true;
                 return false;
             }
             return bookmarkNodes() == L"one,three,two,sub";
-        });
+        },
+        10000);
     add(L"(remove it)",
         [=, this] {
             RemoveDirectoryW(path(L"Bookmarks\\three").c_str());

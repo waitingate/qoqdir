@@ -2635,19 +2635,20 @@ impl App {
             },
             |a| a.bookmark_nodes() == "one,two,sub",
         );
-        // Windows' word for a change too big to list one by one: the watch is set up again, and still follows (4.5).
+        // A change in Bookmarks gets its watch set up again once it settles (5.5); the new one must follow as well. The
+        // change is Windows' word for too much to list one by one, which a burst of changes below it may bring.
         s.add(
-            "after Windows says Bookmarks changed too much to list one by one, a folder made there still shows in the \
-             tree by itself (5.5)",
+            "a change in Bookmarks gets its watch set up again once it settles, and a folder made there after that \
+             still shows in the tree by itself (5.5)",
             |a| {
-                a.last_bookmark_event.set(0);
+                COUNT.set(a.bookmarks_renewed.get());
                 FLAG.set(false); // the folder isn't made yet
                 let bookmarks = wide(p("Bookmarks"));
                 unsafe { SHChangeNotify(SHCNE_UPDATEDIR, SHCNF_PATHW, Some(bookmarks.as_ptr() as _), None) };
             },
             |a| {
                 if !FLAG.get() {
-                    if a.last_bookmark_event.get() & SHCNE_UPDATEDIR.0 as i32 == 0 {
+                    if a.bookmarks_renewed.get() == COUNT.get() {
                         return false;
                     }
                     let _ = std::fs::create_dir(p("Bookmarks\\three"));
@@ -2656,7 +2657,8 @@ impl App {
                 }
                 a.bookmark_nodes() == "one,three,two,sub"
             },
-        );
+        )
+        .wait(10000);
         s.add(
             "(remove it)",
             |a| {
