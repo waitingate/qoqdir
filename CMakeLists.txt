@@ -28,11 +28,12 @@ get_filename_component(MINGW_ROOT "${CMAKE_CXX_COMPILER}" DIRECTORY)   # .../min
 get_filename_component(MINGW_ROOT "${MINGW_ROOT}" DIRECTORY)            # .../mingw64
 add_compile_options("-ffile-prefix-map=${MINGW_ROOT}=mingw64")
 # One self-contained exe: no MinGW DLLs to ship alongside it. The linker drops the code and data
-# nothing uses (most of Windows' GUID table, for one).
+# nothing uses. Not libuuid: its GUIDs come a whole member at a time, so the app defines its own
+# (src/guids.cpp).
 add_compile_options(-ffunction-sections -fdata-sections)
 add_link_options(-static -Wl,--gc-sections $<$<CONFIG:Release>:-s>)
 
-set(WIN_LIBS ole32 oleaut32 shell32 shlwapi comctl32 uuid)
+set(WIN_LIBS ole32 oleaut32 shell32 shlwapi comctl32)
 
 # Path and folder logic, shared by the app and the tests.
 add_library(core STATIC src/folder.cpp)
@@ -40,7 +41,7 @@ target_link_libraries(core PUBLIC ${WIN_LIBS})
 
 # The app, compiled once and linked twice: into qoqdir.exe, what users get, and into qoqdir-test.exe, the
 # same plus the self-test. So the self-test checks the very code that ships.
-add_library(app OBJECT src/crashlog.cpp src/app.cpp src/filelist.cpp src/tree.cpp src/shell.cpp)
+add_library(app OBJECT src/crashlog.cpp src/app.cpp src/filelist.cpp src/tree.cpp src/shell.cpp src/guids.cpp)
 target_link_libraries(app PUBLIC core)
 
 # windres reports no dependencies, so name what qoqdir.rc pulls in: a new version, manifest or icon then rebuilds it.

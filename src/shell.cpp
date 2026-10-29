@@ -5,7 +5,6 @@
 #include <shlwapi.h>
 
 #include <algorithm>
-#include <mutex>
 #include <unordered_map>
 
 // ---------------------------------------------------------------- shell objects
@@ -185,10 +184,12 @@ TypeInfo askType(const Item& it) {
     return {sfi.iIcon, std::make_shared<const std::wstring>(sfi.szTypeName)};
 }
 
-// Cached for the UI thread: the folder icon, and the few items a load did not fill in (fillTypes).
+// Cached for the UI thread: the folder icon, and the few items a load did not fill in (fillTypes). Not a local static:
+// its guard against two threads alone links winpthreads in (35 KB).
+std::unordered_map<std::wstring, TypeInfo> typeCache;
+
 const TypeInfo& typeInfo(const Item& it) {
-    static std::unordered_map<std::wstring, TypeInfo> cache;
-    auto [at, fresh] = cache.try_emplace(typeKey(it));
+    auto [at, fresh] = typeCache.try_emplace(typeKey(it));
     if (fresh) at->second = askType(it);
     return at->second;
 }
@@ -591,8 +592,12 @@ std::wstring shortcutName(const std::wstring& folder) {
 bool saveFolderShortcuts(const std::wstring& dir, const std::vector<std::wstring>& folders) {
     // One save at a time: closing the window saves here and now while Ctrl+S's worker may still be writing (a folder
     // on a server that is off is slow), and the two would leave a mix of both sets. The later one waits and wins.
-    static std::mutex saving;
-    std::lock_guard<std::mutex> one(saving);
+    // Windows' own lock: std::mutex links winpthreads in (35 KB).
+    static SRWLOCK saving = SRWLOCK_INIT;
+    AcquireSRWLockExclusive(&saving);
+    struct Release {
+        ~Release() { ReleaseSRWLockExclusive(&saving); }
+    } one;
     CreateDirectoryW(dir.c_str(), nullptr);   // fails harmlessly if it exists
     for (const Item& it : listFolder(dir, true).items)
         if (!it.isDir() && extensionOf(it.name) == L".lnk") DeleteFileW(joinPath(dir, it.name).c_str());

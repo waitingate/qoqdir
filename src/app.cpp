@@ -338,7 +338,8 @@ void App::applyFont() {
 
 // The soft gray, or a high-contrast theme's own colours: the theme's text could be white, unreadable on the gray.
 void App::applyColors(bool highContrast) {
-    static HBRUSH gray = CreateSolidBrush(kBackground);   // lives as long as the process
+    static HBRUSH gray = nullptr;   // lives as long as the process; made here, not in the initializer, which needs a
+    if (!gray) gray = CreateSolidBrush(kBackground);   // guard against two threads that links winpthreads in
     COLORREF color = highContrast ? GetSysColor(COLOR_WINDOW) : kBackground;
     ListView_SetBkColor(list_.hwnd(), color);
     ListView_SetTextBkColor(list_.hwnd(), color);

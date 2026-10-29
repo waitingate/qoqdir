@@ -50,6 +50,8 @@ std::vector<std::wstring> commandLineWords(const std::wstring& line);   // as Wi
 
 // ---------------------------------------------------------------- reading a folder
 
+inline const std::wstring kNoTypeName;   // Item::typeText's ""; a local static would need a guard (winpthreads)
+
 struct Item {
     std::wstring name;    // file name, or "C:\" for a drive
     std::wstring label;   // text to show instead of name (drives only)
@@ -63,10 +65,7 @@ struct Item {
 
     bool isDir() const { return (attrs & FILE_ATTRIBUTE_DIRECTORY) != 0; }
     const std::wstring& shown() const { return label.empty() ? name : label; }
-    const std::wstring& typeText() const {   // "" while unknown
-        static const std::wstring none;
-        return type ? *type : none;
-    }
+    const std::wstring& typeText() const { return type ? *type : kNoTypeName; }   // "" while unknown
 };
 
 struct Listing {
