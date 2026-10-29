@@ -236,7 +236,6 @@ bool App::create(HINSTANCE instance, const CommandLine& cmd, bool useSettings) {
     std::wstring bookmarks = joinPath(useSettings ? parentPath(exe) : cmd.folders.at(0), L"Bookmarks");
     CreateDirectoryW(bookmarks.c_str(), nullptr);   // fails harmlessly if it exists
     tree_.create(wnd_, ID_TREE, WM_APP_TREE, WM_APP_TREE_ICONS, kTreeTimer, bookmarks);
-    bookmarksWatch_ = FolderWatch(wnd_, WM_APP_BOOKMARKS, bookmarks);
     list_.create(wnd_, ID_LIST, WM_APP_WANTICONS, WM_APP_ICONS);
     status_ = make(STATUSCLASSNAMEW, L"", SBARS_SIZEGRIP, 0, ID_STATUS);
     // Each button's tooltip, and the filter box's, says what it does and its key, and screen readers read the same as
@@ -260,7 +259,6 @@ bool App::create(HINSTANCE instance, const CommandLine& cmd, bool useSettings) {
         if (names) names->SetHwndPropStr(h, OBJID_CLIENT, CHILDID_SELF, PROPID_ACC_NAME, text);
     }
 
-    SHAutoComplete(address_, SHACF_FILESYS_DIRS);
     SetWindowSubclass(tabBar_, tabBarProc, 1, 0);
     SetWindowSubclass(filter_, filterProc, 1, 0);
     SetWindowSubclass(list_.hwnd(), middleClickProc, 1, 0);
@@ -273,10 +271,8 @@ bool App::create(HINSTANCE instance, const CommandLine& cmd, bool useSettings) {
         if (!pt || list_.dir().empty()) return std::nullopt;
         return row ? row : list_.dir();
     });
-    RegisterDragDrop(list_.hwnd(), listDrop_.get());
     // Dropping on a tab puts the files in that tab's folder.
     tabDrop_ = newDropTarget(wnd_, [this](const POINT* pt, const auto&) { return tabDropTarget(pt); });
-    RegisterDragDrop(tabBar_, tabDrop_.get());
     // And on a folder in the tree, in that folder. A node that refuses says why in the status bar (5.5).
     treeDrop_ = newDropTarget(wnd_, [this](const POINT* pt, const auto& dragged) -> std::optional<std::wstring> {
         std::optional<std::wstring> dir = tree_.dropTarget(pt);
@@ -288,7 +284,6 @@ bool App::create(HINSTANCE instance, const CommandLine& cmd, bool useSettings) {
                                                  : L"Only a folder on this PC takes a drop");
         return dir;
     });
-    RegisterDragDrop(tree_.hwnd(), treeDrop_.get());
 
     applyColors(highContrastOn());
     applyFont();
@@ -297,6 +292,13 @@ bool App::create(HINSTANCE instance, const CommandLine& cmd, bool useSettings) {
     loadSettings(cmd, ask);
     layout();
     showTab();
+    // Only now, with the first folder's read out: these took 80 ms (the Bookmarks watch 57 of them), which the read
+    // now runs alongside instead of after.
+    bookmarksWatch_ = FolderWatch(wnd_, WM_APP_BOOKMARKS, bookmarks);
+    SHAutoComplete(address_, SHACF_FILESYS_DIRS);
+    RegisterDragDrop(list_.hwnd(), listDrop_.get());
+    RegisterDragDrop(tabBar_, tabDrop_.get());
+    RegisterDragDrop(tree_.hwnd(), treeDrop_.get());
     if (!ask.quiet) focusList();   // giving a control the focus activates the window, which a quiet start may not
     watchForHangs(wnd_);
     return true;
@@ -1095,18 +1097,6 @@ void App::onLoaded(Listing&& listing, UINT generation) {
 
     t.path = listing.path;
     t.unavailable = false;
-    // The watch stays while it watches the folder shown: setting one up costs 25-75 ms, and a reload is not a change.
-    // Otherwise the old one goes first, and with it a refresh only it asked for: that was about a folder no longer
-    // shown, unless this one is the folder it was in, which it watched too (4.5).
-    if (!watch_.watches(t.path)) {
-        bool above = watch_.watchesChildOf(t.path);
-        watch_ = {};
-        if (refreshQueued_ && refreshForWatch_ && !above) {
-            KillTimer(wnd_, kRefreshTimer);
-            refreshQueued_ = false;
-        }
-        watch_ = FolderWatch(wnd_, WM_APP_CHANGED, t.path);
-    }
     FILETIME written = listing.written;
     // The tree follows the folder shown: its node is read again when the subfolders or shortcuts changed (5.5).
     std::vector<std::wstring> treeNames = reload ? list_.treeNames() : std::vector<std::wstring>{};
@@ -1119,10 +1109,6 @@ void App::onLoaded(Listing&& listing, UINT generation) {
     if (view.top < 0 || requested) list_.ensureVisible(row);   // ...but what the user just made or renamed shows
     if (view.rename && row >= 0) list_.rename(row);
 
-    // A change during the read, before the watch was there, is missed by both: the folder's own time tells. That
-    // refresh is about this folder, as the watch's would be, so it goes if another one is shown first (4.5).
-    FILETIME now = folderWritten(t.path);
-    if (CompareFileTime(&now, &written) != 0) onFolderChanged();
     // A move shows where the tab is now. A tab switch showed it when it began, and the address bar may hold what the
     // user typed since (5.3), unless it landed elsewhere: a tab made on a file shows the file's folder (5.10).
     if (moved) {
@@ -1134,6 +1120,25 @@ void App::onLoaded(Listing&& listing, UINT generation) {
     // The first folder shown says how to see the keys (5.10), unless the status bar says something else by now.
     if (std::exchange(firstFolder_, false) && message().empty()) setMessage(L"F1 shows the keys");
     showStatus();
+
+    // The folder shows first, then gets its watch: setting one up takes up to 75 ms, which the rows waited for (4.7).
+    RedrawWindow(wnd_, nullptr, nullptr, RDW_UPDATENOW | RDW_ALLCHILDREN);
+    // The watch stays while it watches the folder shown, and a reload is not a change. Otherwise the old one goes, and
+    // with it a refresh only it asked for: that was about a folder no longer shown, unless this one is the folder it
+    // was in, which it watched too (4.5).
+    if (!watch_.watches(t.path)) {
+        bool above = watch_.watchesChildOf(t.path);
+        watch_ = {};
+        if (refreshQueued_ && refreshForWatch_ && !above) {
+            KillTimer(wnd_, kRefreshTimer);
+            refreshQueued_ = false;
+        }
+        watch_ = FolderWatch(wnd_, WM_APP_CHANGED, t.path);
+    }
+    // A change during the read, before the watch was there, is missed by both: the folder's own time tells. That
+    // refresh is about this folder, as the watch's would be, so it goes if another one is shown first (4.5).
+    FILETIME now = folderWritten(t.path);
+    if (CompareFileTime(&now, &written) != 0) onFolderChanged();
 }
 
 // The address bar, title, buttons and tabs follow the current tab's folder: shown by a tab switch at once, and by a

@@ -18,7 +18,7 @@ use windows::Win32::Graphics::Gdi::{
     COLOR_WINDOW, ClientToScreen, CreateFontIndirectW, CreateSolidBrush, InvalidateRect, GetDC, GetMonitorInfoW,
     GetSysColor, GetSysColorBrush, GetTextExtentExPointW, GetTextExtentPoint32W, GetTextMetricsW, HBRUSH, HDC,
     MONITOR_DEFAULTTONEAREST, MONITOR_DEFAULTTONULL, MONITORINFO, MonitorFromRect, MonitorFromWindow, PtInRect,
-    ReleaseDC, ScreenToClient, SelectObject, TEXTMETRICW,
+    RDW_ALLCHILDREN, RDW_UPDATENOW, RedrawWindow, ReleaseDC, ScreenToClient, SelectObject, TEXTMETRICW,
     COLOR_GRAYTEXT, DT_NOPREFIX, DT_RIGHT, DT_SINGLELINE, DT_VCENTER, DrawTextW, HGDIOBJ, RestoreDC, SaveDC, SetBkMode,
     SetTextColor, TRANSPARENT,
 };
@@ -620,7 +620,6 @@ impl App {
             let _ = std::fs::create_dir(&bookmarks); // fails harmlessly if it exists
             let bookmarks = Location::dir(bookmarks);
             let tree = FolderTree::create(wnd, ID_TREE, WM_APP_TREE, WM_APP_TREE_ICONS, TIMER_TREE, bookmarks);
-            let bookmarks_watch = FolderWatch::new(wnd, WM_APP_BOOKMARKS, tree.bookmarks());
             let list = FileList::create(wnd, ID_LIST, WM_APP_WANTICONS, WM_APP_ICONS);
             const SBARS_SIZEGRIP: u32 = 0x100;
             let status = make(w!("msctls_statusbar32"), w!(""), SBARS_SIZEGRIP, 0, ID_STATUS);
@@ -655,7 +654,7 @@ impl App {
                 refresh_queued: Cell::new(false),
                 refresh_for_watch: Cell::new(false),
                 watch: RefCell::new(None),
-                bookmarks_watch: RefCell::new(Some(bookmarks_watch)),
+                bookmarks_watch: RefCell::new(None),
                 kept_said: RefCell::new(String::new()),
                 load_message_shown: Cell::new(false),
                 generation: Cell::new(0),
@@ -688,7 +687,6 @@ impl App {
             });
             SetWindowLongPtrW(wnd, GWLP_USERDATA, Rc::as_ptr(&app) as isize);
 
-            let _ = SHAutoComplete(address, SHACF_FILESYS_DIRS);
             let _ = SetWindowSubclass(tab_bar, Some(tab_bar_proc), 1, 0);
             let _ = SetWindowSubclass(filter, Some(filter_proc), 1, 0);
             let _ = SetWindowSubclass(app.list.hwnd(), Some(middle_click_proc), 1, 0);
@@ -709,13 +707,9 @@ impl App {
                     row.or(Some(location))
                 }),
             );
-            let _ = RegisterDragDrop(app.list.hwnd(), &drop);
-            *app.list_drop.borrow_mut() = Some(drop);
             // Dropping on a tab puts the files in that tab's folder.
             let weak: Weak<App> = Rc::downgrade(&app);
             let tab_drop = new_drop_target(wnd, Box::new(move |pt, _: &[Location]| weak.upgrade()?.tab_drop_target(pt)));
-            let _ = RegisterDragDrop(app.tab_bar, &tab_drop);
-            *app.tab_drop.borrow_mut() = Some(tab_drop);
             // And on a folder in the tree, in that folder. A node that refuses says why in the status bar (5.5).
             let weak: Weak<App> = Rc::downgrade(&app);
             let tree_drop = new_drop_target(
@@ -734,8 +728,6 @@ impl App {
                     dir
                 }),
             );
-            let _ = RegisterDragDrop(app.tree.hwnd(), &tree_drop);
-            *app.tree_drop.borrow_mut() = Some(tree_drop);
 
             app.apply_colors(high_contrast_on());
             app.apply_font();
@@ -743,6 +735,17 @@ impl App {
             app.load_settings(&cmd, &ask);
             app.layout();
             app.show_tab();
+            // Only now, with the first folder's read out: these took 80 ms (the Bookmarks watch 57 of them), which the
+            // read now runs alongside instead of after.
+            let bookmarks_watch = FolderWatch::new(wnd, WM_APP_BOOKMARKS, app.tree.bookmarks());
+            *app.bookmarks_watch.borrow_mut() = Some(bookmarks_watch);
+            let _ = SHAutoComplete(address, SHACF_FILESYS_DIRS);
+            let _ = RegisterDragDrop(app.list.hwnd(), &drop);
+            *app.list_drop.borrow_mut() = Some(drop);
+            let _ = RegisterDragDrop(app.tab_bar, &tab_drop);
+            *app.tab_drop.borrow_mut() = Some(tab_drop);
+            let _ = RegisterDragDrop(app.tree.hwnd(), &tree_drop);
+            *app.tree_drop.borrow_mut() = Some(tree_drop);
             if !ask.quiet {
                 app.focus_list(); // giving a control the focus activates the window, which a quiet start may not
             }
@@ -1959,20 +1962,6 @@ impl App {
 
         let location = listing.location.clone();
         let written = listing.written;
-        // The watch stays while it watches the folder shown: setting one up costs 25-75 ms, and a reload is not a
-        // change. Otherwise the old one goes first, and with it a refresh only it asked for: that was about a folder no
-        // longer shown, unless this one is the folder it was in, which it watched too (4.5).
-        if !self.watch.borrow().as_ref().is_some_and(|w| w.watches(&location)) {
-            let above = self.watch.borrow().as_ref().is_some_and(|w| w.watches_child_of(&location));
-            drop(self.watch.take());
-            if self.refresh_queued.get() && self.refresh_for_watch.get() && !above {
-                unsafe {
-                    let _ = KillTimer(Some(self.wnd), TIMER_REFRESH);
-                }
-                self.refresh_queued.set(false);
-            }
-            let _ = self.watch.replace(Some(FolderWatch::new(self.wnd, WM_APP_CHANGED, &location)));
-        }
         // The tree follows the folder shown: its node is read again when the subfolders or shortcuts changed (5.5).
         let tree_names = if reload { self.list.tree_names() } else { Vec::new() };
         self.list.set_listing(listing);
@@ -1996,11 +1985,6 @@ impl App {
             self.list.rename(row);
         }
 
-        // A change during the read, before the watch was there, is missed by both: the folder's own time tells. That
-        // refresh is about this folder, as the watch's would be, so it goes if another one is shown first (4.5).
-        if location.path().is_some_and(|p| folder_written(p) != written) {
-            self.on_folder_changed();
-        }
         // A move shows where the tab is now. A tab switch showed it when it began, and the address bar may hold what
         // the user typed since (5.3), unless it landed elsewhere: a tab made on a file shows the file's folder (5.10).
         if moved {
@@ -2014,6 +1998,31 @@ impl App {
             self.set_message("F1 shows the keys");
         }
         self.show_status();
+
+        // The folder shows first, then gets its watch: setting one up takes up to 75 ms, which the rows waited for
+        // (4.7).
+        unsafe {
+            let _ = RedrawWindow(Some(self.wnd), None, None, RDW_UPDATENOW | RDW_ALLCHILDREN);
+        }
+        // The watch stays while it watches the folder shown, and a reload is not a change. Otherwise the old one goes,
+        // and with it a refresh only it asked for: that was about a folder no longer shown, unless this one is the
+        // folder it was in, which it watched too (4.5).
+        if !self.watch.borrow().as_ref().is_some_and(|w| w.watches(&location)) {
+            let above = self.watch.borrow().as_ref().is_some_and(|w| w.watches_child_of(&location));
+            drop(self.watch.take());
+            if self.refresh_queued.get() && self.refresh_for_watch.get() && !above {
+                unsafe {
+                    let _ = KillTimer(Some(self.wnd), TIMER_REFRESH);
+                }
+                self.refresh_queued.set(false);
+            }
+            let _ = self.watch.replace(Some(FolderWatch::new(self.wnd, WM_APP_CHANGED, &location)));
+        }
+        // A change during the read, before the watch was there, is missed by both: the folder's own time tells. That
+        // refresh is about this folder, as the watch's would be, so it goes if another one is shown first (4.5).
+        if location.path().is_some_and(|p| folder_written(p) != written) {
+            self.on_folder_changed();
+        }
     }
 
     /// The address bar, title, buttons and tabs follow the current tab's folder: shown by a tab switch at once, and by

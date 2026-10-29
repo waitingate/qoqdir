@@ -193,7 +193,10 @@ Targets on an ordinary SSD laptop with a folder of 10,000 files (faster is fine)
   the context menu on 10,000 selected files also takes a few seconds at most.
 - The copy or delete itself runs at Windows' speed (minutes for 10,000 small
   files), and the window keeps responding meanwhile.
-- The window shows up well under a second after start.
+- The window shows up well under a second after start. The first folder's rows
+  showed 0.32 s after start, 0.1 s of it Windows starting the process: the
+  first read runs while the Bookmarks watch and the address bar's completion
+  are set up, and a folder's own watch waits until its rows are drawn.
 - A folder with 20,000 subfolders (`C:\Windows\WinSxS` has that many) opens in the
   tree without the window waiting half a second: they go in a part at a time,
   about 30 ms of work each, with the window answering in between. Where an
