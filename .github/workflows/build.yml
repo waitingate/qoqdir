@@ -62,6 +62,14 @@ jobs:
             if (Test-Path $p) { Copy-Item $p (Join-Path 'logs' ($f -replace '\\', '-')) }
           }
           Get-ChildItem logs
+          # Each failed step and crash as an annotation of the run, which can be read without signing in, unlike the
+          # log and the artifact.
+          foreach ($log in Get-ChildItem logs -Filter *.log) {
+            $lines = Get-Content $log.FullName
+            if ($log.Name -like '*crash*') { $lines = $lines | Select-Object -First 3 }
+            else { $lines = $lines | Where-Object { $_ -cmatch '^FAIL' } }
+            foreach ($l in $lines) { "::error title=$($log.Name)::$($l -replace '%', '%25')" }
+          }
 
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9   # v7.0.2
         if: always()
