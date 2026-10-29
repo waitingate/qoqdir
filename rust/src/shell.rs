@@ -3,7 +3,7 @@
 
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
-use std::ffi::{OsStr, OsString};
+use std::ffi::{OsStr, OsString, c_void};
 use std::mem::ManuallyDrop;
 use std::os::windows::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
@@ -34,7 +34,7 @@ use windows::Win32::System::Ole::{
     IDropSource, IDropTarget, IDropTarget_Impl, OleSetClipboard, ReleaseStgMedium,
 };
 use windows::Win32::System::SystemServices::{MK_RBUTTON, MODIFIERKEYS_FLAGS};
-use windows::Win32::System::Threading::{CreateEventW, INFINITE, SetEvent};
+use windows::Win32::System::Threading::{CreateEventW, CreateThread, INFINITE, SetEvent, THREAD_CREATION_FLAGS};
 use windows::Win32::System::WindowsProgramming::{DRIVE_NO_ROOT_DIR, DRIVE_REMOTE};
 use windows::Win32::UI::Controls::HIMAGELIST;
 use windows::Win32::UI::Input::KeyboardAndMouse::{VK_CONTROL, VK_SHIFT};
@@ -866,14 +866,30 @@ pub fn saved_folders(dir: &Path) -> Vec<Location> {
 /// Runs `work` on a thread of its own, with COM set up for the shell calls it makes. The thread is never joined, so
 /// it can outlive the window and the App: `work` captures values and a window handle only, never a reference to
 /// either, and reports with post(), which drops the message when the window is gone.
+///
+/// A Windows thread, as the C++ version starts: std::thread::spawn builds its start-up anew for each caller, 11 of them,
+/// about 20 KB of the exe.
 pub fn in_background(work: impl FnOnce() + Send + 'static) {
-    std::thread::spawn(move || unsafe {
-        let co = CoInitializeEx(None, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE);
-        work();
-        if co.is_ok() {
-            CoUninitialize();
+    unsafe extern "system" fn run(job: *mut c_void) -> u32 {
+        let work = *unsafe { Box::from_raw(job as *mut Box<dyn FnOnce() + Send>) };
+        unsafe {
+            let co = CoInitializeEx(None, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE);
+            work();
+            if co.is_ok() {
+                CoUninitialize();
+            }
         }
-    });
+        0
+    }
+    let job: Box<Box<dyn FnOnce() + Send>> = Box::new(Box::new(work));
+    let job = Box::into_raw(job) as *const c_void;
+    match unsafe { CreateThread(None, 0, Some(run), Some(job), THREAD_CREATION_FLAGS(0), None) } {
+        Ok(thread) => unsafe {
+            let _ = CloseHandle(thread);
+        },
+        // As std::thread::spawn did: the reply the caller waits for would never come.
+        Err(e) => panic!("can't start a worker thread: {e}"),
+    }
 }
 
 /// Hands `object` to a window (its handle as a number: a thread only posts to it) by a posted message; the handler

@@ -3,6 +3,7 @@
 //! a stack buffer and written with Win32 calls (the heap may be what broke). Addresses are exe offsets (ASLR); to name
 //! one, use the debug copy release.ps1 keeps: addr2line -e qoqdir-rust-<version>-debug.exe 0x140000000+offset
 
+use std::ffi::c_void;
 use std::fmt;
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -26,8 +27,8 @@ use windows::Win32::System::ProcessStatus::K32GetMappedFileNameW;
 use windows::Win32::System::SystemInformation::GetLocalTime;
 use windows::Win32::System::SystemServices::IMAGE_DOS_HEADER;
 use windows::Win32::System::Threading::{
-    GetCurrentProcess, GetCurrentThreadId, OpenThread, ResumeThread, SetThreadStackGuarantee, SuspendThread,
-    THREAD_GET_CONTEXT, THREAD_SUSPEND_RESUME, TerminateProcess,
+    CreateThread, GetCurrentProcess, GetCurrentThreadId, OpenThread, ResumeThread, SetThreadStackGuarantee,
+    SuspendThread, THREAD_CREATION_FLAGS, THREAD_GET_CONTEXT, THREAD_SUSPEND_RESUME, TerminateProcess,
 };
 use windows::Win32::UI::WindowsAndMessaging::{IsHungAppWindow, IsWindow};
 
@@ -236,15 +237,16 @@ fn walk_stack(thread: u32) -> ([u64; 24], usize) {
 /// its stack as an exe offset or a DLL name, so a hung shell extension names itself. Call from the window's thread.
 /// Every second, once per hang. The frames are named after the thread runs again, which allocates.
 pub fn watch_for_hangs(window: HWND) {
-    let (wnd, thread) = (window.0 as isize, unsafe { GetCurrentThreadId() });
-    std::thread::spawn(move || {
+    // A Windows thread, as the C++ version's: std::thread::spawn would be the exe's only use of its start-up code.
+    unsafe extern "system" fn watch(job: *mut c_void) -> u32 {
+        let (wnd, thread) = *unsafe { Box::from_raw(job as *mut (isize, u32)) };
         let wnd = HWND(wnd as *mut _);
         let mut said = false;
         loop {
             std::thread::sleep(std::time::Duration::from_secs(1));
             unsafe {
                 if !IsWindow(Some(wnd)).as_bool() {
-                    return;
+                    return 0;
                 }
                 if !IsHungAppWindow(wnd).as_bool() {
                     said = false;
@@ -266,7 +268,13 @@ pub fn watch_for_hangs(window: HWND) {
             }
             log(format_args!("{line}"));
         }
-    });
+    }
+    let job = Box::into_raw(Box::new((window.0 as isize, unsafe { GetCurrentThreadId() }))) as *const c_void;
+    if let Ok(thread) = unsafe { CreateThread(None, 0, Some(watch), Some(job), THREAD_CREATION_FLAGS(0), None) } {
+        unsafe {
+            let _ = CloseHandle(thread);
+        }
+    }
 }
 
 /// Appends "date time  what" to the log.
