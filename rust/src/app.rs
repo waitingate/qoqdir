@@ -54,7 +54,8 @@ use windows::Win32::UI::WindowsAndMessaging::{
     HMENU, HTCLIENT, IDC_ARROW, IDC_SIZEWE, IsChild, KillTimer, WPF_RESTORETOMAXIMIZED, LoadCursorW, LoadIconW, MB_ICONQUESTION,
     IDCANCEL, IDYES, MB_ICONWARNING, MB_OKCANCEL, MB_YESNOCANCEL, MF_GRAYED, MF_SEPARATOR, MF_STRING, MINMAXINFO, MSG,
     MessageBoxW, MoveWindow,
-    NONCLIENTMETRICSW, OBJID_CLIENT, PostMessageW, PostQuitMessage, RegisterClassExW, SIZE_MINIMIZED, SM_CXPADDEDBORDER,
+    NONCLIENTMETRICSW, OBJID_CLIENT, PostMessageW, PostQuitMessage, RegisterClassExW, RegisterWindowMessageW,
+    SIZE_MINIMIZED, SM_CXPADDEDBORDER,
     SM_CYCAPTION, SM_CYSIZEFRAME, SPI_GETHIGHCONTRAST,
     SHOW_WINDOW_CMD, SPI_GETNONCLIENTMETRICS, SW_SHOWMAXIMIZED, SW_SHOWMINNOACTIVE, SW_SHOWNA, SW_SHOWNOACTIVATE,
     SW_SHOWNORMAL, SWP_NOACTIVATE, SWP_NOZORDER, SetClassLongPtrW,
@@ -284,6 +285,8 @@ pub struct App {
     pub loads_wasted: Cell<u32>, // ...of which a newer load had replaced, yet they read the whole folder (self-test)
     pub uncounted_load: Cell<u32>, // a read the self-test leaves stuck on a network timeout: in neither count
     pub bookmark_notices: Cell<u32>, // changes the Bookmarks watch passed on (self-test)
+    pub shell_restarts: Cell<u32>, // Explorer started again, so "TaskbarCreated" came (self-test)
+    taskbar_created: u32,
     use_settings: bool,
     ini: Vec<u16>, // settings file
     pub st: RefCell<State>,
@@ -663,6 +666,8 @@ impl App {
                 loads_wasted: Cell::new(0),
                 uncounted_load: Cell::new(0),
                 bookmark_notices: Cell::new(0),
+                shell_restarts: Cell::new(0),
+                taskbar_created: RegisterWindowMessageW(w!("TaskbarCreated")),
                 use_settings,
                 ini,
                 st: RefCell::new(State {
@@ -918,6 +923,9 @@ impl App {
 
     fn on_message(&self, msg: u32, wp: WPARAM, lp: LPARAM) -> LRESULT {
         let dpi = self.dpi.get();
+        if msg == self.taskbar_created {
+            self.shell_restarts.set(self.shell_restarts.get() + 1);
+        }
         // These carry a heap object made on a worker in lParam. Another program broadcasting one of their numbers
         // (apps do broadcast in the WM_APP range) would hand a null or stray pointer; ignore one with no pointer.
         if lp.0 == 0

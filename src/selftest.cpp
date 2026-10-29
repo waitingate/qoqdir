@@ -34,6 +34,8 @@ struct App::SelfTest {
     ULONGLONG heldTick = 0;   // since when only a folder load still out has held the next step back
     std::wstring dir, logPath, note;
     int failures = 0;
+    int noticesSeen = 0;      // bookmarkNotices_ as the last tick saw it
+    size_t lastNotice = 0;    // ...and the step it last went up in
     // What `sub` held before the paste step, and anything the paste brought in that isn't the test's file (a cut made
     // elsewhere just as it started): then the test folder is kept, not deleted (7.2).
     std::set<std::wstring> subBefore, foreign;
@@ -2075,11 +2077,14 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
         [=, this] { return bookmarkNodes() == L"one,two,sub"; });
     // These two wait for Explorer to pass on another program's change, which has taken it more than 5 s here after
     // this test's own floods of changes (10,000 folders, 300 shortcuts): not a false alarm when the machine is busy.
-    // The note tells a notice Windows never sent from a read of Bookmarks still out, or one the tree didn't show.
+    // The note tells a notice Windows never sent from a read of Bookmarks still out, or one the tree didn't show; and
+    // in which step the watch last passed one on, and whether Explorer started again (its watches go with it).
     auto noticesBefore = std::make_shared<int>(0);
     auto noticesNote = [=, this] {
         selfTest_->note = std::to_wstring(bookmarkNotices_ - *noticesBefore) + L" notice(s)" +
-                          (tree_.readingBookmarks() ? L", a read out" : L"");
+                          (tree_.readingBookmarks() ? L", a read out" : L"") + L"; the last came in: " +
+                          selfTest_->steps[selfTest_->lastNotice].name + L"; Explorer restarts: " +
+                          std::to_wstring(shellRestarts_);
     };
     add(L"a shortcut another program makes in Bookmarks (or an Alt+drag onto its node) shows in the tree while another "
         L"folder is shown (5.5)",
@@ -2780,6 +2785,10 @@ void App::selfTestLog(const std::wstring& line) {
 
 void App::selfTestTick() {
     SelfTest& t = *selfTest_;
+    if (bookmarkNotices_ != t.noticesSeen) {   // for the Bookmarks watch steps' note
+        t.noticesSeen = bookmarkNotices_;
+        t.lastNotice = t.index;
+    }
     if (t.busy) return;   // an action is running a modal loop (e.g. a progress dialog)
     if (t.index < t.steps.size()) {
         SelfTest::Step& s = t.steps[t.index];

@@ -162,6 +162,8 @@ struct SelfTest {
     held: Option<Instant>,    // since when only a folder load still out has held the next step back
     busy: bool,
     failures: usize,
+    notices_seen: u32,  // the app's bookmark_notices as the last tick saw it
+    last_notice: usize, // ...and the step it last went up in
 }
 
 // What steps hand on to their checks, or to later steps.
@@ -3057,10 +3059,16 @@ impl App {
         // These two wait for Explorer to pass on another program's change, which has taken it more than 5 s here
         // after this test's own floods of changes (10,000 folders, 300 shortcuts): not a false alarm when the
         // machine is busy. The note tells a notice Windows never sent from a read of Bookmarks still out, or one the
-        // tree didn't show.
+        // tree didn't show; and in which step the watch last passed one on, and whether Explorer started again (its
+        // watches go with it).
         fn notices_note(a: &App) {
             let read = if a.tree.reading_bookmarks() { ", a read out" } else { "" };
-            note(format!("{} notice(s){read}", a.bookmark_notices.get() - NOTICES.get()));
+            let last = with_test(|t| t.steps[t.last_notice].name);
+            note(format!(
+                "{} notice(s){read}; the last came in: {last}; Explorer restarts: {}",
+                a.bookmark_notices.get() - NOTICES.get(),
+                a.shell_restarts.get()
+            ));
         }
         s.add(
             "a shortcut another program makes in Bookmarks (or an Alt+drag onto its node) shows in the tree while another \
@@ -3962,7 +3970,16 @@ impl App {
         )
         .wait(15000);
 
-        RUN.set(Some(SelfTest { steps: s.0, index: 0, started: None, held: None, busy: false, failures: 0 }));
+        RUN.set(Some(SelfTest {
+            steps: s.0,
+            index: 0,
+            started: None,
+            held: None,
+            busy: false,
+            failures: 0,
+            notices_seen: 0,
+            last_notice: 0,
+        }));
         self.quiet.set(true); // the steps trigger errors on purpose: no beeps
         // Its own timer callback, so the app's code doesn't mention the self-test (the exe you use has none).
         unsafe {
@@ -3994,6 +4011,14 @@ impl App {
             })
         });
         let Some(next) = next else { return };
+        let notices = self.bookmark_notices.get();
+        with_test(|t| {
+            if t.notices_seen != notices {
+                // for the Bookmarks watch steps' note
+                t.notices_seen = notices;
+                t.last_notice = t.index;
+            }
+        });
         match next {
             Next::Wait => {}
             Next::Held => {

@@ -395,6 +395,8 @@ void App::layout() {
 // ---------------------------------------------------------------- messages
 
 LRESULT App::onMessage(UINT msg, WPARAM wp, LPARAM lp) {
+    static const UINT taskbarCreated = RegisterWindowMessageW(L"TaskbarCreated");
+    if (msg == taskbarCreated) ++shellRestarts_;
     // These carry a heap object made on a worker in lParam. Another program broadcasting one of their numbers (apps
     // do broadcast in the WM_APP range) would hand a null or stray pointer; ignore one with no pointer (4.10).
     if (!lp && (msg == WM_APP_LOADED || msg == WM_APP_ICONS || msg == WM_APP_TREE || msg == WM_APP_TREE_ICONS ||
