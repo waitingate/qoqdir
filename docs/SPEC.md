@@ -198,7 +198,8 @@ Targets on an ordinary SSD laptop with a folder of 10,000 files (faster is fine)
   tree without the window waiting half a second: they go in a part at a time,
   about 30 ms of work each, with the window answering in between. Where an
   antivirus hooks every program, each insert costs 120 us, and 10,000 at once
-  kept the window waiting 1.3 s; in parts it waited at most 0.12 s.
+  kept the window waiting 1.3 s; in parts it waited at most 0.12 s, and all
+  were in after 1.3 to 1.4 s.
 - A folder full of programs costs only the own icons of the rows on screen:
   `C:\Windows\System32` has about 700, and reading them all took about 2 s of
   CPU on each open and refresh. The rows scrolled to get theirs a moment later

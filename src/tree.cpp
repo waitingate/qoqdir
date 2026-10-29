@@ -230,14 +230,19 @@ void FolderTree::showChildren(TreeBatch& batch) {
 
 // A part at a time, so the window answers in between (4.7): each insert costs more where accessibility hooks are
 // loaded, as an antivirus's are (120 us here), and 10,000 at once kept the window from answering for over a second.
-// The rest waits for a timer, which Windows sends only once input and painting are done; a posted message would come
-// before them.
+// While input, painting or a timer waits, the rest waits for a timer, which Windows sends only after those (a posted
+// message would come before them). Otherwise it goes on at once, by posting the timer's message: a timer comes 10 to
+// 30 ms late, and those gaps made 10,000 take 2.3 s, not 1.4. Another thread's call needs no timer: Windows answers
+// those before it hands over any posted message.
 void FolderTree::fillMore() {
     KillTimer(parent_, fillTimer_);
     ULONGLONG start = GetTickCount64();
     while (!fills_.empty()) {
         if (GetTickCount64() - start >= 30) {
-            SetTimer(parent_, fillTimer_, USER_TIMER_MINIMUM, nullptr);
+            if (HIWORD(GetQueueStatus(QS_INPUT | QS_PAINT | QS_TIMER)))
+                SetTimer(parent_, fillTimer_, USER_TIMER_MINIMUM, nullptr);
+            else
+                PostMessageW(parent_, WM_TIMER, fillTimer_, 0);
             return;
         }
         Fill& f = fills_.front();

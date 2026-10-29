@@ -5,7 +5,7 @@ use std::collections::{HashMap, HashSet};
 use std::ffi::{OsStr, OsString};
 use std::path::Path;
 
-use windows::Win32::Foundation::{HWND, POINT};
+use windows::Win32::Foundation::{HWND, LPARAM, POINT, WPARAM};
 use windows::Win32::Graphics::Gdi::ScreenToClient;
 use windows::Win32::System::SystemInformation::GetTickCount64;
 use windows::Win32::UI::Controls::{
@@ -23,7 +23,8 @@ use windows::Win32::UI::Shell::{
     FOLDERID_Desktop, FOLDERID_Documents, FOLDERID_Downloads, FOLDERID_Music, FOLDERID_Pictures, FOLDERID_Videos,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    CreateWindowExW, HMENU, KillTimer, SetTimer, USER_TIMER_MINIMUM, WINDOW_EX_STYLE, WINDOW_STYLE, WS_CHILD,
+    CreateWindowExW, GetQueueStatus, HMENU, KillTimer, PostMessageW, QS_INPUT, QS_PAINT, QS_POINTER, QS_TIMER,
+    QS_TOUCH, QUEUE_STATUS_FLAGS, SetTimer, USER_TIMER_MINIMUM, WINDOW_EX_STYLE, WINDOW_STYLE, WM_TIMER, WS_CHILD,
     WS_TABSTOP, WS_VISIBLE,
 };
 use windows::core::{PWSTR, w};
@@ -424,8 +425,10 @@ impl FolderTree {
     /// More of a big folder's subfolders, as many as about 30 ms allows; the timer brings the rest (show_children).
     /// A part at a time, so the window answers in between (4.7): each insert costs more where accessibility hooks are
     /// loaded, as an antivirus's are (120 us here), and 10,000 at once kept the window from answering for over a
-    /// second. The rest waits for a timer, which Windows sends only once input and painting are done; a posted message
-    /// would come before them.
+    /// second. While input, painting or a timer waits, the rest waits for a timer, which Windows sends only after
+    /// those (a posted message would come before them). Otherwise it goes on at once, by posting the timer's message:
+    /// a timer comes 10 to 30 ms late, and those gaps made 10,000 take 2.3 s, not 1.4. Another thread's call needs no
+    /// timer: Windows answers those before it hands over any posted message.
     pub fn fill_more(&self) {
         unsafe {
             let _ = KillTimer(Some(self.parent), self.fill_timer);
@@ -433,7 +436,15 @@ impl FolderTree {
         let start = unsafe { GetTickCount64() };
         loop {
             if unsafe { GetTickCount64() } - start >= 30 {
-                unsafe { SetTimer(Some(self.parent), self.fill_timer, USER_TIMER_MINIMUM, None) };
+                // QS_INPUT as the C++ headers have it for Windows 8 and later, with touch and pointer input.
+                let waiting = QS_INPUT | QS_PAINT | QS_TIMER | QUEUE_STATUS_FLAGS(QS_TOUCH | QS_POINTER);
+                unsafe {
+                    if GetQueueStatus(waiting) >> 16 != 0 {
+                        SetTimer(Some(self.parent), self.fill_timer, USER_TIMER_MINIMUM, None);
+                    } else {
+                        let _ = PostMessageW(Some(self.parent), WM_TIMER, WPARAM(self.fill_timer), LPARAM(0));
+                    }
+                }
                 return;
             }
             // Taken under a short borrow: the insert below calls into Windows, which can call back in (on_notify).
