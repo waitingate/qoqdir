@@ -6,7 +6,6 @@
 
 #include <algorithm>
 #include <mutex>
-#include <thread>
 #include <unordered_map>
 
 // ---------------------------------------------------------------- shell objects
@@ -629,14 +628,26 @@ std::vector<std::wstring> savedFolders(const std::wstring& dir) {
 
 // ---------------------------------------------------------------- background work
 
+namespace {
+DWORD WINAPI worker(void* job) {
+    std::unique_ptr<std::function<void()>> work(static_cast<std::function<void()>*>(job));
+    ULONG guard = 64 * 1024;   // room for the crash log if this worker overflows its stack (as the main thread has)
+    SetThreadStackGuarantee(&guard);
+    HRESULT co = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE);
+    (*work)();
+    if (SUCCEEDED(co)) CoUninitialize();
+    return 0;
+}
+}  // namespace
+
+// A Windows thread, not a std::thread: that goes through winpthreads, which kept a handle for each detached thread
+// in its mingw-w64 14 builds (4.10).
 void inBackground(std::function<void()> work) {
-    std::thread([work = std::move(work)] {
-        ULONG guard = 64 * 1024;   // room for the crash log if this worker overflows its stack (as the main thread has)
-        SetThreadStackGuarantee(&guard);
-        HRESULT co = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE);
-        work();
-        if (SUCCEEDED(co)) CoUninitialize();
-    }).detach();
+    auto job = std::make_unique<std::function<void()>>(std::move(work));
+    HANDLE t = CreateThread(nullptr, 0, worker, job.get(), 0, nullptr);
+    if (!t) abort();   // as std::thread did (no exceptions): the reply its caller waits for would never come
+    job.release();   // the worker owns it now
+    CloseHandle(t);
 }
 
 // ---------------------------------------------------------------- folder watch
