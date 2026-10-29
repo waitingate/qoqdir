@@ -235,7 +235,7 @@ bool App::create(HINSTANCE instance, const CommandLine& cmd, bool useSettings) {
     // Bookmarks are shortcuts in a folder next to the exe (in a self-test: in the test folder).
     std::wstring bookmarks = joinPath(useSettings ? parentPath(exe) : cmd.folders.at(0), L"Bookmarks");
     CreateDirectoryW(bookmarks.c_str(), nullptr);   // fails harmlessly if it exists
-    tree_.create(wnd_, ID_TREE, WM_APP_TREE, WM_APP_TREE_ICONS, bookmarks);
+    tree_.create(wnd_, ID_TREE, WM_APP_TREE, WM_APP_TREE_ICONS, kTreeTimer, bookmarks);
     bookmarksWatch_ = FolderWatch(wnd_, WM_APP_BOOKMARKS, bookmarks);
     list_.create(wnd_, ID_LIST, WM_APP_WANTICONS, WM_APP_ICONS);
     status_ = make(STATUSCLASSNAMEW, L"", SBARS_SIZEGRIP, 0, ID_STATUS);
@@ -675,6 +675,8 @@ void App::onTimer(UINT_PTR id) {
         // What a delete, rename or new folder asked to select, if its folder is still shown. Not available: F5 (4.3).
         QueuedView q = std::exchange(queuedView_, {});
         if (!tab().unavailable) refresh(list_.shows(q.dir) ? std::move(q.view) : ViewState{});
+    } else if (id == kTreeTimer) {   // more of a big folder's subfolders (the tree sets it)
+        tree_.fillMore();
     } else if (id == kStatusTimer) {
         KillTimer(wnd_, kStatusTimer);
         showStatus();

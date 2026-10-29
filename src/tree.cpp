@@ -58,11 +58,13 @@ void readUserFolders(TreeBatch& batch) {
 
 // ---------------------------------------------------------------- the tree
 
-void FolderTree::create(HWND parent, int id, UINT batchMsg, UINT iconMsg, const std::wstring& bookmarks) {
+void FolderTree::create(HWND parent, int id, UINT batchMsg, UINT iconMsg, UINT_PTR fillTimer,
+                        const std::wstring& bookmarks) {
     parent_ = parent;
     bookmarks_ = bookmarks;
     batchMsg_ = batchMsg;
     iconMsg_ = iconMsg;
+    fillTimer_ = fillTimer;
     // TVS_LINESATROOT gives the roots an expand arrow; without TVS_HASLINES no lines show, as in Explorer.
     tv_ = CreateWindowExW(0, WC_TREEVIEWW, L"",
                           WS_CHILD | WS_VISIBLE | WS_TABSTOP | TVS_HASBUTTONS | TVS_LINESATROOT | TVS_SHOWSELALWAYS |
@@ -184,18 +186,19 @@ void FolderTree::startWorker(HTREEITEM node, std::function<void(TreeBatch&)> rea
     });
 }
 
-void FolderTree::addChildren(const TreeBatch& batch) {
+void FolderTree::addChildren(TreeBatch& batch) {
     // Nodes in reading_ are alive (deleted ones leave in TVN_DELETEITEM); the read number spots a reused handle.
     auto it = reading_.find(batch.node);
     if (it == reading_.end() || it->second != batch.read) return;
     reading_.erase(it);
+    dropFill(batch.node);   // what an older read still had to put in: this one is newer
     // A change while this read was out (reread) may be missing from it: one more read once it is shown.
     bool changed = stale_.erase(batch.node);
     showChildren(batch);
     if (changed) reread(batch.node);
 }
 
-void FolderTree::showChildren(const TreeBatch& batch) {
+void FolderTree::showChildren(TreeBatch& batch) {
     if (!batch.node) {   // the user folders go after Bookmarks (always the first root) and before This PC
         HTREEITEM after = TreeView_GetRoot(tv_);
         for (const auto& c : batch.children) after = add(TVI_ROOT, c.path, c.text, c.icon, false, after);
@@ -221,11 +224,39 @@ void FolderTree::showChildren(const TreeBatch& batch) {
         TreeView_SetItem(tv_, &item);
         return;
     }
-    // Each at the front, the last one first: the same order, but Windows never walks the list to its end for each
-    // one, which froze the window for seconds on a folder with 20,000 subfolders.
-    for (auto c = batch.children.rbegin(); c != batch.children.rend(); ++c)
-        add(batch.node, c->path, c->text, c->icon >= 0 ? c->icon : folderIcon(), c->shortcut, TVI_FIRST);
-    TreeView_Expand(tv_, batch.node, TVE_EXPAND);
+    fills_.push_back({batch.node, std::move(batch.children)});
+    fillMore();
+}
+
+// A part at a time, so the window answers in between (4.7): each insert costs more where accessibility hooks are
+// loaded, as an antivirus's are (120 us here), and 10,000 at once kept the window from answering for over a second.
+// The rest waits for a timer, which Windows sends only once input and painting are done; a posted message would come
+// before them.
+void FolderTree::fillMore() {
+    KillTimer(parent_, fillTimer_);
+    ULONGLONG start = GetTickCount64();
+    while (!fills_.empty()) {
+        if (GetTickCount64() - start >= 30) {
+            SetTimer(parent_, fillTimer_, USER_TIMER_MINIMUM, nullptr);
+            return;
+        }
+        Fill& f = fills_.front();
+        if (f.children.empty()) {
+            HTREEITEM node = f.node;
+            fills_.erase(fills_.begin());
+            TreeView_Expand(tv_, node, TVE_EXPAND);
+            continue;
+        }
+        // Each at the front, the last one first: the same order, but Windows never walks the list to its end for each
+        // one, which froze the window for seconds on a folder with 20,000 subfolders.
+        TreeBatch::Child c = std::move(f.children.back());
+        f.children.pop_back();
+        add(f.node, c.path, c.text, c.icon >= 0 ? c.icon : folderIcon(), c.shortcut, TVI_FIRST);
+    }
+}
+
+void FolderTree::dropFill(HTREEITEM node) {
+    std::erase_if(fills_, [&](const Fill& f) { return f.node == node; });
 }
 
 // The shortcuts' own icons, read after their node was shown (startWorker). The node may be gone by now.
@@ -302,6 +333,7 @@ bool FolderTree::onNotify(NMHDR* nm, std::wstring* open, bool* shortcut) {
         if (tv->action & TVE_COLLAPSE) {
             reading_.erase(tv->itemNew.hItem);
             stale_.erase(tv->itemNew.hItem);
+            dropFill(tv->itemNew.hItem);
             TreeView_Expand(tv_, tv->itemNew.hItem, TVE_COLLAPSE | TVE_COLLAPSERESET);
         }
         return false;
@@ -310,6 +342,7 @@ bool FolderTree::onNotify(NMHDR* nm, std::wstring* open, bool* shortcut) {
         // The handle dies with the node (collapse, fill(), shutdown); a read still in flight must not insert under it.
         reading_.erase(reinterpret_cast<NMTREEVIEWW*>(nm)->itemOld.hItem);
         stale_.erase(reinterpret_cast<NMTREEVIEWW*>(nm)->itemOld.hItem);
+        dropFill(reinterpret_cast<NMTREEVIEWW*>(nm)->itemOld.hItem);
         paths_.erase(reinterpret_cast<NMTREEVIEWW*>(nm)->itemOld.hItem);
         return false;
     case TVN_SELCHANGEDW: {

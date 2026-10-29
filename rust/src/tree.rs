@@ -23,7 +23,8 @@ use windows::Win32::UI::Shell::{
     FOLDERID_Desktop, FOLDERID_Documents, FOLDERID_Downloads, FOLDERID_Music, FOLDERID_Pictures, FOLDERID_Videos,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    CreateWindowExW, HMENU, WINDOW_EX_STYLE, WINDOW_STYLE, WS_CHILD, WS_TABSTOP, WS_VISIBLE,
+    CreateWindowExW, HMENU, KillTimer, SetTimer, USER_TIMER_MINIMUM, WINDOW_EX_STYLE, WINDOW_STYLE, WS_CHILD,
+    WS_TABSTOP, WS_VISIBLE,
 };
 use windows::core::{PWSTR, w};
 
@@ -49,12 +50,20 @@ struct Child {
     shortcut: bool,
 }
 
+/// A node's children still to go in, the last first (show_children).
+struct Fill {
+    node: isize,
+    children: Vec<Child>,
+}
+
 pub struct FolderTree {
     hwnd: HWND,
     parent: HWND,
     bookmarks: Location,
     batch_msg: u32,
     icon_msg: u32,
+    fill_timer: usize,
+    fills: RefCell<Vec<Fill>>,
     reads: Cell<u32>,                         // numbers every read started
     paths: RefCell<HashMap<isize, (Location, bool)>>, // each node's folder or shortcut (bool: a bookmark shortcut)
     reading: RefCell<HashMap<isize, u32>>,    // nodes whose subfolders are being read, by read number
@@ -118,8 +127,10 @@ impl FolderTree {
     // ------------------------------------------------------------ the tree
 
     /// Posts `batch_msg` (a `Box<TreeBatch>`, for `add_children`) and `icon_msg` (a `Box<IconBatch>`, for
-    /// `set_icons`) to `parent`. `bookmarks` is the first root, open, with its shortcuts as well as its folders.
-    pub fn create(parent: HWND, id: i32, batch_msg: u32, icon_msg: u32, bookmarks: Location) -> FolderTree {
+    /// `set_icons`) to `parent`, and sets `fill_timer` on it (for `fill_more`). `bookmarks` is the first root, open,
+    /// with its shortcuts as well as its folders.
+    pub fn create(parent: HWND, id: i32, batch_msg: u32, icon_msg: u32, fill_timer: usize, bookmarks: Location)
+                  -> FolderTree {
         // TVS_LINESATROOT gives the roots an expand arrow; without TVS_HASLINES no lines show, as in Explorer.
         let style = WS_CHILD.0 | WS_VISIBLE.0 | WS_TABSTOP.0 | TVS_HASBUTTONS | TVS_LINESATROOT | TVS_SHOWSELALWAYS
             | TVS_TRACKSELECT | TVS_FULLROWSELECT | TVS_NOHSCROLL;
@@ -150,6 +161,8 @@ impl FolderTree {
             bookmarks,
             batch_msg,
             icon_msg,
+            fill_timer,
+            fills: RefCell::new(Vec::new()),
             reads: Cell::new(0),
             paths: RefCell::new(HashMap::new()),
             reading: RefCell::new(HashMap::new()),
@@ -353,6 +366,7 @@ impl FolderTree {
             return;
         }
         self.reading.borrow_mut().remove(&batch.node);
+        self.drop_fill(batch.node); // what an older read still had to put in: this one is newer
         let node = batch.node;
         // A change while this read was out (reread) may be missing from it: one more read once it is shown.
         let changed = self.stale.borrow_mut().remove(&node);
@@ -403,12 +417,51 @@ impl FolderTree {
             }
             return;
         }
-        // Each at the front, the last one first: the same order, but Windows never walks the list to its end for each
-        // one, which froze the window for seconds on a folder with 20,000 subfolders.
-        for c in batch.children.into_iter().rev() {
-            self.add(node, c.location, &c.text, c.icon.unwrap_or_else(folder_icon), c.shortcut, TVI_FIRST);
+        self.fills.borrow_mut().push(Fill { node: node.0, children: batch.children });
+        self.fill_more();
+    }
+
+    /// More of a big folder's subfolders, as many as about 30 ms allows; the timer brings the rest (show_children).
+    /// A part at a time, so the window answers in between (4.7): each insert costs more where accessibility hooks are
+    /// loaded, as an antivirus's are (120 us here), and 10,000 at once kept the window from answering for over a
+    /// second. The rest waits for a timer, which Windows sends only once input and painting are done; a posted message
+    /// would come before them.
+    pub fn fill_more(&self) {
+        unsafe {
+            let _ = KillTimer(Some(self.parent), self.fill_timer);
         }
-        send(self.hwnd, TVM_EXPAND, TVE_EXPAND.0 as usize, node.0);
+        let start = unsafe { GetTickCount64() };
+        loop {
+            if unsafe { GetTickCount64() } - start >= 30 {
+                unsafe { SetTimer(Some(self.parent), self.fill_timer, USER_TIMER_MINIMUM, None) };
+                return;
+            }
+            // Taken under a short borrow: the insert below calls into Windows, which can call back in (on_notify).
+            let next = {
+                let mut fills = self.fills.borrow_mut();
+                let Some(fill) = fills.first_mut() else { return };
+                match fill.children.pop() {
+                    Some(child) => Ok((fill.node, child)),
+                    None => Err(fills.remove(0).node),
+                }
+            };
+            match next {
+                // Each at the front, the last one first: the same order, but Windows never walks the list to its end
+                // for each one, which froze the window for seconds on a folder with 20,000 subfolders.
+                Ok((node, c)) => {
+                    let icon = c.icon.unwrap_or_else(folder_icon);
+                    self.add(HTREEITEM(node), c.location, &c.text, icon, c.shortcut, TVI_FIRST);
+                }
+                Err(node) => {
+                    send(self.hwnd, TVM_EXPAND, TVE_EXPAND.0 as usize, node);
+                }
+            }
+        }
+    }
+
+    /// Its children still to go in won't (the node closed, went, or is read anew).
+    fn drop_fill(&self, node: isize) {
+        self.fills.borrow_mut().retain(|f| f.node != node);
     }
 
     /// The shortcuts' own icons, read after their node was shown (start_worker). The node may be gone by now.
@@ -504,6 +557,7 @@ impl FolderTree {
                 if tv.action.0 & TVE_COLLAPSE.0 != 0 {
                     self.reading.borrow_mut().remove(&tv.itemNew.hItem.0);
                     self.stale.borrow_mut().remove(&tv.itemNew.hItem.0);
+                    self.drop_fill(tv.itemNew.hItem.0);
                     send(self.hwnd, TVM_EXPAND, (TVE_COLLAPSE.0 | TVE_COLLAPSERESET.0) as usize, tv.itemNew.hItem.0);
                 }
                 None
@@ -513,6 +567,7 @@ impl FolderTree {
                 let node = unsafe { (*(nm as *const NMTREEVIEWW)).itemOld.hItem.0 };
                 self.reading.borrow_mut().remove(&node);
                 self.stale.borrow_mut().remove(&node);
+                self.drop_fill(node);
                 self.paths.borrow_mut().remove(&node);
                 None
             }

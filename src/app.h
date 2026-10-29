@@ -182,7 +182,8 @@ private:
     void selfTestKey(WPARAM vk, bool ctrl = false, bool shift = false, bool alt = false);
     void selfTestType(const std::wstring& text);
 
-    static constexpr UINT_PTR kRefreshTimer = 1, kStatusTimer = 2, kLoadingTimer = 3, kSelfTestTimer = 50;
+    static constexpr UINT_PTR kRefreshTimer = 1, kStatusTimer = 2, kLoadingTimer = 3, kTreeTimer = 4,
+                              kSelfTestTimer = 50;
     int exitCode_ = 1;   // a run that never finishes (closed by hand, no window) has not passed
     bool useSettings_ = true;
 

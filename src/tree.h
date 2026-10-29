@@ -23,8 +23,9 @@ struct TreeBatch {
 class FolderTree {
 public:
     // Posts `batchMsg` (a TreeBatch*, for addChildren) and `iconMsg` (an IconBatch*, with its node as WPARAM, for
-    // setIcons) to `parent`. `bookmarks` is the first root, open; it and the folders in it show shortcuts too.
-    void create(HWND parent, int id, UINT batchMsg, UINT iconMsg, const std::wstring& bookmarks);
+    // setIcons) to `parent`, and sets `fillTimer` on it (for fillMore). `bookmarks` is the first root, open; it and the
+    // folders in it show shortcuts too.
+    void create(HWND parent, int id, UINT batchMsg, UINT iconMsg, UINT_PTR fillTimer, const std::wstring& bookmarks);
     HWND hwnd() const { return tv_; }
     const std::wstring& bookmarks() const { return bookmarks_; }
     HTREEITEM lastRoot() const;   // This PC, the last root
@@ -32,7 +33,9 @@ public:
     void refreshDrives();   // reads This PC's drives again; the rest of the tree stays as it is
     void refresh();         // F5: reads again the folders whose subfolders are shown or known to be none (5.5)
     void refreshFolder(const std::wstring& dir);   // the same for that folder's nodes alone
-    void addChildren(const TreeBatch& batch);
+    void addChildren(TreeBatch& batch);   // takes its children
+    // More of a big folder's subfolders, as many as about 30 ms allows; the timer brings the rest (showChildren).
+    void fillMore();
     UINT batchMessage() const { return batchMsg_; }   // what a read's result comes back as (self-test)
     bool readingBookmarks() const { return reading_.count(TreeView_GetRoot(tv_)) > 0; }   // a read is out (self-test)
     void setIcons(HTREEITEM node, const IconBatch& batch);
@@ -51,7 +54,8 @@ private:
                   HTREEITEM after = TVI_LAST);   // a bookmark shortcut gets no expand arrow
     void startReading(HTREEITEM node);
     void reread(HTREEITEM node);   // what refresh() does for one node
-    void showChildren(const TreeBatch& batch);   // addChildren's batch, put in the tree
+    void showChildren(TreeBatch& batch);   // addChildren's batch, put in the tree
+    void dropFill(HTREEITEM node);         // its children still to go in won't (the node closed, went, or is read anew)
     // Runs `reader` on a worker thread to fill a batch, then posts it as the children of `node`.
     void startWorker(HTREEITEM node, std::function<void(TreeBatch&)> reader);
     const std::wstring& pathOf(HTREEITEM node) const;
@@ -61,6 +65,9 @@ private:
     HWND tv_ = nullptr, parent_ = nullptr;
     std::wstring bookmarks_;
     UINT batchMsg_ = 0, iconMsg_ = 0;
+    UINT_PTR fillTimer_ = 0;
+    struct Fill { HTREEITEM node; std::vector<TreeBatch::Child> children; };   // still to go in, the last first
+    std::vector<Fill> fills_;
     unsigned reads_ = 0;                      // numbers every read started
     struct Node { std::wstring path; bool shortcut = false; };   // a bookmark shortcut, or a folder (its own path)
     std::map<HTREEITEM, Node> paths_;         // each node's folder or shortcut; a node leaves it when deleted

@@ -129,6 +129,7 @@ struct CommandDone {
 pub const TIMER_REFRESH: usize = 1;
 const TIMER_STATUS: usize = 2;
 pub const TIMER_LOADING: usize = 3;
+const TIMER_TREE: usize = 4;
 
 const MAX_HISTORY: usize = 100;
 /// Soft gray (#EBEBEB): less glare than white.
@@ -617,7 +618,8 @@ impl App {
                 _ => exe.with_file_name("Bookmarks"),
             };
             let _ = std::fs::create_dir(&bookmarks); // fails harmlessly if it exists
-            let tree = FolderTree::create(wnd, ID_TREE, WM_APP_TREE, WM_APP_TREE_ICONS, Location::dir(bookmarks));
+            let bookmarks = Location::dir(bookmarks);
+            let tree = FolderTree::create(wnd, ID_TREE, WM_APP_TREE, WM_APP_TREE_ICONS, TIMER_TREE, bookmarks);
             let bookmarks_watch = FolderWatch::new(wnd, WM_APP_BOOKMARKS, tree.bookmarks());
             let list = FileList::create(wnd, ID_LIST, WM_APP_WANTICONS, WM_APP_ICONS);
             const SBARS_SIZEGRIP: u32 = 0x100;
@@ -1294,6 +1296,7 @@ impl App {
                         }
                     }
                 }
+                TIMER_TREE => self.tree.fill_more(), // more of a big folder's subfolders (the tree sets it)
                 TIMER_STATUS => {
                     let _ = KillTimer(Some(self.wnd), TIMER_STATUS);
                     self.show_status();

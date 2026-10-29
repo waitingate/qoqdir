@@ -2021,7 +2021,7 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
                 ++shown;
             selfTest_->note = std::to_wstring(shown) + L" shown, the window waited up to " +
                               std::to_wstring(int(longestWait)) + L" ms";
-            return shown == 10000 && longestWait < 1000;
+            return shown == 10000 && longestWait < 500;   // they go in a part at a time (4.7)
         },
         10000);
     backHome(L"(back to the test folder)");

@@ -2978,7 +2978,7 @@ impl App {
                 T0.set(Some(Instant::now()));
                 let shown = a.tree.siblings(a.tree.child(a.tree.child(a.tree_two()))).count();
                 note(format!("{shown} shown, the window waited up to {} ms", KEY_MS.get()));
-                shown == 10000 && KEY_MS.get() < 1000
+                shown == 10000 && KEY_MS.get() < 500 // they go in a part at a time (4.7)
             },
         )
         .wait(10000);
