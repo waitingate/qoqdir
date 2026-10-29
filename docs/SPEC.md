@@ -823,7 +823,9 @@ result:
     text file there stays. After closing two tabs, Ctrl+O opens `sub` and This PC
     after the test folder (which is open already) and shows `sub`. A second save
     that starts while one is still writing waits for it, and leaves only its own
-    shortcuts.
+    shortcuts. While a program sends shell notices, as these 300 shortcut saves
+    do, Windows reports no other change to any program, and those changes are
+    lost; so the test then makes a file each second until the list notices one.
 42. With a second tab (`sub`) right of the current one, Ctrl+Shift+PgDn twice
     moves the current tab to the end, and it stays the current tab; Ctrl+Shift+PgUp
     twice moves it back to the start.

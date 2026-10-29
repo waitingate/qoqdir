@@ -149,6 +149,35 @@ impl Steps {
         });
     }
 
+    /// Before a step that waits on a watch, after one that sent shell notices (a shortcut save sends one): while a
+    /// program sends them, Windows reports no other change, to any program, and those changes are lost. A new file in
+    /// the test folder each second until the list hears one, then they go.
+    fn heard_again(&mut self, name: &'static str) {
+        let file = |i: u32| format!("heard {i}.txt");
+        self.add(name, |_| COUNT.set(0), move |a| {
+            let made = COUNT.get();
+            if (0..made).any(|i| a.listed(&file(i))) {
+                return true;
+            }
+            if u128::from(made) * 1000 <= step_ms() {
+                write_file(&p(&file(made)));
+                COUNT.set(made + 1);
+            }
+            false
+        })
+        .wait(60000);
+        self.add(
+            "(remove them)",
+            move |a| {
+                for i in 0..COUNT.get() {
+                    let _ = std::fs::remove_file(p(&file(i)));
+                }
+                a.refresh(ViewState::default());
+            },
+            move |a| !(0..COUNT.get()).any(|i| a.listed(&file(i))) && a.idle(),
+        );
+    }
+
     fn push(&mut self, name: &'static str, act: Option<Act>, done: Check) -> &mut Step {
         self.0.push(Step { name, act, done, timeout_ms: 5000, while_loading: false, copies: false });
         self.0.last_mut().expect("just added")
@@ -2503,9 +2532,18 @@ impl App {
                     note(format!("{taken}, {lit}"));
                     let _ = target.DragLeave();
                 }
-                let _ = std::fs::remove_file(p("vanished.lnk"));
             },
-            |a| noted() == "taken, not lit" && !a.listed("vanished.lnk"),
+            |_| noted() == "taken, not lit",
+        );
+        // Read again, not left to the watch: the shortcut's save sent a shell notice, and Windows may not report the
+        // delete so soon after (heard_again).
+        s.add(
+            "(remove it)",
+            |a| {
+                let _ = std::fs::remove_file(p("vanished.lnk"));
+                a.refresh(ViewState::default());
+            },
+            |a| !a.listed("vanished.lnk") && a.idle(),
         );
         s.add("(close the extra tab)", |a| a.close_tab(a.active() + 1), |a| a.idle() && a.tabs() == 1);
         s.add(
@@ -3036,6 +3074,7 @@ impl App {
         )
         .wait(30000);
         s.add("(remove them)", |_| { let _ = std::fs::remove_dir_all(p("tabsrace")); }, |_| !exists(&p("tabsrace")));
+        s.heard_again("(until Windows reports changes again: it doesn't while those 300 saves send notices)");
         s.add(
             "Bookmark this folder on a tab's menu writes a shortcut to the tab's folder in Bookmarks and shows it in the \
              tree (5.6)",
@@ -3054,10 +3093,9 @@ impl App {
             },
             |a| a.bookmark_nodes() == "one,two,sub",
         );
-        // These two wait for Explorer to pass on another program's change, which has taken it more than 5 s here
-        // after this test's own floods of changes (10,000 folders, 300 shortcuts): not a false alarm when the
-        // machine is busy. The note tells a notice Windows never sent from a read of Bookmarks still out, or one the
-        // tree didn't show.
+        // These two wait for Windows to pass on another program's change, which has taken it more than 5 s here after
+        // this test's own floods of changes (10,000 folders): not a false alarm when the machine is busy. The note
+        // tells a notice Windows never sent from a read of Bookmarks still out, or one the tree didn't show.
         fn notices_note(a: &App) {
             let read = if a.tree.reading_bookmarks() { ", a read out" } else { "" };
             note(format!("{} notice(s){read}", a.bookmark_notices.get() - NOTICES.get()));

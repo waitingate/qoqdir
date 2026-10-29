@@ -297,6 +297,32 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
         add(L"(Esc puts the path back and returns to the list)", [=, this] { selfTestKey(VK_ESCAPE); },
             [=, this] { return windowText(address_) == locationText(tab().path) && GetFocus() == list_.hwnd(); });
     };
+    // Before a step that waits on a watch, after one that sent shell notices (a shortcut save sends one): while a
+    // program sends them, Windows reports no other change, to any program, and those changes are lost. A new file in
+    // the test folder each second until the list hears one, then they go.
+    auto heardAgain = [&](const wchar_t* name) {
+        auto made = std::make_shared<int>(0);
+        auto file = [](int i) { return L"heard " + std::to_wstring(i) + L".txt"; };
+        add(name, [=] { *made = 0; },
+            [=, this] {
+                for (int i = 0; i < *made; ++i)
+                    if (listed(file(i))) return true;
+                if (ULONGLONG(*made) * 1000 <= GetTickCount64() - selfTest_->startTick)
+                    writeFile(path(file((*made)++)));
+                return false;
+            },
+            60000);
+        add(L"(remove them)",
+            [=, this] {
+                for (int i = 0; i < *made; ++i) DeleteFileW(path(file(i)).c_str());
+                refresh(ViewState{});
+            },
+            [=, this] {
+                for (int i = 0; i < *made; ++i)
+                    if (listed(file(i))) return false;
+                return idle();
+            });
+    };
     auto oneTabHome = [=, this] { return tabs_.size() == 1 && at(dir); };   // back to the test folder's own tab
     static double t0 = 0, keyMs = 0;   // keyMs: how long a key press kept the window busy
     static int rows = 0;               // list rows before a refresh that must wait
@@ -1641,9 +1667,16 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
             selfTest_->note = std::wstring(effect == DROPEFFECT_NONE ? L"refused" : L"taken") +
                               (rowLit(L"vanished.lnk") ? L", lit" : L", not lit");
             listDrop_->DragLeave();
-            DeleteFileW(path(L"vanished.lnk").c_str());
         },
-        [=, this] { return selfTest_->note == L"taken, not lit" && !listed(L"vanished.lnk"); });
+        [=, this] { return selfTest_->note == L"taken, not lit"; });
+    // Read again, not left to the watch: the shortcut's save sent a shell notice, and Windows may not report the
+    // delete so soon after (heardAgain).
+    add(L"(remove it)",
+        [=, this] {
+            DeleteFileW(path(L"vanished.lnk").c_str());
+            refresh(ViewState{});
+        },
+        [=, this] { return !listed(L"vanished.lnk") && idle(); });
     add(L"(close the extra tab)", [=, this] { closeTab(active_ + 1); }, [=, this] { return idle() && tabs_.size() == 1; });
     add(L"middle-click on a folder opens it in a new background tab",
         [=, this] {
@@ -2060,6 +2093,7 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
         30000);
     add(L"(remove them)", [=, this] { deleteTree(path(L"tabsrace")); },
         [=, this] { return !exists(path(L"tabsrace")); });
+    heardAgain(L"(until Windows reports changes again: it doesn't while those 300 saves send notices)");
     add(L"Bookmark this folder on a tab's menu writes a shortcut to the tab's folder in Bookmarks and shows it in the "
         L"tree (5.6)",
         [=, this] { bookmarkTab(active_); },
@@ -2073,9 +2107,9 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
             tree_.refreshFolder(tree_.bookmarks());
         },
         [=, this] { return bookmarkNodes() == L"one,two,sub"; });
-    // These two wait for Explorer to pass on another program's change, which has taken it more than 5 s here after
-    // this test's own floods of changes (10,000 folders, 300 shortcuts): not a false alarm when the machine is busy.
-    // The note tells a notice Windows never sent from a read of Bookmarks still out, or one the tree didn't show.
+    // These two wait for Windows to pass on another program's change, which has taken it more than 5 s here after this
+    // test's own floods of changes (10,000 folders): not a false alarm when the machine is busy. The note tells a
+    // notice Windows never sent from a read of Bookmarks still out, or one the tree didn't show.
     auto noticesBefore = std::make_shared<int>(0);
     auto noticesNote = [=, this] {
         selfTest_->note = std::to_wstring(bookmarkNotices_ - *noticesBefore) + L" notice(s)" +
