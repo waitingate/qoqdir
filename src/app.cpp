@@ -1097,6 +1097,17 @@ void App::onLoaded(Listing&& listing, UINT generation) {
 
     t.path = listing.path;
     t.unavailable = false;
+    // The watch stays while it watches the folder shown: a reload is not a change. Otherwise the old one goes first,
+    // and with it a refresh only it asked for: that was about a folder no longer shown, unless this one is the folder
+    // it was in, which it watched too (4.5). The new one comes once the rows are drawn (below).
+    if (!watch_.watches(t.path)) {
+        bool above = watch_.watchesChildOf(t.path);
+        watch_ = {};
+        if (refreshQueued_ && refreshForWatch_ && !above) {
+            KillTimer(wnd_, kRefreshTimer);
+            refreshQueued_ = false;
+        }
+    }
     FILETIME written = listing.written;
     // The tree follows the folder shown: its node is read again when the subfolders or shortcuts changed (5.5).
     std::vector<std::wstring> treeNames = reload ? list_.treeNames() : std::vector<std::wstring>{};
@@ -1123,18 +1134,7 @@ void App::onLoaded(Listing&& listing, UINT generation) {
 
     // The folder shows first, then gets its watch: setting one up takes up to 75 ms, which the rows waited for (4.7).
     RedrawWindow(wnd_, nullptr, nullptr, RDW_UPDATENOW | RDW_ALLCHILDREN);
-    // The watch stays while it watches the folder shown, and a reload is not a change. Otherwise the old one goes, and
-    // with it a refresh only it asked for: that was about a folder no longer shown, unless this one is the folder it
-    // was in, which it watched too (4.5).
-    if (!watch_.watches(t.path)) {
-        bool above = watch_.watchesChildOf(t.path);
-        watch_ = {};
-        if (refreshQueued_ && refreshForWatch_ && !above) {
-            KillTimer(wnd_, kRefreshTimer);
-            refreshQueued_ = false;
-        }
-        watch_ = FolderWatch(wnd_, WM_APP_CHANGED, t.path);
-    }
+    if (!watch_.watches(t.path)) watch_ = FolderWatch(wnd_, WM_APP_CHANGED, t.path);
     // A change during the read, before the watch was there, is missed by both: the folder's own time tells. That
     // refresh is about this folder, as the watch's would be, so it goes if another one is shown first (4.5).
     FILETIME now = folderWritten(t.path);

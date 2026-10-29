@@ -1962,6 +1962,19 @@ impl App {
 
         let location = listing.location.clone();
         let written = listing.written;
+        // The watch stays while it watches the folder shown: a reload is not a change. Otherwise the old one goes
+        // first, and with it a refresh only it asked for: that was about a folder no longer shown, unless this one is
+        // the folder it was in, which it watched too (4.5). The new one comes once the rows are drawn (below).
+        if !self.watch.borrow().as_ref().is_some_and(|w| w.watches(&location)) {
+            let above = self.watch.borrow().as_ref().is_some_and(|w| w.watches_child_of(&location));
+            drop(self.watch.take());
+            if self.refresh_queued.get() && self.refresh_for_watch.get() && !above {
+                unsafe {
+                    let _ = KillTimer(Some(self.wnd), TIMER_REFRESH);
+                }
+                self.refresh_queued.set(false);
+            }
+        }
         // The tree follows the folder shown: its node is read again when the subfolders or shortcuts changed (5.5).
         let tree_names = if reload { self.list.tree_names() } else { Vec::new() };
         self.list.set_listing(listing);
@@ -2004,18 +2017,7 @@ impl App {
         unsafe {
             let _ = RedrawWindow(Some(self.wnd), None, None, RDW_UPDATENOW | RDW_ALLCHILDREN);
         }
-        // The watch stays while it watches the folder shown, and a reload is not a change. Otherwise the old one goes,
-        // and with it a refresh only it asked for: that was about a folder no longer shown, unless this one is the
-        // folder it was in, which it watched too (4.5).
         if !self.watch.borrow().as_ref().is_some_and(|w| w.watches(&location)) {
-            let above = self.watch.borrow().as_ref().is_some_and(|w| w.watches_child_of(&location));
-            drop(self.watch.take());
-            if self.refresh_queued.get() && self.refresh_for_watch.get() && !above {
-                unsafe {
-                    let _ = KillTimer(Some(self.wnd), TIMER_REFRESH);
-                }
-                self.refresh_queued.set(false);
-            }
             let _ = self.watch.replace(Some(FolderWatch::new(self.wnd, WM_APP_CHANGED, &location)));
         }
         // A change during the read, before the watch was there, is missed by both: the folder's own time tells. That
