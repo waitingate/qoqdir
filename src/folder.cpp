@@ -218,15 +218,17 @@ void listDrives(Listing& r) {
         Item it;
         it.name = std::move(root);
         it.attrs = FILE_ATTRIBUTE_DIRECTORY;
+        std::wstring type;
         if (auto sfi = fileInfo(it.name, 0, SHGFI_DISPLAYNAME | SHGFI_TYPENAME | SHGFI_SYSICONINDEX | SHGFI_SMALLICON)) {
             it.label = sfi->szDisplayName;
-            it.type = sfi->szTypeName;
+            type = sfi->szTypeName;
             it.icon = sfi->iIcon;
         }
         ULARGE_INTEGER freeBytes{}, total{};
         // Free bytes available to the caller (respecting a quota), as Explorer shows and the Rust version reads.
         if (GetDiskFreeSpaceExW(it.name.c_str(), &freeBytes, &total, nullptr))
-            it.type += L"  \u00b7  " + byteSize(freeBytes.QuadPart) + L" free of " + byteSize(total.QuadPart);
+            type += L"  \u00b7  " + byteSize(freeBytes.QuadPart) + L" free of " + byteSize(total.QuadPart);
+        if (!type.empty()) it.type = std::make_shared<const std::wstring>(std::move(type));
         r.items.push_back(std::move(it));
     }
 }
@@ -267,6 +269,9 @@ Listing listFolder(const std::wstring& path, bool showHidden, const std::functio
     } while (FindNextFileW(h, &fd));
     DWORD end = GetLastError();   // ERROR_NO_MORE_FILES, or why the read broke off (e.g. the network went)
     if (end != ERROR_NO_MORE_FILES) return Listing{path, {}, end};   // never half a folder as all of it
+    // Grown by doubling, the vector has room for up to twice its items, kept while the folder is shown: 0.7 MB for
+    // 10,000. Moving them to a block their size takes well under a millisecond.
+    r.items.shrink_to_fit();
     return r;
 }
 
@@ -307,8 +312,8 @@ void sortItems(std::vector<Item>& items, SortKey key, bool ascending) {
     if (key == SortKey::Type) {
         std::unordered_map<std::wstring, size_t> seen;
         for (const Item& it : items) {
-            auto [at, fresh] = seen.try_emplace(it.type, typeKeys.size());
-            if (fresh) typeKeys.push_back(sortKey(it.type));
+            auto [at, fresh] = seen.try_emplace(it.typeText(), typeKeys.size());
+            if (fresh) typeKeys.push_back(sortKey(it.typeText()));
             typeOf.push_back(at->second);
         }
     }
@@ -322,7 +327,7 @@ void sortItems(std::vector<Item>& items, SortKey key, bool ascending) {
         case SortKey::Modified: c = CompareFileTime(&a.modified, &b.modified); break;
         case SortKey::Size: c = a.size < b.size ? -1 : (a.size > b.size ? 1 : 0); break;
         case SortKey::Type:   // by the type name shown in the list when known, else by extension
-            if (a.type.empty() || b.type.empty())
+            if (a.typeText().empty() || b.typeText().empty())
                 c = CompareStringOrdinal(extPtr(a.name), -1, extPtr(b.name), -1, TRUE) - CSTR_EQUAL;
             else if (typeOf[i] != typeOf[j])   // the same type needs no comparing
                 c = typeKeys[typeOf[i]].compare(typeKeys[typeOf[j]]);

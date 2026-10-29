@@ -8,6 +8,7 @@ use std::mem::ManuallyDrop;
 use std::os::windows::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
+use std::sync::Arc;
 
 use windows::Win32::Foundation::{
     CloseHandle, E_FAIL, E_INVALIDARG, ERROR_CANCELLED, FILETIME, GlobalFree, HANDLE, HWND, LPARAM, LRESULT, MAX_PATH,
@@ -76,7 +77,7 @@ const LAST_CMD: u32 = 0x7FFF;
 const OWN_FIRST: u32 = 0x8000; // the app's own items' ids, after the shell's
 
 thread_local! {
-    static TYPES: RefCell<HashMap<String, (i32, OsString)>> = RefCell::new(HashMap::new());
+    static TYPES: RefCell<HashMap<String, (i32, Arc<OsStr>)>> = RefCell::new(HashMap::new());
     // Set only while a context menu is on screen, for owner-drawn submenus.
     static OPEN_MENU: RefCell<(Option<IContextMenu2>, Option<IContextMenu3>)> = const { RefCell::new((None, None)) };
 }
@@ -232,18 +233,19 @@ fn type_key(it: &Item) -> String {
 }
 
 /// Icon and type name depend only on the extension: one shell call, with no disk access (but the type's icon handler).
-fn ask_type(it: &Item) -> (i32, OsString) {
+fn ask_type(it: &Item) -> (i32, Arc<OsStr>) {
     let (probe, attrs) = if it.is_dir() {
         (wide("folder"), FILE_ATTRIBUTE_DIRECTORY)
     } else {
         (wide(format!("file{}", type_key(it))), FILE_ATTRIBUTE_NORMAL)
     };
     let flags = SHGFI_USEFILEATTRIBUTES | SHGFI_SYSICONINDEX | SHGFI_SMALLICON | SHGFI_TYPENAME;
-    file_info(&probe, attrs, flags).map(|s| (s.iIcon, from_wide(&s.szTypeName))).unwrap_or_default()
+    let (icon, text) = file_info(&probe, attrs, flags).map(|s| (s.iIcon, from_wide(&s.szTypeName))).unwrap_or_default();
+    (icon, text.into()) // given to every item of the type (Item::type_text)
 }
 
 /// Cached for the UI thread: the folder icon, and the few items a load did not fill in (`fill_types`).
-fn type_info(it: &Item) -> (i32, OsString) {
+fn type_info(it: &Item) -> (i32, Arc<OsStr>) {
     let key = type_key(it);
     if let Some(found) = TYPES.with(|t| t.borrow().get(&key).cloned()) {
         return found;
@@ -257,7 +259,7 @@ fn type_info(it: &Item) -> (i32, OsString) {
 /// asked once per extension. Worker thread: a file type's icon handler (a DLL some program installed) can hang, and
 /// asked here it hangs the load, not the window.
 pub fn fill_types(items: &mut [Item]) {
-    let mut seen: HashMap<String, (i32, OsString)> = HashMap::new();
+    let mut seen: HashMap<String, (i32, Arc<OsStr>)> = HashMap::new();
     for it in items.iter_mut() {
         if it.type_text.is_some() {
             continue; // a drive comes with its own
@@ -302,7 +304,7 @@ pub fn folder_icon() -> i32 {
     type_info(&Item { attrs: FILE_ATTRIBUTE_DIRECTORY.0, ..Default::default() }).0
 }
 
-pub fn type_name(it: &Item) -> OsString {
+pub fn type_name(it: &Item) -> Arc<OsStr> {
     it.type_text.clone().unwrap_or_else(|| type_info(it).1)
 }
 

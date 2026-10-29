@@ -296,11 +296,12 @@ int main(int argc, char** argv) {
     // sortItems by Type uses the type name shown in the list (when known), like Explorer
     {
         std::vector<Item> v = {file(L"b.txt"), file(L"a.zip"), file(L"c.docx"), file(L"a.txt"), file(L"c.txt")};
-        v[0].type = L"Text Document";
-        v[1].type = L"Compressed (zipped) Folder";
-        v[2].type = L"Microsoft Word Document";
-        v[3].type = L"Text Document";   // the same type: by name
-        v[4].type = L"text document";   // the same but for letter case: by name too
+        auto type = [](const wchar_t* name) { return std::make_shared<const std::wstring>(name); };
+        v[0].type = type(L"Text Document");
+        v[1].type = type(L"Compressed (zipped) Folder");
+        v[2].type = type(L"Microsoft Word Document");
+        v[3].type = type(L"Text Document");   // the same type: by name
+        v[4].type = type(L"text document");   // the same but for letter case: by name too
         sortItems(v, SortKey::Type, true);
         CHECK_EQ(names(v), L"a.zip,c.docx,a.txt,b.txt,c.txt");
         sortItems(v, SortKey::Type, false);

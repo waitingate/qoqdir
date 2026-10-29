@@ -4,6 +4,7 @@ use std::collections::HashMap;
 use std::ffi::{OsStr, OsString};
 use std::os::windows::ffi::{OsStrExt, OsStringExt};
 use std::path::{Component, Path, PathBuf, Prefix};
+use std::sync::Arc;
 
 use windows::Win32::Foundation::{
     ERROR_FILE_NOT_FOUND, ERROR_NO_MORE_FILES, ERROR_OPERATION_ABORTED, FILETIME, HANDLE, LPARAM, SYSTEMTIME,
@@ -345,7 +346,9 @@ pub fn command_line_words(line: &OsStr) -> Vec<OsString> {
 pub struct Item {
     pub name: OsString,              // file name, or "C:\" for a drive
     pub label: Option<OsString>,     // shown instead of name (drives)
-    pub type_text: Option<OsString>, // the type name shown, from the shell: the loader fills it (fill_types), the list what is left
+    // The type name shown, from the shell: the loader fills it (fill_types), the list what is left. Shared by the
+    // items of one type: a copy in each cost 1.4 MB for 10,000.
+    pub type_text: Option<Arc<OsStr>>,
     pub size: u64,
     pub modified: u64, // FILETIME as one number
     pub attrs: u32,
@@ -445,6 +448,9 @@ pub fn list_folder(location: &Location, show_hidden: bool, stop: Option<&dyn Fn(
             break;
         }
     }
+    // Grown by doubling, the vector has room for up to twice its items, kept while the folder is shown: 0.7 MB for
+    // 10,000. Moving them to a block their size takes well under a millisecond.
+    r.items.shrink_to_fit();
     r
 }
 
@@ -471,17 +477,19 @@ fn list_drives(r: &mut Listing) {
             ..Default::default()
         };
         let flags = SHGFI_DISPLAYNAME | SHGFI_TYPENAME | SHGFI_SYSICONINDEX | SHGFI_SMALLICON;
+        let mut text = None;
         if let Some(sfi) = crate::shell::file_info(&root_w, FILE_FLAGS_AND_ATTRIBUTES(0), flags) {
             it.label = Some(from_wide(&sfi.szDisplayName));
-            it.type_text = Some(from_wide(&sfi.szTypeName));
+            text = Some(from_wide(&sfi.szTypeName));
             it.icon = sfi.iIcon;
         }
         let (mut free, mut total) = (0u64, 0u64);
         if unsafe { GetDiskFreeSpaceExW(pcwstr(&root_w), Some(&mut free), Some(&mut total), None) }.is_ok() {
-            let mut t = it.type_text.take().unwrap_or_default();
+            let mut t = text.take().unwrap_or_default();
             t.push(format!("  \u{b7}  {} free of {}", byte_size(free).to_string_lossy(), byte_size(total).to_string_lossy()));
-            it.type_text = Some(t);
+            text = Some(t);
         }
+        it.type_text = text.map(Arc::from);
         r.items.push(it);
     }
 }
@@ -921,11 +929,12 @@ mod tests {
             item("a.txt", 0, false),
             item("c.txt", 0, false),
         ];
-        v[0].type_text = Some("Text Document".into());
-        v[1].type_text = Some("Compressed (zipped) Folder".into());
-        v[2].type_text = Some("Microsoft Word Document".into());
-        v[3].type_text = Some("Text Document".into()); // the same type: by name
-        v[4].type_text = Some("text document".into()); // the same but for letter case: by name too
+        let type_of = |name: &str| Some(Arc::from(OsStr::new(name)));
+        v[0].type_text = type_of("Text Document");
+        v[1].type_text = type_of("Compressed (zipped) Folder");
+        v[2].type_text = type_of("Microsoft Word Document");
+        v[3].type_text = type_of("Text Document"); // the same type: by name
+        v[4].type_text = type_of("text document"); // the same but for letter case: by name too
         sort_items(&mut v, SortKey::Type, true);
         assert_eq!(names(&v), "a.zip,c.docx,a.txt,b.txt,c.txt");
         sort_items(&mut v, SortKey::Type, false);

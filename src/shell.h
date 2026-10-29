@@ -30,6 +30,7 @@ int folderIcon();
 // asked here it hangs the load, not the window.
 void fillTypes(std::vector<Item>& items);
 const std::wstring& typeName(const Item& it);          // UI thread only (cached)
+std::shared_ptr<const std::wstring> sharedTypeName(const Item& it);   // the same, to keep in Item::type
 std::wstring knownFolder(REFKNOWNFOLDERID id);
 
 // ---------------------------------------------------------------- menus

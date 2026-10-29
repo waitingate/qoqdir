@@ -51,7 +51,7 @@ void FileList::setListing(Listing&& listing) {
         shown_ = true;
         items_ = std::move(listing.items);
         for (Item& it : items_)   // cached per extension, so this is quick; lets Type sort by what is shown
-            if (it.type.empty()) it.type = typeName(it);
+            if (it.typeText().empty()) it.type = sharedTypeName(it);
         sortItems(items_, key_, asc_);
     });
 }

@@ -620,7 +620,7 @@ impl FileList {
                     let text: OsString = match lvi.iSubItem {
                         0 => it.shown().to_os_string(),
                         1 => format_time(it.modified),
-                        2 => type_name(it),
+                        2 => type_name(it).to_os_string(),
                         3 if !it.is_dir() => format_size(it.size),
                         _ => OsString::new(),
                     };

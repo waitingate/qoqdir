@@ -171,7 +171,7 @@ void setTheme(HWND control, const wchar_t* name) {
 namespace {
 struct TypeInfo {
     int icon = 0;
-    std::wstring type;
+    std::shared_ptr<const std::wstring> type;   // given to every item of the type (Item::type)
 };
 
 std::wstring typeKey(const Item& it) { return it.isDir() ? L"\\" : extensionOf(it.name); }
@@ -182,7 +182,7 @@ TypeInfo askType(const Item& it) {
     SHFILEINFOW sfi = fileInfo(probe, it.isDir() ? FILE_ATTRIBUTE_DIRECTORY : FILE_ATTRIBUTE_NORMAL,
                                SHGFI_USEFILEATTRIBUTES | SHGFI_SYSICONINDEX | SHGFI_SMALLICON | SHGFI_TYPENAME)
                          .value_or(SHFILEINFOW{});
-    return {sfi.iIcon, sfi.szTypeName};
+    return {sfi.iIcon, std::make_shared<const std::wstring>(sfi.szTypeName)};
 }
 
 // Cached for the UI thread: the folder icon, and the few items a load did not fill in (fillTypes).
@@ -216,7 +216,7 @@ int typeIcon(const Item& it) { return typeInfo(it).icon; }
 void fillTypes(std::vector<Item>& items) {
     std::unordered_map<std::wstring, TypeInfo> seen;
     for (Item& it : items) {
-        if (!it.type.empty()) continue;   // a drive comes with its own
+        if (!it.typeText().empty()) continue;   // a drive comes with its own
         auto [at, fresh] = seen.try_emplace(typeKey(it));
         if (fresh) at->second = askType(it);
         it.type = at->second.type;
@@ -230,8 +230,12 @@ int folderIcon() {
     return typeInfo(dir).icon;
 }
 
+std::shared_ptr<const std::wstring> sharedTypeName(const Item& it) {
+    return it.typeText().empty() ? typeInfo(it).type : it.type;
+}
+
 const std::wstring& typeName(const Item& it) {
-    return it.type.empty() ? typeInfo(it).type : it.type;
+    return it.typeText().empty() ? *typeInfo(it).type : *it.type;
 }
 
 std::wstring knownFolder(REFKNOWNFOLDERID id) {

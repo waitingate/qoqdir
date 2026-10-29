@@ -6,6 +6,7 @@
 
 #include <cstdint>
 #include <functional>
+#include <memory>
 #include <optional>
 #include <string>
 
@@ -52,7 +53,9 @@ std::vector<std::wstring> commandLineWords(const std::wstring& line);   // as Wi
 struct Item {
     std::wstring name;    // file name, or "C:\" for a drive
     std::wstring label;   // text to show instead of name (drives only)
-    std::wstring type;    // the type name shown, from the shell: the loader fills it (fillTypes), the list what is left
+    // The type name shown, from the shell: the loader fills it (fillTypes), the list what is left. Shared by the items
+    // of one type: a copy in each cost 140 bytes an item, 1.4 MB for 10,000.
+    std::shared_ptr<const std::wstring> type;
     uint64_t size = 0;
     FILETIME modified{};
     DWORD attrs = 0;
@@ -60,6 +63,10 @@ struct Item {
 
     bool isDir() const { return (attrs & FILE_ATTRIBUTE_DIRECTORY) != 0; }
     const std::wstring& shown() const { return label.empty() ? name : label; }
+    const std::wstring& typeText() const {   // "" while unknown
+        static const std::wstring none;
+        return type ? *type : none;
+    }
 };
 
 struct Listing {
