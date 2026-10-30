@@ -48,6 +48,20 @@ pub enum Location {
     Dir(PathBuf),
 }
 
+/// "\\server" alone, with no share.
+fn bare_server(p: &Path) -> bool {
+    let w: Vec<u16> = p.as_os_str().encode_wide().collect();
+    let sep = u16::from(b'\\');
+    w.len() > 2 && w[0] == sep && w[1] == sep && !w[2..].contains(&sep)
+}
+
+/// A name from the root: one separator first ("\Windows"), not two (a network path).
+fn from_root(name: &OsStr) -> bool {
+    let is_sep = |c: u16| c == u16::from(b'\\') || c == u16::from(b'/');
+    let mut w = name.encode_wide();
+    w.next().is_some_and(is_sep) && !w.next().is_some_and(is_sep)
+}
+
 impl Location {
     /// A folder location with trailing separators removed (except on "C:\").
     pub fn dir(path: impl Into<PathBuf>) -> Location {
@@ -68,26 +82,27 @@ impl Location {
 
     pub fn parent(&self) -> Location {
         match self {
-            Location::Dir(p) => {
-                // "\\server" alone (no share) is the top of a network path, as in the C++ version; std would say "\".
-                let w: Vec<u16> = p.as_os_str().encode_wide().collect();
-                let sep = u16::from(b'\\');
-                if w.len() > 2 && w[0] == sep && w[1] == sep && !w[2..].contains(&sep) {
-                    return Location::ThisPc;
-                }
-                match p.parent() {
-                    Some(q) if !q.as_os_str().is_empty() => Location::dir(q),
-                    _ => Location::ThisPc,
-                }
-            }
+            // "\\server" alone (no share) is the top of a network path, as in the C++ version; std would say "\".
+            Location::Dir(p) if bare_server(p) => Location::ThisPc,
+            Location::Dir(p) => match p.parent() {
+                Some(q) if !q.as_os_str().is_empty() => Location::dir(q),
+                _ => Location::ThisPc,
+            },
             Location::ThisPc => Location::ThisPc,
         }
     }
 
-    /// Full path of an item in this location (for This PC, the item is a drive like "C:\").
+    /// Full path of an item in this location (for This PC, the item is a drive like "C:\"). A name from the root
+    /// ("\Windows", as typed) goes on the folder's own drive or share, as Path::join puts it, and on a server alone
+    /// too, which std doesn't take as a root: it would leave just "\Windows".
     pub fn join(&self, name: &OsStr) -> PathBuf {
         match self {
             Location::ThisPc => PathBuf::from(name),
+            Location::Dir(p) if bare_server(p) && from_root(name) => {
+                let mut joined = p.clone().into_os_string();
+                joined.push(name);
+                joined.into()
+            }
             Location::Dir(p) => p.join(name),
         }
     }
@@ -801,6 +816,8 @@ mod tests {
         assert!(matches!(normalize(OsStr::new("this pc")), Location::ThisPc));
         assert!(matches!(normalize(OsStr::new("   ")), Location::ThisPc));
         let cwd = std::env::current_dir().unwrap();
+        // A relative name ("qoqdir x\%TEMP%") goes through the current folder, and its variables aren't expanded.
+        assert!(resolve_argument(OsStr::new("x\\%TEMP%")).same(&Location::dir(cwd.join("x\\%TEMP%"))));
         assert!(resolve_argument(OsStr::new(".")).same(&Location::dir(cwd))); // "qoqdir ." from a terminal
         assert_eq!(text(&resolve_argument(OsStr::new("C:\\Windows\\"))), "C:\\Windows");
         assert_eq!(text(&resolve_argument(OsStr::new("C:"))), "C:\\"); // a drive alone is its root, as in Explorer
@@ -844,6 +861,7 @@ mod tests {
         assert_eq!(dir("C:\\x").join(OsStr::new("\\")), PathBuf::from("C:\\"));
         assert_eq!(dir("\\\\server\\share\\dir").join(OsStr::new("\\x")), PathBuf::from("\\\\server\\share\\x"));
         assert_eq!(dir("\\\\server\\share").join(OsStr::new("\\x")), PathBuf::from("\\\\server\\share\\x"));
+        assert_eq!(dir("\\\\server").join(OsStr::new("\\x")), PathBuf::from("\\\\server\\x")); // a server alone too
         assert_eq!(extension_of(OsStr::new("\u{1F600}.JPG")), ".jpg");
         assert_eq!(text(&normalize(OsStr::new("c:/\u{5831}\u{544A}/"))), "C:\\\u{5831}\u{544A}");
         let deep = format!("C:\\{}\\b", "a".repeat(300)); // 305 characters, far beyond MAX_PATH

@@ -121,6 +121,7 @@ int main(int argc, char** argv) {
     CHECK_EQ(joinPath(L"C:\\x", L"\\"), L"C:\\");
     CHECK_EQ(joinPath(L"\\\\server\\share\\dir", L"\\x"), L"\\\\server\\share\\x");
     CHECK_EQ(joinPath(L"\\\\server\\share", L"\\x"), L"\\\\server\\share\\x");
+    CHECK_EQ(joinPath(L"\\\\server", L"\\x"), L"\\\\server\\x");   // a server alone too
     CHECK_EQ(leafName(L"C:\\a\\b"), L"b");
     CHECK_EQ(leafName(L"C:\\"), L"C:\\");
     CHECK_EQ(leafName(L"\\\\server\\share"), L"share");
@@ -148,6 +149,11 @@ int main(int argc, char** argv) {
     // A folder may really be named "%TEMP%": only typed text has its variables expanded (P14).
     CHECK_EQ(normalizePath(L"C:\\a\\%TEMP%\\.\\sub"), L"C:\\a\\%TEMP%\\sub");
     CHECK_EQ(resolveArgument(L"C:\\a\\%TEMP%"), L"C:\\a\\%TEMP%");   // "qoqdir ." in such a folder
+    {   // and a relative name ("qoqdir x\%TEMP%"), which goes through the current folder
+        wchar_t cwd[MAX_PATH];
+        GetCurrentDirectoryW(MAX_PATH, cwd);
+        CHECK_EQ(resolveArgument(L"x\\%TEMP%"), joinPath(cwd, L"x\\%TEMP%"));
+    }
 
     // childToward: selects the folder you came from after going up
     CHECK_EQ(childToward(L"C:\\Users", L"C:\\Users\\me\\Documents"), L"me");
