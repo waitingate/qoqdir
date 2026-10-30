@@ -544,8 +544,7 @@ void dragOut(HWND owner, const std::wstring& dir, const std::vector<Item>& items
 
 // ---------------------------------------------------------------- shortcuts
 
-std::optional<std::wstring> shortcutTarget(const std::wstring& lnkPath, bool* folder) {
-    *folder = false;
+std::optional<ShortcutTarget> shortcutTarget(const std::wstring& lnkPath) {
     if (extensionOf(lnkPath) != L".lnk") return std::nullopt;
     Com<IShellLinkW> link;
     if (FAILED(CoCreateInstance(CLSID_ShellLink, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(link.put()))))
@@ -555,7 +554,7 @@ std::optional<std::wstring> shortcutTarget(const std::wstring& lnkPath, bool* fo
     std::wstring target(32768, L'\0');   // not MAX_PATH: a folder deep in a network share has a longer path
     WIN32_FIND_DATAW stored{};            // the target as it was when the shortcut was made
     if (link->GetPath(target.data(), int(target.size()), &stored, 0) == S_OK && target[0]) {
-        *folder = (stored.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0;
+        bool folder = (stored.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0;
         target.resize(target.find(L'\0'));
         // A target on a drive letter that is gone (a flash drive that came back under another letter) is looked for
         // where the shortcut says it is relative to itself: Windows stores that for one made on the target's drive.
@@ -567,15 +566,14 @@ std::optional<std::wstring> shortcutTarget(const std::wstring& lnkPath, bool* fo
             std::wstring found(32768, L'\0');
             if (link->GetPath(found.data(), int(found.size()), nullptr, 0) == S_OK) target = found.c_str();
         }
-        return normalizePath(target);
+        return ShortcutTarget{normalizePath(target), folder};
     }
     // No path: This PC is the one such target this app can show itself (as ""); Windows opens the rest.
     PIDLIST_ABSOLUTE p = nullptr;
     if (FAILED(link->GetIDList(&p)) || !p) return std::nullopt;
     Pidl pidl(p), pc = pidlFromPath(L"");
     if (!pc || !ILIsEqual(pidl.get(), pc.get())) return std::nullopt;
-    *folder = true;
-    return std::wstring();
+    return ShortcutTarget{L"", true};
 }
 
 namespace {
@@ -634,9 +632,8 @@ bool bookmarkFolder(const std::wstring& dir, const std::wstring& folder) {
     for (int n = 1; n <= 99; ++n) {
         std::wstring lnk = joinPath(dir, n == 1 ? base : stem + L" (" + std::to_wstring(n) + L").lnk");
         if (!exists(lnk)) return writeFolderShortcut(lnk, folder);
-        bool isFolder = false;
-        std::optional<std::wstring> target = shortcutTarget(lnk, &isFolder);
-        if (isFolder && target && samePath(*target, folder)) return true;   // already bookmarked
+        std::optional<ShortcutTarget> target = shortcutTarget(lnk);
+        if (target && target->folder && samePath(target->path, folder)) return true;   // already bookmarked
     }
     return false;
 }
@@ -646,9 +643,8 @@ std::vector<std::wstring> savedFolders(const std::wstring& dir) {
     sortItems(listing.items, SortKey::Name, true);
     std::vector<std::wstring> folders;
     for (const Item& it : listing.items) {
-        bool folder = false;
-        std::optional<std::wstring> target = shortcutTarget(joinPath(dir, it.name), &folder);
-        if (target && folder) folders.push_back(*target);
+        std::optional<ShortcutTarget> target = shortcutTarget(joinPath(dir, it.name));
+        if (target && target->folder) folders.push_back(target->path);
     }
     return folders;
 }
@@ -724,10 +720,12 @@ void acknowledgeChange(WPARAM wp, LPARAM lp) {
 // ---------------------------------------------------------------- drag and drop
 
 std::optional<std::wstring> localFolder(std::wstring path, bool shortcut) {
-    bool folder = true;
-    if (shortcut) path = shortcutTarget(path, &folder).value_or(L"");
-    bool local = folder && path.size() >= 3 && path[1] == L':' &&
-                 GetDriveTypeW(path.substr(0, 3).c_str()) != DRIVE_REMOTE;
+    if (shortcut) {
+        std::optional<ShortcutTarget> target = shortcutTarget(path);
+        if (!target || !target->folder) return std::nullopt;
+        path = target->path;
+    }
+    bool local = path.size() >= 3 && path[1] == L':' && GetDriveTypeW(path.substr(0, 3).c_str()) != DRIVE_REMOTE;
     // A shortcut still says folder when its folder is gone: only looking tells, which costs no more than the drop
     // target does, as it reads that folder next.
     if (local && shortcut) local = isDirectory(path);

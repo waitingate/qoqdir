@@ -31,10 +31,10 @@ void readChildren(TreeBatch& batch, const std::wstring& dir, bool shortcuts) {
         } else {
             // From the .lnk alone: its name and a folder or file-type icon. Its own icon can wait on a server
             // that is off, so it follows later (startWorker).
-            bool folder = false;
-            std::optional<std::wstring> target = shortcutTarget(path, &folder);
+            std::optional<ShortcutTarget> target = shortcutTarget(path);
+            bool folder = target && target->folder;
             SHFILEINFOW name = fileInfo(path, 0, SHGFI_DISPLAYNAME).value_or(SHFILEINFOW{});
-            std::wstring probe = folder ? L"x" : target.value_or(it.name);   // only the extension matters
+            std::wstring probe = folder ? L"x" : target ? target->path : it.name;   // only the extension matters
             SHFILEINFOW icon = fileInfo(probe, folder ? FILE_ATTRIBUTE_DIRECTORY : FILE_ATTRIBUTE_NORMAL,
                                         SHGFI_USEFILEATTRIBUTES | SHGFI_SYSICONINDEX | SHGFI_SMALLICON)
                                    .value_or(SHFILEINFOW{});
@@ -380,8 +380,8 @@ bool FolderTree::onNotify(NMHDR* nm, std::wstring* open, bool* shortcut) {
         if (tv->action == TVC_BYKEYBOARD && shortcutNode(node)) {
             // Moving the selection with the keyboard opens a folder shortcut, but not a program or a web link: those
             // need Enter, a click or the menu, so arrowing through Bookmarks starts nothing (4.4, 5.6).
-            bool folder = false;
-            if (!(shortcutTarget(pathOf(node), &folder) && folder)) return false;
+            std::optional<ShortcutTarget> target = shortcutTarget(pathOf(node));
+            if (!target || !target->folder) return false;
         }
         return chose(node);
     }

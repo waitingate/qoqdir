@@ -628,11 +628,10 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
             else selfTest_->note = L"the clipboard was not the test's: no paste";
         },
         [=, this] {
-            bool folder = false;
-            for (const Item& it : listFolder(path(L"sub"), false).items)
-                if (isShortcut(it.name) &&
-                    samePath(shortcutTarget(path(L"sub\\" + it.name), &folder).value_or(L""), path(L"file1.txt")))
-                    return true;
+            for (const Item& it : listFolder(path(L"sub"), false).items) {
+                std::optional<ShortcutTarget> target = shortcutTarget(path(L"sub\\" + it.name));
+                if (target && samePath(target->path, path(L"file1.txt"))) return true;
+            }
             return false;
         }, 10000);
     // Ctrl+Shift+C: the paths as text, each quoted, one per line, as Explorer's Copy as path (5.4).
@@ -2263,9 +2262,8 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
             sortItems(saved.items, SortKey::Name, true);
             if (saved.items.size() != tabs_.size() + 1 || saved.items.back().name != L"keep.txt") return false;
             for (size_t i = 0; i < tabs_.size(); ++i) {
-                bool folder = false;
-                auto target = shortcutTarget(path(L"Bookmarks\\Tabs\\" + saved.items[i].name), &folder);
-                if (!target || !folder || !samePath(*target, tabs_[i].path)) return false;
+                auto target = shortcutTarget(path(L"Bookmarks\\Tabs\\" + saved.items[i].name));
+                if (!target || !target->folder || !samePath(target->path, tabs_[i].path)) return false;
             }
             return true;
         });

@@ -92,8 +92,8 @@ void deleteWordBefore(HWND edit) {
 }
 
 // A shortcut's target that opens in a tab: a folder path, or This PC (""). Anything else is for Windows.
-bool opensInTab(const std::optional<std::wstring>& target) {
-    return target && (target->empty() || isAbsolutePath(*target));
+bool opensInTab(const std::optional<ShortcutTarget>& target) {
+    return target && (target->path.empty() || isAbsolutePath(target->path));
 }
 
 int tabAt(HWND bar, POINT screenPt) {   // the tab under a point on the screen, or -1
@@ -1315,9 +1315,9 @@ void App::activate(bool inNewTab) {
         bool folder = list_.at(row).isDir();
         // A shortcut to a folder counts as that folder, so it opens in a tab (Windows would use Explorer).
         if (!folder) {
-            std::optional<std::wstring> target = shortcutTarget(path, &folder);
-            if (folder && opensInTab(target)) path = *target;
-            else folder = false;
+            std::optional<ShortcutTarget> target = shortcutTarget(path);
+            folder = opensInTab(target) && target->folder;
+            if (folder) path = target->path;
         }
         (folder ? dirs : files).push_back(path);
     }
@@ -1336,24 +1336,22 @@ void App::activate(bool inNewTab) {
 // A shortcut to a folder or This PC opens here, or in a background tab; Windows opens anything else.
 // Whether the target really is a folder, the loader finds out on its thread (it may be on a network).
 void App::openShortcut(const std::wstring& path, bool inNewTab) {
-    bool folder = false;
-    std::optional<std::wstring> target = shortcutTarget(path, &folder);
+    std::optional<ShortcutTarget> target = shortcutTarget(path);
     if (!opensInTab(target)) {
         openFile(wnd_, path);   // a web link, a program, a library...
         return;
     }
-    if (inNewTab && folder) newTab(*target, false);
-    else open(*target, Nav::New, {}, Origin::fromShortcut(path));
+    if (inNewTab && target->folder) newTab(target->path, false);
+    else open(target->path, Nav::New, {}, Origin::fromShortcut(path));
 }
 
 // A shortcut's Open file location (the menu's opencontaining): the folder its target is in, shown here with the target
 // selected, where Windows would show it in Explorer (4.4).
 void App::openTargetLocation(const std::wstring& lnk) {
-    bool folder = false;
-    std::optional<std::wstring> target = shortcutTarget(lnk, &folder);
+    std::optional<ShortcutTarget> target = shortcutTarget(lnk);
     if (!opensInTab(target)) warn(L"Can't show where \"" + leafName(lnk) + L"\" points");   // a web link, a library...
-    else if (target->empty()) open(L"", Nav::New);   // This PC: in no folder here
-    else open(parentPath(*target), Nav::New, ViewState::selecting(leafName(*target)));
+    else if (target->path.empty()) open(L"", Nav::New);   // This PC: in no folder here
+    else open(parentPath(target->path), Nav::New, ViewState::selecting(leafName(target->path)));
 }
 
 // Rename on a tree node's menu happens in the file list, in the node's parent folder.
