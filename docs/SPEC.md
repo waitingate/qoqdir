@@ -722,8 +722,8 @@ and exits with code 0 only if every step passed. It must:
   nothing. A cut at that moment would bring someone's files in instead: the step
   fails, and at the end those files go to a folder next to the test folder (its
   name plus " kept") instead of being deleted with it;
-- leave nothing behind but the test folder and log in `%TEMP%` (one small file in
-  the Recycle Bin from the delete test is fine). It may replace the clipboard.
+- leave nothing behind but the test folder and log in `%TEMP%` (two small files in
+  the Recycle Bin from the delete tests are fine). It may replace the clipboard.
 
 The test folder starts with a few files (one with a Chinese name), a subfolder
 `sub` and the test Bookmarks folder. Each scenario is an action and the expected

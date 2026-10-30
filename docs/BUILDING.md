@@ -207,7 +207,7 @@ What each one is:
   the spec, from inside its own process: its window doesn't take the focus, and
   it never sends keys to other windows. It works in its own folder in `%TEMP%`,
   never touches your `qoqdir.ini` or Bookmarks, replaces the clipboard and leaves
-  one small file in the Recycle Bin. Each step has a timeout, and a failure
+  two small files in the Recycle Bin. Each step has a timeout, and a failure
   doesn't stop the run, unless a folder load never ends: a step waits a minute
   at most for one to finish, then the run stops there with a `FAIL`. The log
   (`%TEMP%\qoqdir-selftest.log`, for Rust `%TEMP%\qoqdir-rs-selftest.log`) gets
