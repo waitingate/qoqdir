@@ -290,11 +290,12 @@ pub struct App {
     pub loads_wasted: Cell<u32>, // ...of which a newer load had replaced, yet they read the whole folder (self-test)
     pub uncounted_load: Cell<u32>, // a read the self-test leaves stuck on a network timeout: in neither count
     pub bookmark_notices: Cell<u32>, // changes the Bookmarks watch passed on (self-test)
-    use_settings: bool,
     ini: Vec<u16>, // settings file
     ini_values: HashMap<String, String>, // its [Window] section, read once (create)
     pub st: RefCell<State>,
-    pub quiet: Cell<bool>, // no beeps (set by the self-test, which triggers errors on purpose)
+    // A self-test runs (it sets this): no beeps as it triggers errors on purpose, no question on closing, no settings
+    // saved.
+    pub quiet: Cell<bool>,
     asking: Cell<bool>,    // the "Save these tabs?" box is up: a second WM_CLOSE is ignored (5.7)
     filter_empty: Cell<bool>, // the filter box is empty, so it shows its funnel (filter_proc)
     hinted_filter: Cell<bool>, // the two things Explorer users don't expect, said once (5.3)
@@ -704,7 +705,6 @@ impl App {
                 loads_wasted: Cell::new(0),
                 uncounted_load: Cell::new(0),
                 bookmark_notices: Cell::new(0),
-                use_settings,
                 ini,
                 ini_values,
                 st: RefCell::new(State {
@@ -784,7 +784,7 @@ impl App {
             app.apply_colors(high_contrast_on());
             app.apply_font();
             app.tree.fill();
-            app.load_settings(&cmd, &ask);
+            app.load_settings(&cmd, &ask, !use_settings || ask.quiet); // a self-test never steals the focus
             app.layout();
             app.show_tab();
             // Only now, with the first folder's read out: these took 80 ms (the Bookmarks watch 57 of them), which the
@@ -2826,7 +2826,8 @@ impl App {
         });
     }
 
-    fn load_settings(&self, cmd: &CommandLine, ask: &StartAsk) {
+    /// `quiet`: the window takes no focus.
+    fn load_settings(&self, cmd: &CommandLine, ask: &StartAsk, quiet: bool) {
         let dpi = self.dpi.get();
         self.tree_width.set(self.number("TreeWidth", 220));
         self.list.set_show_hidden(self.number("ShowHidden", 0) != 0);
@@ -2850,8 +2851,7 @@ impl App {
         }
 
         // The window is already at its place and size (create). Only show it now, maximized if asked (Open in new
-        // window, 5.8) or saved. A self-test never steals the focus.
-        let quiet = !self.use_settings || ask.quiet;
+        // window, 5.8) or saved.
         let maximized = if ask.place.is_some() { ask.maximized } else { self.number("Maximized", 0) != 0 };
         let show = if quiet { SW_SHOWNOACTIVATE } else if maximized { SW_SHOWMAXIMIZED } else { SW_SHOWNORMAL };
         unsafe {
@@ -2860,7 +2860,7 @@ impl App {
     }
 
     fn save_settings(&self) {
-        if !self.use_settings {
+        if self.quiet.get() {
             return;
         }
         unsafe {

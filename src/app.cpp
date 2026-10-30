@@ -222,10 +222,9 @@ App::StartAsk App::startAsk() {
 }
 
 bool App::create(HINSTANCE instance, const CommandLine& cmd, bool useSettings) {
-    useSettings_ = useSettings;
     std::wstring exe = exePath();
     // Without settings (self-test), read from a file that does not exist: every value is then a default.
-    ini_ = useSettings_ ? joinPath(parentPath(exe), toLower(kAppName) + L".ini") : L"?";
+    ini_ = useSettings ? joinPath(parentPath(exe), toLower(kAppName) + L".ini") : L"?";
     iniValues_ = readIniSection(ini_);
     WNDCLASSEXW wc{};
     wc.cbSize = sizeof wc;
@@ -333,7 +332,7 @@ bool App::create(HINSTANCE instance, const CommandLine& cmd, bool useSettings) {
     applyFont();
     tree_.fill();
 
-    loadSettings(cmd, ask);
+    loadSettings(cmd, ask, !useSettings || ask.quiet);   // a self-test never steals the focus
     layout();
     showTab();
     // Only now, with the first folder's read out: these took 80 ms (the Bookmarks watch 57 of them), which the read
@@ -1724,7 +1723,7 @@ int App::iniNumber(const std::wstring& key, int fallback) const {
     return end != text && *end == 0 && value >= -100000 && value <= 100000 ? int(value) : fallback;
 }
 
-void App::loadSettings(const CommandLine& cmd, const StartAsk& ask) {
+void App::loadSettings(const CommandLine& cmd, const StartAsk& ask, bool quiet) {
     treeWidth_ = iniNumber(L"TreeWidth", 220);
     list_.setShowHidden(iniNumber(L"ShowHidden", 0) != 0);
     int sortCol = iniNumber(L"SortColumn", 0);   // out of range falls back to Name, the default (5.11), as in Rust
@@ -1741,14 +1740,13 @@ void App::loadSettings(const CommandLine& cmd, const StartAsk& ask) {
     active_ = 0;
 
     // The window is already at its place and size (create). Only show it now, maximized if asked (Open in new
-    // window, 5.8) or saved. A self-test never steals the focus.
-    bool quiet = !useSettings_ || ask.quiet;
+    // window, 5.8) or saved.
     bool maximized = ask.place ? ask.maximized : iniNumber(L"Maximized", 0) != 0;
     ShowWindow(wnd_, quiet ? SW_SHOWNOACTIVATE : maximized ? SW_SHOWMAXIMIZED : SW_SHOWNORMAL);
 }
 
 void App::saveSettings() {
-    if (!useSettings_) return;   // only numbers are saved: a plain ini file is fine
+    if (selfTest_) return;   // only numbers are saved: a plain ini file is fine
     // Only what differs from the file as it is now, which another window may have written since this one started.
     std::map<std::wstring, std::wstring> onDisk = readIniSection(ini_);
     auto number = [&](const std::wstring& key, int value) {

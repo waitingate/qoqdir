@@ -169,7 +169,7 @@ private:
     };
     NewWindow newWindow(const std::wstring& dir) const;
     void openInNewWindow(const std::wstring& dir);
-    void loadSettings(const CommandLine& cmd, const StartAsk& ask);
+    void loadSettings(const CommandLine& cmd, const StartAsk& ask, bool quiet);   // quiet: the window takes no focus
     int iniNumber(const std::wstring& key, int fallback) const;   // a window number from qoqdir.ini, bounded
     void saveSettings();
 
@@ -185,7 +185,6 @@ private:
                               kSelfTestTimer = 50;
     static UINT loadedMessage();   // what a folder's read comes back as (the self-test waits for one)
     int exitCode_ = 1;   // a run that never finishes (closed by hand, no window) has not passed
-    bool useSettings_ = true;
 
     HWND wnd_ = nullptr, back_ = nullptr, forward_ = nullptr, up_ = nullptr, refresh_ = nullptr, address_ = nullptr,
          filter_ = nullptr, tabBar_ = nullptr, plus_ = nullptr, status_ = nullptr, tips_ = nullptr, lastFocus_ = nullptr;
