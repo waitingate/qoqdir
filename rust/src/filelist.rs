@@ -82,6 +82,7 @@ pub struct FileList {
     over_row: Cell<Option<usize>>,             // the row a drag is over (drop_folder)
     drop_into: RefCell<Option<Location>>,      // ...the folder it takes the drop into, if any
     drop_lit: Cell<bool>,                      // ...and whether it lights up: not for one the files are in
+    arrival_sorts: Cell<u32>,                  // listings it had to sort itself, as they came (the self-test)
 }
 
 impl FileList {
@@ -145,6 +146,7 @@ impl FileList {
             over_row: Cell::new(None),
             drop_into: RefCell::new(None),
             drop_lit: Cell::new(false),
+            arrival_sorts: Cell::new(0),
             model: RefCell::new(Model {
                 location: Location::ThisPc,
                 shown: false,
@@ -184,7 +186,11 @@ impl FileList {
                     it.type_text = Some(shared_type_name(it));
                 }
             }
-            sort_items(&mut m.items, m.key, m.ascending);
+            // Its read's worker sorted it, unless the sort has changed since.
+            if listing.sorted != Some((m.key, m.ascending)) {
+                self.arrival_sorts.set(self.arrival_sorts.get() + 1);
+                sort_items(&mut m.items, m.key, m.ascending);
+            }
         });
     }
 
@@ -192,6 +198,12 @@ impl FileList {
     pub fn clear(&self) {
         self.set_listing(Listing::default());
         self.model.borrow_mut().shown = false;
+    }
+
+    /// Listings it had to sort itself, as they came.
+    #[cfg(feature = "selftest")] // only the self-test asks
+    pub fn arrival_sorts(&self) -> u32 {
+        self.arrival_sorts.get()
     }
 
     /// Whether the list shows that folder (This PC too); a cleared list shows none.

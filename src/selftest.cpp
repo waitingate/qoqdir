@@ -1653,6 +1653,35 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
             list_.setSort(SortKey::Name, true);
             return ordered;
         });
+    // The read's worker sorts what it read, so a big folder's sort doesn't hold the window up (4.7).
+    auto sorts = std::make_shared<int>(0);
+    add(L"a folder's read comes back sorted: the window does not sort it again (4.7)",
+        [=, this] {
+            *sorts = list_.arrivalSorts();
+            refresh();
+        },
+        [=, this] {
+            selfTest_->note = std::to_wstring(list_.arrivalSorts() - *sorts) + L" sort(s) here";
+            return idle() && list_.arrivalSorts() == *sorts;
+        });
+    add(L"...unless the sort changed while it was read: then it shows in the new order (4.7)",
+        [=, this] {
+            *sorts = list_.arrivalSorts();
+            refresh();
+            list_.setSort(SortKey::Name, false);
+        },
+        [=, this] {
+            if (!idle()) return false;
+            bool ordered = true;
+            for (int row = 0; row + 1 < list_.count(); ++row) {
+                const Item &a = list_.at(row), &b = list_.at(row + 1);
+                if (a.isDir() == b.isDir() && StrCmpLogicalW(a.name.c_str(), b.name.c_str()) < 0) ordered = false;
+            }
+            int sortedHere = list_.arrivalSorts() - *sorts;
+            selfTest_->note = std::to_wstring(sortedHere) + L" sort(s) here";
+            list_.setSort(SortKey::Name, true);
+            return ordered && sortedHere == 1;
+        });
     add(L"the Bookmarks folder is created and shown at the top of the tree", nullptr, [=, this] {
         return isDirectory(path(L"Bookmarks")) && nodeText(TreeView_GetRoot(tree_.hwnd())) == L"Bookmarks";
     });

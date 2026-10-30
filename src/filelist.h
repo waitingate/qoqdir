@@ -59,6 +59,7 @@ public:
     void setLineColor(COLORREF color);
     COLORREF lineColor() const { return lineColor_; }
     // The own icons read so far for the folder shown (the self-test).
+    int arrivalSorts() const { return arrivalSorts_; }   // listings it had to sort itself, as they came (the self-test)
     size_t ownIconCount() const { return ownIcons_.size(); }
     bool ownIconKnown(const std::wstring& name) const { return ownIcons_.count(name) > 0; }
     // The row at a screen point, or -1: none over the column header, which Windows' hit test gives to the first row or
@@ -85,6 +86,7 @@ private:
     UINT askMsg_ = 0, iconMsg_ = 0;
     std::wstring dir_;
     bool shown_ = false;   // dir_ is a folder that was read, not the "" of a cleared list
+    int arrivalSorts_ = 0;
     std::vector<Item> items_;
     std::vector<int> view_;
     std::unordered_map<std::wstring, int> ownIcons_;   // file name -> own icon, for the folder shown

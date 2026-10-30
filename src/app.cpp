@@ -1060,10 +1060,14 @@ void App::open(const std::wstring& path, Nav nav, ViewState view, Origin origin)
         showLocation();
         showStatus();
     }
-    inBackground([wnd = wnd_, generation, path] {
+    inBackground([wnd = wnd_, generation, path, key = list_.sortKey(), ascending = list_.sortAscending()] {
         auto replaced = [generation] { return g_newestLoad != generation && g_keptLoad != generation; };
         auto result = std::make_unique<Listing>(listFolder(path, true, replaced));
-        if (!replaced()) fillTypes(result->items);   // the shell's type names and icons, off the window's thread
+        if (!replaced()) {   // off the window's thread: the shell's type names and icons, and a big folder's sort
+            fillTypes(result->items);
+            sortItems(result->items, key, ascending);
+            result->sorted = {key, ascending};
+        }
         // Own icons, which need a disk (or network) lookup, are read later, for the rows the list shows.
         post(wnd, WM_APP_LOADED, generation, std::move(result));
     });

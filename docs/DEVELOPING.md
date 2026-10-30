@@ -112,7 +112,9 @@ instead of corrupting data, and the crash log says where.
   tree node at once. A drive coming or going re-reads only This PC in the tree.
 - The file list is virtual (`LVS_OWNERDATA`): row i is `items_[view_[i]]`, and only
   `FileList::update` changes `view_`, rebuilding it before any ListView call.
-  Hidden items are always read; Ctrl+H only shows or hides them.
+  Hidden items are always read; Ctrl+H only shows or hides them. A read's worker
+  sorts what it read (`Listing::sorted`); `setListing` sorts it again only if the
+  sort has changed since.
 - Tree nodes keep their path in `FolderTree::paths_`, removed in
   `TVN_DELETEITEM`. A bookmark shortcut is read from the .lnk file; a target on
   a drive letter that is gone is looked for by the relative path Windows stores

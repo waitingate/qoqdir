@@ -187,7 +187,8 @@ Targets on an ordinary SSD laptop with a folder of 10,000 files (faster is fine)
 - Open and show the folder: under 1 s (about 0.4 s measured).
 - Filter as you type: under 0.1 s per key.
 - Sort by any column: under 0.1 s (0.02 to 0.07 s measured). Names compare by sort
-  keys made once per name, in exactly the order Explorer uses.
+  keys made once per name, in exactly the order Explorer uses. A folder is sorted
+  as it is read, off the window's thread, so showing it costs no sort.
 - Copy all 10,000 selected files to the clipboard (Ctrl+C): under 3 s, without
   freezing longer than that (1.5 to 2.5 s measured). Starting a drag, Delete or
   the context menu on 10,000 selected files also takes a few seconds at most.
@@ -824,7 +825,9 @@ result:
 37. A 10,000-file folder loads within the target of 4.7.
 38. Filtering while scrolled to the bottom shows the matches from the top.
 39. Filtering and sorting 10,000 files are within the targets of 4.7, sorting
-    also with all of them selected, which then stay selected.
+    also with all of them selected, which then stay selected. A folder's read
+    comes back sorted, so the window does not sort it again, unless the sort
+    changed while it was read: then it shows in the new order.
 40. Copying 10,000 selected files to the clipboard is within the target of 4.7,
     and the clipboard then holds 10,000 files.
 41. With three tabs (the test folder, `sub`, This PC), Ctrl+S leaves one shortcut

@@ -70,12 +70,15 @@ struct Item {
     const std::wstring& typeText() const { return type ? *type : kNoTypeName; }   // "" while unknown too
 };
 
+enum class SortKey { Name = 0, Modified = 1, Type = 2, Size = 3 };
+
 struct Listing {
     std::wstring path;
     std::vector<Item> items;
     DWORD error = 0;      // Win32 error code, 0 on success
     bool isFile = false;  // with an error: the path exists but is a file
     FILETIME written{};   // the folder's own last write, as it was before the read (folderWritten)
+    std::optional<std::pair<SortKey, bool>> sorted{};   // how the items are sorted, if they are: key, ascending
 };
 
 // Reads a folder; blocking, so off the UI thread. Once `stop` says true it ends with ERROR_OPERATION_ABORTED.
@@ -85,7 +88,6 @@ FILETIME folderWritten(const std::wstring& path);   // the folder's own last-wri
 
 // ---------------------------------------------------------------- sorting and filtering
 
-enum class SortKey { Name = 0, Modified = 1, Type = 2, Size = 3 };
 // Folders always come first; names compare the way Explorer does ("file2" < "file10").
 void sortItems(std::vector<Item>& items, SortKey key, bool ascending);
 

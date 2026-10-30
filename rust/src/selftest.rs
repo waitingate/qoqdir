@@ -2510,6 +2510,40 @@ impl App {
                 ordered
             },
         );
+        // The read's worker sorts what it read, so a big folder's sort doesn't hold the window up (4.7).
+        s.add(
+            "a folder's read comes back sorted: the window does not sort it again (4.7)",
+            |a| {
+                COUNT.set(a.list.arrival_sorts());
+                a.refresh(ViewState::default());
+            },
+            |a| {
+                note(format!("{} sort(s) here", a.list.arrival_sorts() - COUNT.get()));
+                a.idle() && a.list.arrival_sorts() == COUNT.get()
+            },
+        );
+        s.add(
+            "...unless the sort changed while it was read: then it shows in the new order (4.7)",
+            |a| {
+                COUNT.set(a.list.arrival_sorts());
+                a.refresh(ViewState::default());
+                a.list.set_sort(SortKey::Name, false);
+            },
+            |a| {
+                if !a.idle() {
+                    return false;
+                }
+                let items: Vec<_> = (0..a.list.count()).filter_map(|r| a.list.item(r)).collect();
+                let ordered = items.windows(2).all(|w| {
+                    let (x, y) = (wide(&w[0].name), wide(&w[1].name));
+                    w[0].is_dir() != w[1].is_dir() || unsafe { StrCmpLogicalW(pcwstr(&x), pcwstr(&y)) } >= 0
+                });
+                let sorted_here = a.list.arrival_sorts() - COUNT.get();
+                note(format!("{sorted_here} sort(s) here"));
+                a.list.set_sort(SortKey::Name, true);
+                ordered && sorted_here == 1
+            },
+        );
         s.check("the Bookmarks folder is created and shown at the top of the tree", |a| {
             is_directory(&p("Bookmarks")) && a.node_text(a.tree.root()) == "Bookmarks"
         });

@@ -52,7 +52,11 @@ void FileList::setListing(Listing&& listing) {
         items_ = std::move(listing.items);
         for (Item& it : items_)   // cached per extension, so this is quick; lets Type sort by what is shown
             if (!it.type) it.type = sharedTypeName(it);
-        sortItems(items_, key_, asc_);
+        // Its read's worker sorted it, unless the sort has changed since.
+        if (listing.sorted != std::pair(key_, asc_)) {
+            ++arrivalSorts_;
+            sortItems(items_, key_, asc_);
+        }
     });
 }
 

@@ -401,6 +401,7 @@ pub struct Listing {
     pub error: Option<windows::core::Error>,
     pub is_file: bool, // with an error: the path exists but is a file
     pub written: u64,  // the folder's own last write, as it was before the read (folder_written)
+    pub sorted: Option<(SortKey, bool)>, // how the items are sorted, if they are: key, ascending
 }
 
 impl Listing {

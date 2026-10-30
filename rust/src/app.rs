@@ -75,7 +75,7 @@ use crate::APP_NAME;
 use crate::folder::{
     CommandLine, DropBack, Listing, Location, SortKey, byte_size, drop_back, expand_vars, folder_written,
     is_absolute_path, is_relative_path, is_shortcut, list_folder, normalize, parse_ini_section, row_after_deleting,
-    tab_argument,
+    sort_items, tab_argument,
 };
 use crate::shell::{
     FolderWatch, IconBatch, OwnItem, acknowledge_change, fill_types, background_menu, bookmark_folder, copy_to_clipboard, delete_items, drag_out, open_in_explorer,
@@ -1901,13 +1901,17 @@ impl App {
             self.show_status();
         }
         let wnd = self.wnd.0 as usize; // HWND is just a handle; the thread only posts to it
+        let (key, ascending) = self.list.sort();
         in_background(move || {
             let replaced =
                 || NEWEST_LOAD.load(Ordering::SeqCst) != generation && KEPT_LOAD.load(Ordering::SeqCst) != generation;
             // Hidden items too: Ctrl+H only shows or hides them.
             let mut listing = list_folder(&location, true, Some(&replaced));
             if !replaced() {
-                fill_types(&mut listing.items); // the shell's type names and icons, off the window's thread
+                // Off the window's thread: the shell's type names and icons, and a big folder's sort.
+                fill_types(&mut listing.items);
+                sort_items(&mut listing.items, key, ascending);
+                listing.sorted = Some((key, ascending));
             }
             // Own icons, which need a disk (or network) lookup, are read later, for the rows the list shows.
             post(wnd, WM_APP_LOADED, generation as usize, Box::new(listing));
