@@ -12,17 +12,23 @@ if ($PWD.Path.Contains(' ')) {
     throw "Move the repository to a path without spaces first: the build flags name a folder in it, split at spaces."
 }
 # A build setting left in the environment would change the shipped exe where no check can see it: a cargo profile
-# override, rustc's flags, or a compiler flag CMake reads. Refuse to build with any of them set, but for the flag this
-# script sets itself, which a run before in the same shell leaves (below).
-foreach ($var in Get-ChildItem Env:) {
-    $own = $var.Name -eq 'CARGO_ENCODED_RUSTFLAGS' -and $var.Value -match '^--remap-path-prefix=[^\x1F]*=\.$'
-    if ($var.Name -match '^(CARGO_PROFILE_|CARGO_BUILD_|CARGO_TARGET_\w+_(RUSTFLAGS|LINKER)$)' -or
-        $var.Name -in 'CC', 'CXX', 'CFLAGS', 'CXXFLAGS', 'LDFLAGS', 'RUSTFLAGS', 'RUSTC', 'RUSTC_WRAPPER' -or
-        ($var.Name -eq 'CARGO_ENCODED_RUSTFLAGS' -and -not $own)) {
-        throw "Unset $($var.Name) first: it would change the shipped exe, and no check would catch it."
+# override, rustc itself, or a compiler flag CMake reads. Refuse to build with any of them set.
+foreach ($name in (Get-ChildItem Env:).Name) {
+    if ($name -match '^(CARGO_PROFILE_|CARGO_BUILD_|CARGO_TARGET_\w+_(RUSTFLAGS|LINKER)$)' -or
+        $name -in 'CC', 'CXX', 'CFLAGS', 'CXXFLAGS', 'LDFLAGS', 'RUSTC', 'RUSTC_WRAPPER') {
+        throw "Unset $name first: it would change the shipped exe, and no check would catch it."
     }
 }
 . "$PSScriptRoot\find-tools.ps1"
+# Rust's flags stay, as the toolchain's setup needs them (docs\BUILDING.md): the one that keeps the cargo folder's path
+# out of the exe, and the one that names dlltool. Any other would change the shipped exe in the same way.
+$sep = [char]0x1F
+$given = if ($env:CARGO_ENCODED_RUSTFLAGS) { $env:CARGO_ENCODED_RUSTFLAGS -split $sep } else { -split $env:RUSTFLAGS }
+foreach ($flag in $given) {
+    if ($flag -and $flag -notmatch '^(--remap-path-prefix=|-Cdlltool=)') {
+        throw "Take $flag out of RUSTFLAGS or CARGO_ENCODED_RUSTFLAGS first: it would change the shipped exe."
+    }
+}
 if (git status --porcelain) { throw 'Commit your changes first: a release is built from the last commit.' }
 $header = Get-Content src\version.h -Raw
 $version = [regex]::Match($header, 'QOQDIR_VERSION "([^"]+)"').Groups[1].Value
@@ -67,9 +73,11 @@ strip -o $exe "$work\build\qoqdir.exe"; Check 'strip'
 CheckExe 'C++' $exe "$work\build\qoqdir-test.exe" $logs[0]
 
 # Rust: the crates in Cargo.lock, and the release profile, but with line tables and symbols for the debug copy, whose
-# paths start at the work folder too. The flag goes in CARGO_ENCODED_RUSTFLAGS, which cargo takes whole: RUSTFLAGS
-# would split a folder name with a space in it.
-$env:CARGO_ENCODED_RUSTFLAGS = "--remap-path-prefix=$work=."
+# paths start at the work folder too. The flags go in CARGO_ENCODED_RUSTFLAGS, one per 0x1F, which cargo takes
+# whole: RUSTFLAGS would split a folder name with a space in it.
+$remap = "--remap-path-prefix=$work=."
+$given = @($given | Where-Object { $_ -and $_ -ne $remap }) + $remap   # once, if run twice in one shell
+$env:CARGO_ENCODED_RUSTFLAGS = $given -join $sep
 $rust = '--manifest-path', "$work\src\rust\Cargo.toml", '--locked'
 $symbols = '--config', 'profile.release.debug=1', '--config', 'profile.release.strip=false'
 cargo build --release @rust @symbols --target-dir "$work\rust"; Check 'Rust build'
