@@ -56,7 +56,8 @@ struct Item {
     std::wstring name;    // file name, or "C:\" for a drive
     std::wstring label;   // text to show instead of name (drives only)
     // The type name shown, from the shell: the loader fills it (fillTypes), the list what is left. Shared by the items
-    // of one type: a copy in each cost 140 bytes an item, 1.4 MB for 10,000.
+    // of one type: a copy in each cost 140 bytes an item, 1.4 MB for 10,000. Null while unknown; the shell can name
+    // a type "", and that is known.
     std::shared_ptr<const std::wstring> type;
     uint64_t size = 0;
     FILETIME modified{};
@@ -65,7 +66,7 @@ struct Item {
 
     bool isDir() const { return (attrs & FILE_ATTRIBUTE_DIRECTORY) != 0; }
     const std::wstring& shown() const { return label.empty() ? name : label; }
-    const std::wstring& typeText() const { return type ? *type : kNoTypeName; }   // "" while unknown
+    const std::wstring& typeText() const { return type ? *type : kNoTypeName; }   // "" while unknown too
 };
 
 struct Listing {

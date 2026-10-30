@@ -327,7 +327,7 @@ void sortItems(std::vector<Item>& items, SortKey key, bool ascending) {
         case SortKey::Modified: c = CompareFileTime(&a.modified, &b.modified); break;
         case SortKey::Size: c = a.size < b.size ? -1 : (a.size > b.size ? 1 : 0); break;
         case SortKey::Type:   // by the type name shown in the list when known, else by extension
-            if (a.typeText().empty() || b.typeText().empty())
+            if (!a.type || !b.type)
                 c = CompareStringOrdinal(extPtr(a.name), -1, extPtr(b.name), -1, TRUE) - CSTR_EQUAL;
             else if (typeOf[i] != typeOf[j])   // the same type needs no comparing
                 c = typeKeys[typeOf[i]].compare(typeKeys[typeOf[j]]);

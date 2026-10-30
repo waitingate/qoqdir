@@ -217,7 +217,7 @@ int typeIcon(const Item& it) { return typeInfo(it).icon; }
 void fillTypes(std::vector<Item>& items) {
     std::unordered_map<std::wstring, TypeInfo> seen;
     for (Item& it : items) {
-        if (!it.typeText().empty()) continue;   // a drive comes with its own
+        if (it.type) continue;   // a drive comes with its own
         auto [at, fresh] = seen.try_emplace(typeKey(it));
         if (fresh) at->second = askType(it);
         it.type = at->second.type;
@@ -231,13 +231,9 @@ int folderIcon() {
     return typeInfo(dir).icon;
 }
 
-std::shared_ptr<const std::wstring> sharedTypeName(const Item& it) {
-    return it.typeText().empty() ? typeInfo(it).type : it.type;
-}
+std::shared_ptr<const std::wstring> sharedTypeName(const Item& it) { return it.type ? it.type : typeInfo(it).type; }
 
-const std::wstring& typeName(const Item& it) {
-    return it.typeText().empty() ? *typeInfo(it).type : *it.type;
-}
+const std::wstring& typeName(const Item& it) { return it.type ? *it.type : *typeInfo(it).type; }
 
 std::wstring knownFolder(REFKNOWNFOLDERID id) {
     PWSTR p = nullptr;

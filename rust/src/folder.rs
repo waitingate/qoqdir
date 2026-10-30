@@ -942,6 +942,18 @@ mod tests {
     }
 
     #[test]
+    fn sorting_by_a_blank_type_name() {
+        // A type the shell names as blank is known too: it sorts first, not by its extension among the others.
+        let mut v = vec![item("z.cfg", 0, false), item("y.bat", 0, false), item("x.zip", 0, false)];
+        let type_of = |name: &str| Some(Arc::from(OsStr::new(name)));
+        v[0].type_text = type_of("");
+        v[1].type_text = type_of("Windows Batch File");
+        v[2].type_text = type_of("Compressed (zipped) Folder");
+        sort_items(&mut v, SortKey::Type, true);
+        assert_eq!(names(&v), "z.cfg,x.zip,y.bat");
+    }
+
+    #[test]
     fn sorting_like_explorer() {
         // sort_items orders names exactly as Windows' StrCmpLogicalW (Explorer) does, tricky names included.
         let mut want = vec![

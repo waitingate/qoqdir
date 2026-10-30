@@ -308,6 +308,17 @@ int main(int argc, char** argv) {
         CHECK_EQ(names(v), L"c.txt,b.txt,a.txt,c.docx,a.zip");
     }
 
+    // A type the shell names as blank is known too: it sorts first, not by its extension among the others
+    {
+        std::vector<Item> v = {file(L"z.cfg"), file(L"y.bat"), file(L"x.zip")};
+        auto type = [](const wchar_t* name) { return std::make_shared<const std::wstring>(name); };
+        v[0].type = type(L"");
+        v[1].type = type(L"Windows Batch File");
+        v[2].type = type(L"Compressed (zipped) Folder");
+        sortItems(v, SortKey::Type, true);
+        CHECK_EQ(names(v), L"z.cfg,x.zip,y.bat");
+    }
+
     // sortItems orders names exactly as Windows' StrCmpLogicalW (Explorer) does, tricky names included
     {
         std::vector<std::wstring> want = {L"file10", L"file2", L"File1", L"file01", L"file 1", L"file_1", L"file-1",
