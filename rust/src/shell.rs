@@ -34,7 +34,9 @@ use windows::Win32::System::Ole::{
     IDropSource, IDropTarget, IDropTarget_Impl, OleSetClipboard, ReleaseStgMedium,
 };
 use windows::Win32::System::SystemServices::{MK_RBUTTON, MODIFIERKEYS_FLAGS};
-use windows::Win32::System::Threading::{CreateEventW, CreateThread, INFINITE, SetEvent, THREAD_CREATION_FLAGS};
+use windows::Win32::System::Threading::{
+    CreateEventW, CreateThread, INFINITE, SetEvent, SetThreadStackGuarantee, THREAD_CREATION_FLAGS,
+};
 use windows::Win32::System::WindowsProgramming::{DRIVE_NO_ROOT_DIR, DRIVE_REMOTE};
 use windows::Win32::UI::Controls::HIMAGELIST;
 use windows::Win32::UI::Input::KeyboardAndMouse::{VK_CONTROL, VK_SHIFT};
@@ -878,7 +880,9 @@ pub fn saved_folders(dir: &Path) -> Vec<Location> {
 pub fn in_background(work: impl FnOnce() + Send + 'static) {
     unsafe extern "system" fn run(job: *mut c_void) -> u32 {
         let work = *unsafe { Box::from_raw(job as *mut Box<dyn FnOnce() + Send>) };
+        let mut guard = 64 * 1024; // room for the crash log if this worker overflows its stack (as the main thread has)
         unsafe {
+            let _ = SetThreadStackGuarantee(&mut guard);
             let co = CoInitializeEx(None, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE);
             work();
             if co.is_ok() {

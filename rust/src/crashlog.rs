@@ -39,6 +39,7 @@ const EXCEPTION_EXECUTE_HANDLER: i32 = 1;
 const EXCEPTION_CONTINUE_SEARCH: i32 = 0;
 const EXCEPTION_ACCESS_VIOLATION: u32 = 0xC0000005;
 const EXCEPTION_ILLEGAL_INSTRUCTION: u32 = 0xC000001D; // what the overflow trap raises, like the C++ build's
+const EXCEPTION_STACK_OVERFLOW: u32 = 0xC00000FD;
 
 static LOG_PATH: OnceLock<Vec<u16>> = OnceLock::new();
 static LOG_DIR: OnceLock<Vec<u16>> = OnceLock::new(); // set by log_in: the log there instead
@@ -104,15 +105,17 @@ unsafe extern "system" fn on_crash(e: *const EXCEPTION_POINTERS) -> i32 {
     EXCEPTION_EXECUTE_HANDLER // ends the process without Windows' own error window
 }
 
-// Runs before any frame's handler, on every thread. A fatal fault (an access violation or the overflow trap) in our
-// own code is a bug of ours: log it and stop, which is the only way one on the main thread reaches the log. A fault
-// elsewhere is left to run its course (the search goes on): an exception a shell extension raises and handles itself
-// must not be turned into a crash (4.1), and a worker's unhandled one still reaches on_crash.
+// Runs before any frame's handler, on every thread. A fatal fault (an access violation, the overflow trap or a stack
+// overflow, which has the room install keeps) in our own code is a bug of ours: log it and stop, which is the only
+// way one on the main thread reaches the log. A fault elsewhere is left to run its course (the search goes on): an
+// exception a shell extension raises and handles itself must not be turned into a crash (4.1), and a worker's
+// unhandled one still reaches on_crash.
 unsafe extern "system" fn on_vectored(e: *mut EXCEPTION_POINTERS) -> i32 {
     let r = unsafe { &*(*e).ExceptionRecord };
     let (code, addr) = (r.ExceptionCode.0 as u32, r.ExceptionAddress as usize);
     let in_exe = EXE.get().is_some_and(|&(base, size)| (base..base + size).contains(&addr));
-    if in_exe && (code == EXCEPTION_ACCESS_VIOLATION || code == EXCEPTION_ILLEGAL_INSTRUCTION) {
+    let fatal = [EXCEPTION_ACCESS_VIOLATION, EXCEPTION_ILLEGAL_INSTRUCTION, EXCEPTION_STACK_OVERFLOW].contains(&code);
+    if in_exe && fatal {
         log(format_args!("Exception 0x{code:08X}  [{}]", Where(addr)));
         unsafe {
             let _ = TerminateProcess(GetCurrentProcess(), code);
@@ -195,7 +198,8 @@ fn walk_stack(thread: u32) -> ([u64; 24], usize) {
                     hi = lo + stack.RegionSize as u64;
                 }
             }
-            let on_stack = |p: u64| p >= lo && p + 8 <= hi;
+            // Not p + 8 <= hi: a register can hold anything (-1, say), and the sum would overflow, a panic here.
+            let on_stack = |p: u64| p >= lo && p < hi && hi - p >= 8;
             while count < frames.len() && c.0.Rip != 0 && on_stack(c.0.Rsp) {
                 frames[count] = c.0.Rip;
                 count += 1;
@@ -241,6 +245,8 @@ pub fn watch_for_hangs(window: HWND) {
     unsafe extern "system" fn watch(job: *mut c_void) -> u32 {
         let (wnd, thread) = *unsafe { Box::from_raw(job as *mut (isize, u32)) };
         let wnd = HWND(wnd as *mut _);
+        let mut guard = 64 * 1024; // room for on_crash's line should this thread overflow its stack (as main has)
+        let _ = unsafe { SetThreadStackGuarantee(&mut guard) };
         let mut said = false;
         loop {
             std::thread::sleep(std::time::Duration::from_secs(1));

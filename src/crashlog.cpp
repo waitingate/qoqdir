@@ -175,7 +175,8 @@ int walkStack(DWORD thread, DWORD64 (&frames)[24]) {
             lo = reinterpret_cast<DWORD64>(stack.BaseAddress);
             hi = lo + stack.RegionSize;
         }
-        auto onStack = [&](DWORD64 p) { return p >= lo && p + 8 <= hi; };
+        // Not p + 8 <= hi: a register can hold anything (-1, say), and the sum would wrap round.
+        auto onStack = [&](DWORD64 p) { return p >= lo && p < hi && hi - p >= 8; };
         while (count < 24 && c.Rip && onStack(c.Rsp)) {
             frames[count++] = c.Rip;
             DWORD64 base = 0, rsp = c.Rsp;
