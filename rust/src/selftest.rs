@@ -1762,6 +1762,31 @@ impl App {
             },
             move |_a| ok_done.get(),
         );
+        let found = Rc::new(RefCell::new(String::new()));
+        let (found_act, found_done) = (found.clone(), found);
+        s.add(
+            "a program name is found folder by folder along the PATH, as cmd and the Run box find it: a .cmd in an \
+             earlier folder wins over an .exe in a later one (5.3)",
+            move |_a| {
+                let _ = std::fs::create_dir(p("pathA"));
+                let _ = std::fs::create_dir(p("pathB"));
+                write_file(&p("pathA\\qoqprobe.cmd"));
+                write_file(&p("pathB\\qoqprobe.exe"));
+                // For this one call only: the process's own PATH, so nothing else on the PC sees it.
+                let saved = std::env::var_os("PATH").unwrap_or_default();
+                let probe = std::env::join_paths([p("pathA"), p("pathB")]).unwrap_or_default();
+                unsafe { std::env::set_var("PATH", &probe) };
+                let program = command_program(OsStr::new("qoqprobe"));
+                unsafe { std::env::set_var("PATH", &saved) };
+                let _ = std::fs::remove_dir_all(p("pathA"));
+                let _ = std::fs::remove_dir_all(p("pathB"));
+                let text: String = program
+                    .map_or_else(|| "(none)".into(), |f| String::from_utf16_lossy(&f).trim_end_matches('\0').into());
+                note(text.clone());
+                *found_act.borrow_mut() = text;
+            },
+            move |_a| found_done.borrow().eq_ignore_ascii_case(&p("pathA\\qoqprobe.cmd").to_string_lossy()),
+        );
 
         s.add("(open This PC)", |a| a.open(Location::ThisPc, Nav::New, ViewState::default()), |a| a.at_pc());
         s.add(

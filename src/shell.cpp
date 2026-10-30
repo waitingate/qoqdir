@@ -444,12 +444,20 @@ std::optional<std::wstring> commandProgram(const std::wstring& name) {
     if (exts.find(L'%') != std::wstring::npos) exts = L".com;.exe;.bat;.cmd";   // unset: the usual few
     exts += L';';
     if (!own.empty() && exts.find(own + L';') == std::wstring::npos) return name;   // a document, not a program
+    // Folder by folder along the PATH, each tried with every extension, as cmd and the Run box go: a .cmd early on the
+    // PATH wins over an .exe of that name further on.
     std::wstring path = expandVars(L"%PATH%"), found(32768, L'\0');
-    for (size_t at = 0, end; (end = exts.find(L';', at)) != std::wstring::npos; at = end + 1) {
-        std::wstring ext = exts.substr(at, end - at);
-        if (ext.empty() || (!own.empty() && ext != own)) continue;
-        DWORD n = SearchPathW(path.c_str(), name.c_str(), ext.c_str(), DWORD(found.size()), found.data(), nullptr);
-        if (n > 0 && n < found.size()) return found.substr(0, n);
+    for (size_t from = 0, semi; from <= path.size(); from = semi + 1) {
+        semi = std::min(path.find(L';', from), path.size());
+        std::wstring dir = path.substr(from, semi - from);
+        if (dir.size() >= 2 && dir.front() == L'"' && dir.back() == L'"') dir = dir.substr(1, dir.size() - 2);
+        if (dir.empty()) continue;
+        for (size_t at = 0, end; (end = exts.find(L';', at)) != std::wstring::npos; at = end + 1) {
+            std::wstring ext = exts.substr(at, end - at);
+            if (ext.empty() || (!own.empty() && ext != own)) continue;
+            DWORD n = SearchPathW(dir.c_str(), name.c_str(), ext.c_str(), DWORD(found.size()), found.data(), nullptr);
+            if (n > 0 && n < found.size()) return found.substr(0, n);
+        }
     }
     std::wstring app = appPathProgram(name);
     if (!app.empty()) return app;

@@ -1140,6 +1140,25 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
             selfTest_->note = L"cmd -> " + onPath.value_or(L"(none)") + L", decoy " + (decoy ? *decoy : L"(refused)");
         },
         [=, this] { return resolved->first && resolved->second; });
+    auto firstOnPath = std::make_shared<std::wstring>();
+    add(L"a program name is found folder by folder along the PATH, as cmd and the Run box find it: a .cmd in an "
+        L"earlier folder wins over an .exe in a later one (5.3)",
+        [=, this] {
+            CreateDirectoryW(path(L"pathA").c_str(), nullptr);
+            CreateDirectoryW(path(L"pathB").c_str(), nullptr);
+            writeFile(path(L"pathA\\qoqprobe.cmd"));
+            writeFile(path(L"pathB\\qoqprobe.exe"));
+            // For this one call only: the process's own PATH, so nothing else on the PC sees it.
+            std::wstring saved(32767, L'\0');
+            saved.resize(GetEnvironmentVariableW(L"PATH", saved.data(), DWORD(saved.size())));
+            SetEnvironmentVariableW(L"PATH", (path(L"pathA") + L";" + path(L"pathB")).c_str());
+            *firstOnPath = commandProgram(L"qoqprobe").value_or(L"(none)");
+            SetEnvironmentVariableW(L"PATH", saved.c_str());
+            deleteTree(path(L"pathA"));
+            deleteTree(path(L"pathB"));
+            selfTest_->note = *firstOnPath;
+        },
+        [=, this] { return samePath(*firstOnPath, path(L"pathA\\qoqprobe.cmd")); });
 
     add(L"(open This PC)", [=, this] { open(L"", Nav::New); }, [=, this] { return at(L""); });
     add(L"typing . on This PC says Can't find (not handed to Windows, which opens Explorer)",

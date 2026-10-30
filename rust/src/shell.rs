@@ -632,16 +632,22 @@ pub fn command_program(name: &OsStr) -> Option<Vec<u16>> {
     if !own.is_empty() && !exts.split(';').any(|e| e == own) {
         return Some(typed); // a document, not a program
     }
-    let path = wide(std::env::var_os("PATH").unwrap_or_default());
+    // Folder by folder along the PATH, each tried with every extension, as cmd and the Run box go: a .cmd early on the
+    // PATH wins over an .exe of that name further on.
+    let wanted: Vec<Vec<u16>> =
+        exts.split(';').filter(|e| !e.is_empty() && (own.is_empty() || *e == own)).map(wide).collect();
     let mut found = vec![0u16; 32768];
-    for ext in exts.split(';') {
-        if ext.is_empty() || (!own.is_empty() && ext != own) {
+    for dir in std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()) {
+        if dir.as_os_str().is_empty() {
             continue;
         }
-        let n = unsafe { SearchPathW(pcwstr(&path), pcwstr(&typed), pcwstr(&wide(ext)), Some(&mut found), None) } as usize;
-        if n > 0 && n < found.len() {
-            found.truncate(n + 1); // with its NUL
-            return Some(found);
+        let dir = wide(&dir);
+        for ext in &wanted {
+            let n = unsafe { SearchPathW(pcwstr(&dir), pcwstr(&typed), pcwstr(ext), Some(&mut found), None) } as usize;
+            if n > 0 && n < found.len() {
+                found.truncate(n + 1); // with its NUL
+                return Some(found);
+            }
         }
     }
     app_path_program(name)
