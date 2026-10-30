@@ -82,7 +82,7 @@ void FileList::readWantedIcons() {
 void FileList::setIcons(const IconBatch& batch) {
     if (readingFor_ && samePath(*readingFor_, batch.dir)) readingFor_.reset();
     if (shows(batch.dir)) {
-        for (const auto& [name, icon] : batch.icons) ownIcons_[joinPath(batch.dir, name)] = icon;
+        for (const auto& [name, icon] : batch.icons) ownIcons_[name] = icon;
         InvalidateRect(lv_, nullptr, FALSE);
     }
     readWantedIcons();   // rows drawn meanwhile
@@ -154,7 +154,7 @@ std::vector<std::wstring> FileList::treeNames() const {
 int FileList::iconOf(const Item& it) const {
     if (it.icon >= 0) return it.icon;
     if (hasOwnIcon(it)) {
-        auto found = ownIcons_.find(joinPath(dir_, it.name));
+        auto found = ownIcons_.find(it.name);
         if (found != ownIcons_.end()) return found->second;
     }
     return typeIcon(it);

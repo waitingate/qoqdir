@@ -6,7 +6,6 @@
 use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet};
 use std::ffi::{OsStr, OsString};
-use std::path::PathBuf;
 
 use windows::Win32::Foundation::{COLORREF, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
 use windows::Win32::Graphics::Gdi::{
@@ -71,7 +70,7 @@ pub struct FileList {
     ask_msg: u32,
     icon_msg: u32,
     model: RefCell<Model>,
-    own_icons: RefCell<HashMap<PathBuf, i32>>, // full path -> own icon, for the folder shown
+    own_icons: RefCell<HashMap<OsString, i32>>, // file name -> own icon, for the folder shown
     asked: RefCell<HashSet<OsString>>,         // names whose own icon was asked for since the listing came
     wanted: RefCell<Vec<OsString>>,            // ...of which these are still to read
     ask_posted: Cell<bool>,                    // ask_msg is on its way
@@ -235,7 +234,7 @@ impl FileList {
             *self.reading_for.borrow_mut() = None;
         }
         if self.shows(&batch.dir) {
-            self.own_icons.borrow_mut().extend(batch.icons.iter().map(|(name, icon)| (batch.dir.join(name), *icon)));
+            self.own_icons.borrow_mut().extend(batch.icons.iter().cloned());
             unsafe {
                 let _ = InvalidateRect(Some(self.hwnd), None, false);
             }
@@ -251,7 +250,7 @@ impl FileList {
 
     #[cfg(feature = "selftest")] // only the self-test asks
     pub fn own_icon_known(&self, name: &OsStr) -> bool {
-        self.own_icons.borrow().contains_key(&self.model.borrow().location.join(name))
+        self.own_icons.borrow().contains_key(name)
     }
 
     pub fn set_filter(&self, filter: &OsStr) {
@@ -362,11 +361,11 @@ impl FileList {
     }
 
     /// An item's own icon if it has been read by now, else its type's.
-    fn icon_of(&self, m: &Model, it: &Item) -> i32 {
+    fn icon_of(&self, it: &Item) -> i32 {
         if it.icon >= 0 {
             return it.icon;
         }
-        let own = if has_own_icon(it) { self.own_icons.borrow().get(&m.location.join(&it.name)).copied() } else { None };
+        let own = if has_own_icon(it) { self.own_icons.borrow().get(&it.name).copied() } else { None };
         own.unwrap_or_else(|| type_icon(it))
     }
 
@@ -639,7 +638,7 @@ impl FileList {
                     unsafe { copy_to(lvi.pszText.0, lvi.cchTextMax, &text) };
                 }
                 if lvi.mask.contains(LVIF_IMAGE) {
-                    lvi.iImage = self.icon_of(&m, it); // not stored in the item: a file's own icon may come later
+                    lvi.iImage = self.icon_of(it); // not stored in the item: a file's own icon may come later
                     if it.icon < 0 && has_own_icon(it) {
                         want = Some(it.name.clone());
                     }

@@ -60,7 +60,7 @@ public:
     COLORREF lineColor() const { return lineColor_; }
     // The own icons read so far for the folder shown (the self-test).
     size_t ownIconCount() const { return ownIcons_.size(); }
-    bool ownIconKnown(const std::wstring& name) const { return ownIcons_.count(joinPath(dir_, name)) > 0; }
+    bool ownIconKnown(const std::wstring& name) const { return ownIcons_.count(name) > 0; }
     // The row at a screen point, or -1: none over the column header, which Windows' hit test gives to the first row or
     // to one scrolled behind it, and none below the last row.
     int rowAt(POINT screenPt) const;
@@ -87,7 +87,7 @@ private:
     bool shown_ = false;   // dir_ is a folder that was read, not the "" of a cleared list
     std::vector<Item> items_;
     std::vector<int> view_;
-    std::unordered_map<std::wstring, int> ownIcons_;   // full path -> own icon, for the folder shown
+    std::unordered_map<std::wstring, int> ownIcons_;   // file name -> own icon, for the folder shown
     std::unordered_set<std::wstring> asked_;           // names whose own icon was asked for since the listing came
     std::vector<std::wstring> wanted_;                 // ...of which these are still to read
     bool askPosted_ = false;                           // askMsg is on its way
