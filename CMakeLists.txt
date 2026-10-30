@@ -32,7 +32,7 @@ add_compile_options("-ffile-prefix-map=${MINGW_ROOT}=mingw64")
 add_compile_options(-ffunction-sections -fdata-sections)
 add_link_options(-static -Wl,--gc-sections $<$<CONFIG:Release>:-s>)
 
-set(WIN_LIBS ole32 oleaut32 shell32 shlwapi comctl32 uuid)
+set(WIN_LIBS ole32 shell32 shlwapi comctl32 uuid)
 
 # Path and folder logic, shared by the app and the tests.
 add_library(core STATIC src/folder.cpp)
@@ -53,7 +53,7 @@ target_link_options(${PROJECT_NAME} PRIVATE -municode)
 
 add_executable(${PROJECT_NAME}-test WIN32 src/main.cpp src/selftest.cpp res/qoqdir.rc)
 target_compile_definitions(${PROJECT_NAME}-test PRIVATE QOQDIR_SELFTEST)
-target_link_libraries(${PROJECT_NAME}-test PRIVATE app oleacc)
+target_link_libraries(${PROJECT_NAME}-test PRIVATE app oleacc oleaut32)
 target_link_options(${PROJECT_NAME}-test PRIVATE -municode)
 
 enable_testing()
