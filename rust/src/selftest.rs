@@ -1836,6 +1836,36 @@ impl App {
                 a.idle() && a.focused_is("added.txt")
             },
         );
+        // A delete's reply comes when the recycle is done, for a big one minutes later (4.7): stood in for here, as a
+        // test that really recycled would race it.
+        s.add(
+            "(leave the folder, as during a big delete)",
+            |a| {
+                COUNT.set(a.list.visit());
+                a.open(Location::dir(p("sub")), Nav::New, ViewState::default());
+            },
+            |a| a.at(&p("sub")),
+        );
+        s.home("(and come back)");
+        s.add(
+            "a delete's reply in a later visit to its folder leaves that visit's selection alone (4.6)",
+            |a| {
+                a.select_one("added.txt");
+                a.on_deleted(COUNT.get(), ViewState::selecting("file1.txt"));
+            },
+            |a| {
+                note(format!("focused {:?}", a.list.focused_name().unwrap_or_default()));
+                step_ms() >= 300 && a.idle() && a.focused_is("added.txt")
+            },
+        );
+        s.add(
+            "...and in the visit it began in, it selects what followed the deleted items (4.6)",
+            |a| a.on_deleted(a.list.visit(), ViewState::selecting("file1.txt")),
+            |a| {
+                note(format!("focused {:?}", a.list.focused_name().unwrap_or_default()));
+                a.idle() && a.focused_is("file1.txt")
+            },
+        );
         s.add("a command that does not exist says Can't find", |a| a.go_to("no-such-program-qoqdir"), move |a| {
             let (mut from, mut to) = (0u32, 0u32); // the text stays selected, so it can be corrected (5.3)
             send(a.address, EM_GETSEL, &mut from as *mut _ as usize, &mut to as *mut _ as isize);

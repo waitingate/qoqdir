@@ -44,7 +44,9 @@ void FileList::setListing(Listing&& listing) {
     update(false, [&] {
         // A refresh keeps the icons it has, so rows don't flash their type's, and asks for those drawn again: a
         // program replaced by another gets its new icon. Another folder starts with none.
-        if (!samePath(listing.path, dir_)) ownIcons_.clear();
+        bool sameFolder = samePath(listing.path, dir_);
+        if (!sameFolder) ownIcons_.clear();
+        if (!sameFolder || !shown_) ++visit_;
         asked_.clear();
         wanted_.clear();
         dir_ = std::move(listing.path);
@@ -63,6 +65,7 @@ void FileList::setListing(Listing&& listing) {
 void FileList::clear() {
     setListing(Listing{});
     shown_ = false;
+    ++visit_;
 }
 
 void FileList::wantIcon(const std::wstring& name) {

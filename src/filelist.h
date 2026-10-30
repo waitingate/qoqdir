@@ -31,6 +31,9 @@ public:
 
     const std::wstring& dir() const { return dir_; }
     bool shows(const std::wstring& path) const { return shown_ && samePath(dir_, path); }   // "" is This PC
+    // Which time on screen this is for the folder shown: another number each time a folder comes, or the list empties
+    // (so a tab switch to the same folder too). A reload stays the same visit.
+    UINT visit() const { return visit_; }
     int count() const { return int(view_.size()); }
     int total() const { return total_; }   // the items a filter would narrow down (not the hidden ones)
     const Item& at(int row) const { return items_[view_[row]]; }
@@ -86,6 +89,7 @@ private:
     UINT askMsg_ = 0, iconMsg_ = 0;
     std::wstring dir_;
     bool shown_ = false;   // dir_ is a folder that was read, not the "" of a cleared list
+    UINT visit_ = 0;
     int arrivalSorts_ = 0;
     std::vector<Item> items_;
     std::vector<int> view_;

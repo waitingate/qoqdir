@@ -141,6 +141,7 @@ private:
     std::optional<std::wstring> tabDropTarget(const POINT* screenPt);
     void showTabs();
     void bookmarkTab(int index);   // the tab's folder as a shortcut in Bookmarks (the tab's menu)
+    void onDeleted(UINT visit, ViewState view);   // a delete's reply from its worker (deleteSelection)
 
     // Saved tabs (Bookmarks\Tabs)
     void saveTabs();       // Ctrl+S: a shortcut per tab in Bookmarks\Tabs
@@ -244,6 +245,7 @@ private:
 
     struct Rename {                 // done after the edit box has closed
         std::wstring path, name;
+        UINT visit = 0;             // the list's visit to the folder it was typed in (FileList::visit)
     } rename_;
 
     FolderWatch watch_;

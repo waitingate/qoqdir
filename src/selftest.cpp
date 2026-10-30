@@ -1178,6 +1178,31 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
             selfTest_->note = L"focused " + list_.focusedName();
             return idle() && list_.focusedName() == L"added.txt";
         });
+    // A delete's reply comes when the recycle is done, for a big one minutes later (4.7): stood in for here, as a test
+    // that really recycled would race it.
+    auto visit = std::make_shared<UINT>(0);
+    add(L"(leave the folder, as during a big delete)",
+        [=, this] {
+            *visit = list_.visit();
+            open(path(L"sub"), Nav::New);
+        },
+        [=, this] { return at(path(L"sub")); });
+    backHome(L"(and come back)");
+    add(L"a delete's reply in a later visit to its folder leaves that visit's selection alone (4.6)",
+        [=, this] {
+            list_.select({L"added.txt"}, L"added.txt");
+            onDeleted(*visit, ViewState::selecting(L"file1.txt"));
+        },
+        [=, this] {
+            selfTest_->note = L"focused " + list_.focusedName();
+            return GetTickCount64() - selfTest_->startTick >= 300 && idle() && list_.focusedName() == L"added.txt";
+        });
+    add(L"...and in the visit it began in, it selects what followed the deleted items (4.6)",
+        [=, this] { onDeleted(list_.visit(), ViewState::selecting(L"file1.txt")); },
+        [=, this] {
+            selfTest_->note = L"focused " + list_.focusedName();
+            return idle() && list_.focusedName() == L"file1.txt";
+        });
     add(L"a command that does not exist says Can't find",
         [=, this] { goTo(L"no-such-program-qoqdir"); },
         [=, this] {

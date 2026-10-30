@@ -176,7 +176,8 @@ These describe what the user sees. Each must hold in every situation.
 ### 4.6 Selection and focus
 - Going up (or back to a parent) selects the folder you came from.
 - After a delete, the item that followed the deleted ones is selected, if the
-  tab still shows their folder; a folder shown since keeps its own selection.
+  list has stayed on their folder; a folder shown since, even that one again,
+  keeps its own selection.
 - After creating or renaming an item, that item is selected.
 - Something in the list always has the keyboard focus, so arrow keys work at once.
 - Switching tabs brings back each tab's selection, focus and scroll position.
@@ -752,7 +753,9 @@ result:
    moved off the selected file as Ctrl+Down moves it, renames the selected file.
 9. Delete sends the file to the Recycle Bin and it leaves the list. A Delete
    that is done after the tab went on to `sub` leaves `sub` as it is: nothing
-   is read again, and its selection stays.
+   is read again, and its selection stays. A delete's reply in a later visit to
+   its folder leaves that visit's selection alone; in the visit it began in, it
+   selects what followed the deleted items.
 10. Another program creates a file in the shown folder: it shows up by itself.
 11. Another program deletes the shown folder: the tab stays on it with an empty
     list and the "not available … (F5 tries again)" message. The folder comes

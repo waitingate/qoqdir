@@ -33,8 +33,8 @@ struct CommandDone {   // a typed command's reply from its worker (goToTyped)
 };
 
 struct Deleted {   // a delete's reply from its worker (deleteSelection)
-    std::wstring dir;   // the folder the items were in
-    ViewState view;     // what to select there afterwards
+    UINT visit;      // the list's visit to the folder when it began (FileList::visit)
+    ViewState view;  // what to select there afterwards
 };
 
 constexpr size_t kMaxHistory = 100;
@@ -565,9 +565,8 @@ LRESULT App::onMessage(UINT msg, WPARAM wp, LPARAM lp) {
         return 0;
     case WM_APP_DELETED: {   // the recycle finished on a worker (deleteSelection); select what followed (4.6)
         std::unique_ptr<Deleted> d(reinterpret_cast<Deleted*>(lp));
-        // Nothing deleted (No, or it failed): the selection was already cleared. A big delete takes minutes (4.7): in
-        // a folder shown since, the selection and scroll stay its own (the folder's watch sees a change).
-        if (wp && list_.shows(d->dir)) refresh(std::move(d->view));
+        // Nothing deleted (No, or it failed): the selection was already cleared.
+        if (wp) onDeleted(d->visit, std::move(d->view));
         return 0;
     }
     case WM_APP_TERMINAL:   // Ctrl+`'s terminal was looked for and started on a worker (openTerminal)
@@ -614,7 +613,9 @@ LRESULT App::onMessage(UINT msg, WPARAM wp, LPARAM lp) {
     case WM_APP_RENAME: {   // what is selected then is the name Windows gave the item, which can differ from the typed
         Rename r = std::exchange(rename_, {});
         if (r.path.empty()) return 0;
-        if (std::optional<std::wstring> made = renameItem(wnd_, r.path, r.name)) refresh(ViewState::selecting(*made));
+        std::optional<std::wstring> made = renameItem(wnd_, r.path, r.name);
+        // Closing the box can be a tab switch's doing: the folder's watch sees the change if it is shown again.
+        if (made && r.visit == list_.visit()) refresh(ViewState::selecting(*made));
         return 0;
     }
     case WM_TIMER:
@@ -766,7 +767,7 @@ LRESULT App::onNotify(NMHDR* nm) {
             auto* info = reinterpret_cast<NMLVDISPINFOW*>(nm);
             int row = info->item.iItem;
             if (info->item.pszText && info->item.pszText[0] && row >= 0 && row < list_.count() && info->item.pszText != list_.at(row).name) {
-                rename_ = {list_.pathAt(row), info->item.pszText};
+                rename_ = {list_.pathAt(row), info->item.pszText, list_.visit()};
                 PostMessageW(wnd_, WM_APP_RENAME, 0, 0);
             }
             return FALSE;
@@ -1584,10 +1585,17 @@ void App::deleteSelection(bool permanently) {
     // Delete meanwhile acts on nothing (4.6). The reply selects that item once the folder is read again. Closing the
     // window doesn't stop it (4.9, holdProcess).
     list_.select({}, v.focus);
-    inBackground([wnd = wnd_, dir, items, permanently, v = std::move(v), hold = holdProcess()]() mutable {
+    inBackground([wnd = wnd_, dir, items, permanently, visit = list_.visit(), v = std::move(v),
+                  hold = holdProcess()]() mutable {
         bool ok = deleteItems(wnd, dir, items, permanently);
-        post(wnd, WM_APP_DELETED, ok, std::make_unique<Deleted>(Deleted{dir, std::move(v)}));
+        post(wnd, WM_APP_DELETED, ok, std::make_unique<Deleted>(Deleted{visit, std::move(v)}));
     });
+}
+
+// A big delete takes minutes (4.7): once the list has left the folder, even to come back, the selection and scroll are
+// that visit's own (the folder's watch sees a change).
+void App::onDeleted(UINT visit, ViewState view) {
+    if (visit == list_.visit()) refresh(std::move(view));
 }
 
 void App::newFolder() {

@@ -51,6 +51,7 @@ const LVSICF_NOSCROLL: isize = 2;
 struct Model {
     location: Location,
     shown: bool, // location is a folder that was read, not the This PC of a cleared list
+    visit: u32,  // see FileList::visit
     items: Vec<Item>,
     view: Vec<usize>,
     filter: Vec<u16>,  // NUL-terminated
@@ -150,6 +151,7 @@ impl FileList {
             model: RefCell::new(Model {
                 location: Location::ThisPc,
                 shown: false,
+                visit: 0,
                 items: Vec::new(),
                 view: Vec::new(),
                 filter: vec![0],
@@ -171,12 +173,16 @@ impl FileList {
     pub fn set_listing(&self, listing: Listing) {
         // A refresh keeps the icons it has, so rows don't flash their type's, and asks for those drawn again: a
         // program replaced by another gets its new icon. Another folder starts with none.
-        if !self.model.borrow().location.same(&listing.location) {
+        let same_folder = self.model.borrow().location.same(&listing.location);
+        if !same_folder {
             self.own_icons.borrow_mut().clear();
         }
         self.asked.borrow_mut().clear();
         self.wanted.borrow_mut().clear();
         self.update(false, |m| {
+            if !same_folder || !m.shown {
+                m.visit = m.visit.wrapping_add(1);
+            }
             m.location = listing.location;
             m.shown = true;
             m.items = listing.items;
@@ -197,7 +203,15 @@ impl FileList {
     /// No folder at all: while a tab switch reads its folder, or the folder is not available.
     pub fn clear(&self) {
         self.set_listing(Listing::default());
-        self.model.borrow_mut().shown = false;
+        let mut m = self.model.borrow_mut();
+        m.shown = false;
+        m.visit = m.visit.wrapping_add(1);
+    }
+
+    /// Which time on screen this is for the folder shown: another number each time a folder comes, or the list empties
+    /// (so a tab switch to the same folder too). A reload stays the same visit.
+    pub fn visit(&self) -> u32 {
+        self.model.borrow().visit
     }
 
     /// Listings it had to sort itself, as they came.

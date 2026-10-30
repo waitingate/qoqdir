@@ -217,7 +217,8 @@ pub struct State {
     pub kept: Option<Pending>,
     // What a delete, rename or new folder asked to select while a load was pending, and in which folder.
     pub queued_view: Option<(Location, ViewState)>,
-    rename: Option<(PathBuf, OsString)>, // done after the edit box has closed
+    // Done after the edit box has closed: path, new name, the list's visit to the folder it was typed in.
+    rename: Option<(PathBuf, OsString, u32)>,
     last_focus: Option<HWND>,
 }
 
@@ -1133,14 +1134,10 @@ impl App {
                 }
                 WM_APP_DELETED => {
                     // the recycle finished on a worker (delete_selection); select what followed (4.6). A null pointer
-                    // means nothing was deleted (No, or it failed): the selection was already cleared. A big delete
-                    // takes minutes (4.7): in a folder shown since, the selection and scroll stay its own (the
-                    // folder's watch sees a change).
+                    // means nothing was deleted (No, or it failed): the selection was already cleared.
                     if lp.0 != 0 {
-                        let (dir, view) = *Box::from_raw(lp.0 as *mut (Location, ViewState));
-                        if self.list.shows(&dir) {
-                            self.refresh(view);
-                        }
+                        let (visit, view) = *Box::from_raw(lp.0 as *mut (u32, ViewState));
+                        self.on_deleted(visit, view);
                     }
                     return LRESULT(0);
                 }
@@ -1210,7 +1207,12 @@ impl App {
                 WM_APP_RENAME => {
                     // What is selected then is the name Windows gave the item, which can differ from the typed.
                     let rename = self.st.borrow_mut().rename.take();
-                    if let Some((path, name)) = rename && let Ok(made) = rename_item(self.wnd, &path, &name) {
+                    // Closing the box can be a tab switch's doing: the folder's watch sees the change if it is shown
+                    // again.
+                    if let Some((path, name, visit)) = rename
+                        && let Ok(made) = rename_item(self.wnd, &path, &name)
+                        && visit == self.list.visit()
+                    {
                         self.refresh(ViewState::selecting(made));
                     }
                     return LRESULT(0);
@@ -1414,7 +1416,7 @@ impl App {
                         if let (Some(it), Some(Location::Dir(path))) = (self.list.item(row), self.list.item_location(row))
                             && name != it.name && !name.is_empty()
                         {
-                            self.st.borrow_mut().rename = Some((path, name));
+                            self.st.borrow_mut().rename = Some((path, name, self.list.visit()));
                             unsafe {
                                 let _ = PostMessageW(Some(self.wnd), WM_APP_RENAME, WPARAM(0), LPARAM(0));
                             }
@@ -2630,13 +2632,21 @@ impl App {
         // a second Delete meanwhile acts on nothing (4.6). The reply selects that item once the folder is read again.
         // Closing the window doesn't stop it (4.9, hold_process).
         self.list.select(&[], view.focus.as_deref());
-        let (wnd, hold) = (self.wnd.0 as usize, hold_process());
+        let (wnd, hold, visit) = (self.wnd.0 as usize, hold_process(), self.list.visit());
         in_background(move || {
             let ok = delete_items(HWND(wnd as _), &dir, &items, permanently);
-            let view = if ok { Box::into_raw(Box::new((dir, view))) as isize } else { 0 };
+            let view = if ok { Box::into_raw(Box::new((visit, view))) as isize } else { 0 };
             let _ = unsafe { PostMessageW(Some(HWND(wnd as _)), WM_APP_DELETED, WPARAM(usize::from(ok)), LPARAM(view)) };
             drop(hold);
         });
+    }
+
+    /// A delete's reply from its worker. A big delete takes minutes (4.7): once the list has left the folder, even to
+    /// come back, the selection and scroll are that visit's own (the folder's watch sees a change).
+    pub fn on_deleted(&self, visit: u32, view: ViewState) {
+        if visit == self.list.visit() {
+            self.refresh(view);
+        }
     }
 
     fn new_folder(&self) {
