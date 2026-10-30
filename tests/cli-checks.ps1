@@ -170,10 +170,15 @@ Check ($r.Text.StartsWith('Navigation') -and $r.Text -match 'Refresh: F5' -and $
 $r = HelpBox '-x'
 Check ($r.Shown -and $r.Code -eq 1 -and $r.Text.StartsWith('Unknown option: -x') -and $r.Title -match '^Qoqdir \d') `
   "with no terminal (as from a shortcut), -x shows the error and help in a box and exits with 1 (shown: $($r.Shown), exit code $($r.Code))"
-# A damaged qoqdir.ini: a number far off any screen gives the default (x + width must not overflow and stop it).
-Set-Content -Path $ini -Value "[Window]`r`nX=2147483000`r`nWidth=1000`r`nHeight=600"
-$r = TitleAfterStart @('--tab=C:\Users\Public') 'Public'
-Check ($r.Title -eq 'Public') "a damaged qoqdir.ini (X=2147483000) falls back to the defaults: '$($r.Title)'"
+# A damaged qoqdir.ini: a number far off any screen gives the default (x + width must not overflow and stop it), 0
+# for X, and the rest is taken as saved.
+$dw = [QoqdirHelp]::Scaled(820, 0, 0); $dh = [QoqdirHelp]::Scaled(540, 0, 0)
+Set-Content -Path $ini -Value "[Window]`r`nX=2147483000`r`nWidth=$dw`r`nHeight=$dh"
+$p = StartQuiet $copy '--tab=C:\Users\Public'
+[void](WaitFor { $p.Refresh(); $p.HasExited -or $p.MainWindowTitle -eq 'Public' } 5000)
+$place = if ($p.HasExited) { 'none: it stopped' } else { [QoqdirHelp]::Place($p.MainWindowHandle) }
+[void]$p.CloseMainWindow(); [void]$p.WaitForExit(5000)
+Check ($place -eq "0,0,$dw,$dh") "a damaged qoqdir.ini (X=2147483000) falls back to 0 for X and keeps the rest (at $place)"
 # Started with a place and size, as Open in new window starts one (5.8): there, not at the place saved.
 Set-Content -Path $ini -Value "[Window]`r`nX=300`r`nY=200`r`nWidth=600`r`nHeight=400"
 $w = [QoqdirHelp]::Scaled(600, 100, 80); $h = [QoqdirHelp]::Scaled(400, 100, 80)   # over its least size, 520 by 320
