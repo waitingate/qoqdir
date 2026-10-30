@@ -2081,18 +2081,20 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
         [=, this] { return nodeTexts(TreeView_GetChild(tree_.hwnd(), one())) == L"deep"; });
     // A change that comes while a node is being read: that read may have listed the folder before it, so one more
     // follows (5.5). Made where no watch sees it, only that second read can show it.
+    auto readIn = std::make_shared<bool>(false);   // the first read listed the folder before the change
     add(L"a change to a tree folder while it is being read shows once that read is in (5.5)",
         [=, this] {
             tree_.refreshFolder(path(L"Bookmarks\\one"));   // a read of "one" goes out...
             MSG m;
             ULONGLONG start = GetTickCount64();   // ...and lists the folder: its result waits in the queue
-            while (!PeekMessageW(&m, wnd_, tree_.batchMessage(), tree_.batchMessage(), PM_NOREMOVE) &&
+            while (!(*readIn = PeekMessageW(&m, wnd_, tree_.batchMessage(), tree_.batchMessage(), PM_NOREMOVE)) &&
                    GetTickCount64() - start < 2000)
                 Sleep(5);
+            if (!*readIn) selfTest_->note = L"that read was not in after 2 s: nothing to test";
             CreateDirectoryW(path(L"Bookmarks\\one\\fresh").c_str(), nullptr);
             tree_.refreshFolder(path(L"Bookmarks\\one"));   // the change, as a watch tells it, while that read is out
         },
-        [=, this] { return nodeTexts(TreeView_GetChild(tree_.hwnd(), one())) == L"deep,fresh"; });
+        [=, this] { return *readIn && nodeTexts(TreeView_GetChild(tree_.hwnd(), one())) == L"deep,fresh"; });
     add(L"(remove it)",
         [=, this] {
             RemoveDirectoryW(path(L"Bookmarks\\one\\fresh").c_str());
@@ -2542,14 +2544,20 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
         [=, this] { return idle() && !listed(L"zz minimized.dat"); });
     // From This PC: from a folder nearby, the old watch would still see the change through a parent's timestamp.
     add(L"(open This PC, so the next folder is not watched yet)", [=, this] { open(L"", Nav::New); }, [=, this] { return at(L""); });
+    auto bigRead = std::make_shared<bool>(false);   // the read was in before the file came
     add(L"a file created while the folder is still being read shows up by itself",
         [=, this] {
-            open(path(L"big"), Nav::New);   // 10,000 files: read on a worker thread
-            Sleep(100);                     // the read is past the start, where this name sorts
+            open(path(L"big"), Nav::New);   // 10,000 files: read on a worker thread, to the end
+            MSG m;
+            ULONGLONG start = GetTickCount64();   // its result waits in the queue: this thread doesn't take it yet
+            while (!(*bigRead = PeekMessageW(&m, wnd_, loadedMessage(), loadedMessage(), PM_NOREMOVE)) &&
+                   GetTickCount64() - start < 5000)
+                Sleep(5);
+            if (!*bigRead) selfTest_->note = L"the read was not in after 5 s: nothing to test";
             writeFile(path(L"big\\aaa late.dat"));   // too late for the read, too early for the folder watch
-            Sleep(600);                     // this thread waits: the read ends, and Windows reports the file to no one
+            Sleep(600);                              // and Windows reports the file to no one meanwhile
         },
-        [=, this] { return at(path(L"big")) && listed(L"aaa late.dat"); });
+        [=, this] { return *bigRead && at(path(L"big")) && listed(L"aaa late.dat"); });
     add(L"(remove that file too)", [=, this] { DeleteFileW(path(L"big\\aaa late.dat").c_str()); refresh(); },
         [=, this] { return idle() && !listed(L"aaa late.dat"); });
     // Shown by a tab switch, This PC must get its own watch and the folder shown before must lose its, with a refresh

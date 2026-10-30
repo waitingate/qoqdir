@@ -76,7 +76,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
     UIS_CLEAR, UIS_SET, UISF_HIDEFOCUS, WM_QUERYUISTATE, WM_UPDATEUISTATE,
 };
 
-use crate::app::{App, Key, MenuItems, Nav, TIMER_LOADING, TIMER_REFRESH, ViewState};
+use crate::app::{App, Key, MenuItems, Nav, TIMER_LOADING, TIMER_REFRESH, ViewState, WM_APP_LOADED};
 use crate::folder::{
     Item, Listing, Location, SortKey, command_line_words, exists, folder_written, is_directory, is_shortcut,
     list_folder, parse_command_line, sort_items, system_dir,
@@ -3078,23 +3078,27 @@ impl App {
         );
         // A change that comes while a node is being read: that read may have listed the folder before it, so one more
         // follows (5.5). Made where no watch sees it, only that second read can show it.
+        let read_in = Rc::new(Cell::new(false)); // the first read listed the folder before the change
+        let (read_act, read_done) = (read_in.clone(), read_in);
         s.add(
             "a change to a tree folder while it is being read shows once that read is in (5.5)",
-            |a| {
+            move |a| {
                 let one = Location::dir(p("Bookmarks\\one"));
                 a.tree.refresh_folder(&one); // a read of "one" goes out...
                 let msg = a.tree.batch_message();
                 let start = Instant::now(); // ...and lists the folder: its result waits in the queue
                 let mut m = MSG::default();
-                while !unsafe { PeekMessageW(&mut m, Some(a.wnd), msg, msg, PM_NOREMOVE) }.as_bool()
-                    && start.elapsed() < Duration::from_secs(2)
-                {
+                let mut read = || unsafe { PeekMessageW(&mut m, Some(a.wnd), msg, msg, PM_NOREMOVE) };
+                while !read_act.replace(read().as_bool()) && start.elapsed() < Duration::from_secs(2) {
                     std::thread::sleep(Duration::from_millis(5));
+                }
+                if !read_act.get() {
+                    note("that read was not in after 2 s: nothing to test".into());
                 }
                 let _ = std::fs::create_dir(p("Bookmarks\\one\\fresh"));
                 a.tree.refresh_folder(&one); // the change, as a watch tells it, while that read is out
             },
-            |a| a.node_texts(a.tree.child(a.tree_one())) == "deep,fresh",
+            move |a| read_done.get() && a.node_texts(a.tree.child(a.tree_one())) == "deep,fresh",
         );
         s.add(
             "(remove it)",
@@ -3677,15 +3681,27 @@ impl App {
         s.add("(open This PC, so the next folder is not watched yet)", |a| a.open(Location::ThisPc, Nav::New, ViewState::default()), |a| {
             a.at_pc()
         });
+        let big_read = Rc::new(Cell::new(false)); // the read was in before the file came
+        let (big_act, big_done) = (big_read.clone(), big_read);
         s.add(
             "a file created while the folder is still being read shows up by itself",
-            |a| {
-                a.open(Location::dir(p("big")), Nav::New, ViewState::default()); // 10,000 files: read on a worker thread
-                std::thread::sleep(Duration::from_millis(100)); // the read is past the start, where this name sorts
+            move |a| {
+                // 10,000 files: read on a worker thread, to the end.
+                a.open(Location::dir(p("big")), Nav::New, ViewState::default());
+                let start = Instant::now(); // its result waits in the queue: this thread doesn't take it yet
+                let mut m = MSG::default();
+                let msg = WM_APP_LOADED;
+                let mut loaded = || unsafe { PeekMessageW(&mut m, Some(a.wnd), msg, msg, PM_NOREMOVE) };
+                while !big_act.replace(loaded().as_bool()) && start.elapsed() < Duration::from_secs(5) {
+                    std::thread::sleep(Duration::from_millis(5));
+                }
+                if !big_act.get() {
+                    note("the read was not in after 5 s: nothing to test".into());
+                }
                 write_file(&p("big\\aaa late.dat")); // too late for the read, too early for the folder watch
-                std::thread::sleep(Duration::from_millis(600)); // this thread waits: the read ends, and Windows reports the file to no one
+                std::thread::sleep(Duration::from_millis(600)); // and Windows reports the file to no one meanwhile
             },
-            |a| a.at(&p("big")) && a.listed("aaa late.dat"),
+            move |a| big_done.get() && a.at(&p("big")) && a.listed("aaa late.dat"),
         );
         s.add(
             "(remove that file too)",

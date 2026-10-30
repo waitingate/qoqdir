@@ -420,6 +420,8 @@ void App::layout() {
 
 // ---------------------------------------------------------------- messages
 
+UINT App::loadedMessage() { return WM_APP_LOADED; }
+
 LRESULT App::onMessage(UINT msg, WPARAM wp, LPARAM lp) {
     // These carry a heap object made on a worker in lParam. Another program broadcasting one of their numbers (apps
     // do broadcast in the WM_APP range) would hand a null or stray pointer; ignore one with no pointer (4.10).

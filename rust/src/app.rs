@@ -101,7 +101,7 @@ const ID_LIST: i32 = 108;
 const ID_STATUS: i32 = 109;
 const ID_REFRESH: i32 = 110;
 
-const WM_APP_LOADED: u32 = WM_APP + 1;
+pub(crate) const WM_APP_LOADED: u32 = WM_APP + 1; // what a folder's read comes back as (the self-test waits for one)
 const WM_APP_CHANGED: u32 = WM_APP + 2;
 const WM_APP_CLOSETAB: u32 = WM_APP + 3;
 const WM_APP_RENAME: u32 = WM_APP + 4;

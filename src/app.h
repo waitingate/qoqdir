@@ -183,6 +183,7 @@ private:
 
     static constexpr UINT_PTR kRefreshTimer = 1, kStatusTimer = 2, kLoadingTimer = 3, kTreeTimer = 4,
                               kSelfTestTimer = 50;
+    static UINT loadedMessage();   // what a folder's read comes back as (the self-test waits for one)
     int exitCode_ = 1;   // a run that never finishes (closed by hand, no window) has not passed
     bool useSettings_ = true;
 
