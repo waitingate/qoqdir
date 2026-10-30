@@ -166,6 +166,16 @@ LRESULT CALLBACK filterProc(HWND h, UINT msg, WPARAM wp, LPARAM lp, UINT_PTR, DW
     return r;
 }
 
+// qoqdir.ini's [Window] section in one read: each GetPrivateProfileStringW opens and reads the whole file again, and
+// each WritePrivateProfileStringW writes it all again, which on a USB stick or a share adds up.
+std::map<std::wstring, std::wstring> readIniSection(const std::wstring& ini) {
+    for (DWORD size = 1024;; size = std::min<DWORD>(size * 4, 32767)) {
+        std::wstring text(size, L'\0');
+        DWORD n = GetPrivateProfileSectionW(L"Window", text.data(), size, ini.c_str());
+        if (n + 2 < size || size == 32767) return parseIniSection(std::wstring_view(text.data(), n));   // else cut short
+    }
+}
+
 }  // namespace
 
 // ---------------------------------------------------------------- setup
@@ -195,6 +205,7 @@ bool App::create(HINSTANCE instance, const CommandLine& cmd, bool useSettings) {
     std::wstring exe = exePath();
     // Without settings (self-test), read from a file that does not exist: every value is then a default.
     ini_ = useSettings_ ? joinPath(parentPath(exe), toLower(kAppName) + L".ini") : L"?";
+    iniValues_ = readIniSection(ini_);
     WNDCLASSEXW wc{};
     wc.cbSize = sizeof wc;
     wc.lpfnWndProc = wndProc;
@@ -1694,8 +1705,9 @@ void App::openInNewWindow(const std::wstring& dir) {
 // Missing, not a number, or far off any screen (a damaged file: a value stays within +/-100000, so sums like x + w
 // don't overflow): the fallback. The window numbers in qoqdir.ini.
 int App::iniNumber(const std::wstring& key, int fallback) const {
-    wchar_t text[32] = {};
-    GetPrivateProfileStringW(L"Window", key.c_str(), L"", text, 32, ini_.c_str());
+    auto found = iniValues_.find(toLower(key));
+    if (found == iniValues_.end()) return fallback;
+    const wchar_t* text = found->second.c_str();
     wchar_t* end = nullptr;
     long value = wcstol(text, &end, 10);
     return end != text && *end == 0 && value >= -100000 && value <= 100000 ? int(value) : fallback;
@@ -1726,8 +1738,13 @@ void App::loadSettings(const CommandLine& cmd, const StartAsk& ask) {
 
 void App::saveSettings() {
     if (!useSettings_) return;   // only numbers are saved: a plain ini file is fine
+    // Only what differs from the file as it is now, which another window may have written since this one started.
+    std::map<std::wstring, std::wstring> onDisk = readIniSection(ini_);
     auto number = [&](const std::wstring& key, int value) {
-        WritePrivateProfileStringW(L"Window", key.c_str(), std::to_wstring(value).c_str(), ini_.c_str());
+        std::wstring text = std::to_wstring(value);
+        auto found = onDisk.find(toLower(key));
+        if (found == onDisk.end() || found->second != text)
+            WritePrivateProfileStringW(L"Window", key.c_str(), text.c_str(), ini_.c_str());
     };
 
     WINDOWPLACEMENT wp{};

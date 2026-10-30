@@ -754,6 +754,21 @@ pub fn format_time(ft: u64) -> OsString {
     }
 }
 
+/// An ini file's section as GetPrivateProfileSectionW gives it, "key=value" each ending in a nul: keys in lower case,
+/// as the file's are matched, and of a key there twice the first. Spaces round both, and quotes round a value, go,
+/// as GetPrivateProfileStringW drops them.
+pub fn parse_ini_section(text: &[u16]) -> HashMap<String, String> {
+    let mut values = HashMap::new();
+    for line in text.split(|&c| c == 0) {
+        let line = String::from_utf16_lossy(line);
+        let Some((key, value)) = line.split_once('=') else { continue };
+        let value = value.trim_matches([' ', '\t']);
+        let value = ['"', '\''].iter().find_map(|&q| value.strip_prefix(q)?.strip_suffix(q)).unwrap_or(value);
+        values.entry(key.trim_matches([' ', '\t']).to_lowercase()).or_insert_with(|| value.to_string());
+    }
+    values
+}
+
 // ---------------------------------------------------------------- drops
 
 /// The keys a folder's drop target is told (5.8): a plain drag that could move files goes on as a right-button drag, so
@@ -996,6 +1011,18 @@ mod tests {
         v[2].type_text = type_of("Compressed (zipped) Folder");
         sort_items(&mut v, SortKey::Type, true);
         assert_eq!(names(&v), "z.cfg,x.zip,y.bat");
+    }
+
+    #[test]
+    fn ini_section() {
+        // qoqdir.ini's [Window] section, read in one go: keys in lower case, the first of one there twice, no spaces
+        // or quotes round them, and a line that is no key left out.
+        let text: Vec<u16> = "X=10\0 Width = 300 \0x=99\0Quoted=\"5\"\0junk\0".encode_utf16().collect();
+        let v = parse_ini_section(&text);
+        assert_eq!(v.len(), 3);
+        assert_eq!(v["x"], "10");
+        assert_eq!(v["width"], "300");
+        assert_eq!(v["quoted"], "5");
     }
 
     #[test]

@@ -4,6 +4,7 @@
 //! `st` is never borrowed across a call into Windows, which can call straight back into `on_message`.
 
 use std::cell::{Cell, RefCell};
+use std::collections::HashMap;
 use std::ffi::OsString;
 use std::os::windows::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
@@ -31,7 +32,7 @@ use windows::Win32::System::Threading::{
     CreateProcessW, GetStartupInfoW, PROCESS_CREATION_FLAGS, PROCESS_INFORMATION, STARTF_USEPOSITION,
     STARTF_USESHOWWINDOW, STARTF_USESIZE, STARTUPINFOW,
 };
-use windows::Win32::System::WindowsProgramming::{GetPrivateProfileStringW, WritePrivateProfileStringW};
+use windows::Win32::System::WindowsProgramming::{GetPrivateProfileSectionW, WritePrivateProfileStringW};
 use windows::Win32::UI::Accessibility::{CLSID_AccPropServices, IAccPropServices, PROPID_ACC_NAME};
 use windows::Win32::UI::Controls::{
     EM_GETSEL, EM_REPLACESEL, EM_SETSEL, LVIR_LABEL, LVIS_SELECTED, LVM_CANCELEDITLABEL,
@@ -73,7 +74,8 @@ use crate::filelist::FileList;
 use crate::APP_NAME;
 use crate::folder::{
     CommandLine, DropBack, Listing, Location, SortKey, byte_size, drop_back, expand_vars, folder_written,
-    is_absolute_path, is_relative_path, is_shortcut, list_folder, normalize, row_after_deleting, tab_argument,
+    is_absolute_path, is_relative_path, is_shortcut, list_folder, normalize, parse_ini_section, row_after_deleting,
+    tab_argument,
 };
 use crate::shell::{
     FolderWatch, IconBatch, OwnItem, acknowledge_change, fill_types, background_menu, bookmark_folder, copy_to_clipboard, delete_items, drag_out, open_in_explorer,
@@ -290,6 +292,7 @@ pub struct App {
     pub bookmark_notices: Cell<u32>, // changes the Bookmarks watch passed on (self-test)
     use_settings: bool,
     ini: Vec<u16>, // settings file
+    ini_values: HashMap<String, String>, // its [Window] section, read once (create)
     pub st: RefCell<State>,
     pub quiet: Cell<bool>, // no beeps (set by the self-test, which triggers errors on purpose)
     asking: Cell<bool>,    // the "Save these tabs?" box is up: a second WM_CLOSE is ignored (5.7)
@@ -381,13 +384,25 @@ pub struct MenuItems {
     opens_here: bool,     // a folder or shortcut among them: Open and the new-tab verbs open them here
 }
 
-/// A window number from qoqdir.ini (`ini` is the file path, wide): missing, not a number, or far off any screen (a
-/// damaged file: a value stays within +/-100000, so sums like x + w don't overflow) gives the fallback.
-fn ini_number(ini: &[u16], key: &str, fallback: i32) -> i32 {
-    let mut buf = [0u16; 32];
-    let k = wide(key);
-    unsafe { GetPrivateProfileStringW(w!("Window"), pcwstr(&k), w!(""), Some(&mut buf), pcwstr(ini)) };
-    let value: Option<i32> = from_wide(&buf).to_string_lossy().trim().parse().ok();
+/// qoqdir.ini's [Window] section in one read (`ini` is the file path, wide): each GetPrivateProfileStringW opens and
+/// reads the whole file again, and each WritePrivateProfileStringW writes it all again, which on a USB stick or a
+/// share adds up.
+fn read_ini_section(ini: &[u16]) -> HashMap<String, String> {
+    let mut size = 1024;
+    loop {
+        let mut text = vec![0u16; size];
+        let n = unsafe { GetPrivateProfileSectionW(w!("Window"), Some(&mut text), pcwstr(ini)) } as usize;
+        if n + 2 < size || size == 32767 {
+            return parse_ini_section(&text[..n]);
+        }
+        size = (size * 4).min(32767); // cut short
+    }
+}
+
+/// A window number from qoqdir.ini's section: missing, not a number, or far off any screen (a damaged file: a value
+/// stays within +/-100000, so sums like x + w don't overflow) gives the fallback.
+fn ini_number(values: &HashMap<String, String>, key: &str, fallback: i32) -> i32 {
+    let value: Option<i32> = values.get(&key.to_lowercase()).and_then(|v| v.trim().parse().ok());
     value.filter(|v| (-100_000..=100_000).contains(v)).unwrap_or(fallback)
 }
 
@@ -518,12 +533,13 @@ impl App {
             // Without settings (self-test), read from a file that cannot exist: every value is then a default.
             let ini_name = if use_settings { format!("{}.ini", APP_NAME.to_lowercase()) } else { "none?.ini".into() };
             let ini = wide(exe.with_file_name(ini_name));
+            let ini_values = read_ini_section(&ini);
             // Where to make the window: the asked place (Open in new window, 5.8), else the saved place when it is on
             // a monitor, else the default. Made there and not moved after, Windows does not rescale it (WM_DPICHANGED)
             // and change its size, which it would for a place on a monitor of other scaling (5.11).
             let (x, y, width, height) = ask.place.unwrap_or_else(|| {
-                let (w, h) = (ini_number(&ini, "Width", 0), ini_number(&ini, "Height", 0));
-                let (x, y) = (ini_number(&ini, "X", 0), ini_number(&ini, "Y", 0));
+                let (w, h) = (ini_number(&ini_values, "Width", 0), ini_number(&ini_values, "Height", 0));
+                let (x, y) = (ini_number(&ini_values, "X", 0), ini_number(&ini_values, "Y", 0));
                 let r = RECT { left: x, top: y, right: x + w, bottom: y + h };
                 if w > 0 && h > 0 && !MonitorFromRect(&r, MONITOR_DEFAULTTONULL).is_invalid() {
                     (x, y, w, h)
@@ -668,6 +684,7 @@ impl App {
                 bookmark_notices: Cell::new(0),
                 use_settings,
                 ini,
+                ini_values,
                 st: RefCell::new(State {
                     tabs: Vec::new(),
                     active: 0,
@@ -2717,7 +2734,7 @@ impl App {
 
     /// A window number from qoqdir.ini.
     fn number(&self, key: &str, fallback: i32) -> i32 {
-        ini_number(&self.ini, key, fallback)
+        ini_number(&self.ini_values, key, fallback)
     }
 
     /// Open in new window (5.8): the folder in another Qoqdir, a title bar down and right of this window and the same
@@ -2835,10 +2852,15 @@ impl App {
             return;
         }
         unsafe {
-            // Only numbers are saved: a plain ini file is fine.
+            // Only numbers are saved: a plain ini file is fine. Only what differs from the file as it is now, which
+            // another window may have written since this one started.
+            let on_disk = read_ini_section(&self.ini);
             let number = |key: &str, value: i32| {
-                let (k, v) = (wide(key), wide(value.to_string()));
-                let _ = WritePrivateProfileStringW(w!("Window"), pcwstr(&k), pcwstr(&v), pcwstr(&self.ini));
+                let text = value.to_string();
+                if on_disk.get(&key.to_lowercase()) != Some(&text) {
+                    let (k, v) = (wide(key), wide(&text));
+                    let _ = WritePrivateProfileStringW(w!("Window"), pcwstr(&k), pcwstr(&v), pcwstr(&self.ini));
+                }
             };
 
             let mut wp = WINDOWPLACEMENT { length: size_of::<WINDOWPLACEMENT>() as u32, ..Default::default() };

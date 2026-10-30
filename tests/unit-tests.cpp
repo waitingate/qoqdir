@@ -325,6 +325,17 @@ int main(int argc, char** argv) {
         CHECK_EQ(names(v), L"z.cfg,x.zip,y.bat");
     }
 
+    // qoqdir.ini's [Window] section, read in one go: keys in lower case, the first of one there twice, no spaces or
+    // quotes round them, and a line that is no key left out
+    {
+        const wchar_t text[] = L"X=10\0 Width = 300 \0x=99\0Quoted=\"5\"\0junk\0";
+        std::map<std::wstring, std::wstring> v = parseIniSection(std::wstring_view(text, std::size(text) - 1));
+        CHECK(v.size() == 3 && !v.count(L"junk"));
+        CHECK_EQ(v[L"x"], L"10");
+        CHECK_EQ(v[L"width"], L"300");
+        CHECK_EQ(v[L"quoted"], L"5");
+    }
+
     // sortItems orders names exactly as Windows' StrCmpLogicalW (Explorer) does, tricky names included
     {
         std::vector<std::wstring> want = {L"file10", L"file2", L"File1", L"file01", L"file 1", L"file_1", L"file-1",

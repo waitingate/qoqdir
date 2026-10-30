@@ -455,6 +455,26 @@ std::wstring errorText(DWORD error) {
     return s.empty() ? L"Error " + std::to_wstring(error) : s;
 }
 
+std::map<std::wstring, std::wstring> parseIniSection(std::wstring_view text) {
+    auto trim = [](std::wstring_view s) {
+        size_t from = s.find_first_not_of(L" \t");
+        return from == s.npos ? std::wstring_view() : s.substr(from, s.find_last_not_of(L" \t") - from + 1);
+    };
+    std::map<std::wstring, std::wstring> values;
+    for (size_t at = 0; at < text.size();) {
+        size_t end = std::min(text.find(L'\0', at), text.size());
+        std::wstring_view line = text.substr(at, end - at);
+        at = end + 1;
+        size_t eq = line.find(L'=');
+        if (eq == line.npos) continue;
+        std::wstring_view value = trim(line.substr(eq + 1));
+        if (value.size() >= 2 && (value[0] == L'"' || value[0] == L'\'') && value.back() == value[0])
+            value = value.substr(1, value.size() - 2);
+        values.emplace(toLower(std::wstring(trim(line.substr(0, eq)))), value);
+    }
+    return values;
+}
+
 // ---------------------------------------------------------------- drops
 
 DWORD dropKeys(DWORD keys, DWORD allowed) {

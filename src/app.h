@@ -248,4 +248,5 @@ private:
     FolderWatch watch_;
     FolderWatch bookmarksWatch_;   // the Bookmarks node follows its folder whatever the list shows (5.5)
     std::wstring ini_;
+    std::map<std::wstring, std::wstring> iniValues_;   // its [Window] section, read once (create)
 };

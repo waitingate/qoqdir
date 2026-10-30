@@ -6,6 +6,7 @@
 
 #include <cstdint>
 #include <functional>
+#include <map>
 #include <memory>
 #include <optional>
 #include <string>
@@ -106,6 +107,10 @@ std::wstring formatSize(uint64_t bytes);   // "1,234 KB", as in Explorer's Size 
 std::wstring byteSize(uint64_t bytes);     // "1.20 MB"
 std::wstring formatTime(const FILETIME& ft);
 std::wstring errorText(DWORD error);
+// An ini file's section as GetPrivateProfileSectionW gives it, "key=value" each ending in a zero: keys in lower case,
+// as the file's are matched, and of a key there twice the first. Spaces round both, and quotes round a value, go, as
+// GetPrivateProfileStringW drops them.
+std::map<std::wstring, std::wstring> parseIniSection(std::wstring_view text);
 
 // ---------------------------------------------------------------- drops
 
