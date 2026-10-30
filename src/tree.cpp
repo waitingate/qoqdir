@@ -104,7 +104,7 @@ void FolderTree::refreshDrives() {
         if (reading_.erase(pc)) startReading(pc);
         return;
     }
-    reading_.erase(pc);
+    forgetReads(pc);
     TreeView_Expand(tv_, pc, TVE_COLLAPSE | TVE_COLLAPSERESET);   // forget the drives; the next expand reads them
     TreeView_Expand(tv_, pc, TVE_EXPAND);   // and read them again
 }
@@ -265,6 +265,12 @@ void FolderTree::dropFill(HTREEITEM node) {
     std::erase_if(fills_, [&](const Fill& f) { return f.node == node; });
 }
 
+void FolderTree::forgetReads(HTREEITEM node) {
+    reading_.erase(node);
+    stale_.erase(node);
+    dropFill(node);
+}
+
 // The shortcuts' own icons, read after their node was shown (startWorker). The node may be gone by now.
 void FolderTree::setIcons(HTREEITEM node, const IconBatch& batch) {
     if (!paths_.count(node)) return;
@@ -337,20 +343,18 @@ bool FolderTree::onNotify(NMHDR* nm, std::wstring* open, bool* shortcut) {
         // flight (F5, a drag held over it) is dropped too: its result would open the node again (4.5).
         auto* tv = reinterpret_cast<NMTREEVIEWW*>(nm);
         if (tv->action & TVE_COLLAPSE) {
-            reading_.erase(tv->itemNew.hItem);
-            stale_.erase(tv->itemNew.hItem);
-            dropFill(tv->itemNew.hItem);
+            forgetReads(tv->itemNew.hItem);
             TreeView_Expand(tv_, tv->itemNew.hItem, TVE_COLLAPSE | TVE_COLLAPSERESET);
         }
         return false;
     }
-    case TVN_DELETEITEMW:
+    case TVN_DELETEITEMW: {
         // The handle dies with the node (collapse, fill(), shutdown); a read still in flight must not insert under it.
-        reading_.erase(reinterpret_cast<NMTREEVIEWW*>(nm)->itemOld.hItem);
-        stale_.erase(reinterpret_cast<NMTREEVIEWW*>(nm)->itemOld.hItem);
-        dropFill(reinterpret_cast<NMTREEVIEWW*>(nm)->itemOld.hItem);
-        paths_.erase(reinterpret_cast<NMTREEVIEWW*>(nm)->itemOld.hItem);
+        HTREEITEM gone = reinterpret_cast<NMTREEVIEWW*>(nm)->itemOld.hItem;
+        forgetReads(gone);
+        paths_.erase(gone);
         return false;
+    }
     case TVN_SELCHANGEDW: {
         auto* tv = reinterpret_cast<NMTREEVIEWW*>(nm);
         if (tv->action != TVC_BYMOUSE && tv->action != TVC_BYKEYBOARD) return false;

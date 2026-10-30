@@ -214,7 +214,7 @@ impl FolderTree {
             }
             return;
         }
-        self.reading.borrow_mut().remove(&pc);
+        self.forget_reads(pc);
         // Forget the drives; the next expand reads them.
         send(self.hwnd, TVM_EXPAND, (TVE_COLLAPSE.0 | TVE_COLLAPSERESET.0) as usize, pc);
         send(self.hwnd, TVM_EXPAND, TVE_EXPAND.0 as usize, pc); // and read them again
@@ -478,6 +478,13 @@ impl FolderTree {
         self.fills.borrow_mut().retain(|f| f.node != node);
     }
 
+    /// And its reads out, whose results must not land on it either.
+    fn forget_reads(&self, node: isize) {
+        self.reading.borrow_mut().remove(&node);
+        self.stale.borrow_mut().remove(&node);
+        self.drop_fill(node);
+    }
+
     /// The shortcuts' own icons, read after their node was shown (start_worker). The node may be gone by now.
     pub fn set_icons(&self, node: isize, batch: &IconBatch) {
         if !self.paths.borrow().contains_key(&node) {
@@ -569,9 +576,7 @@ impl FolderTree {
                 // flight (F5, a drag held over it) is dropped too: its result would open the node again (4.5).
                 let tv = unsafe { &*(nm as *const NMTREEVIEWW) };
                 if tv.action.0 & TVE_COLLAPSE.0 != 0 {
-                    self.reading.borrow_mut().remove(&tv.itemNew.hItem.0);
-                    self.stale.borrow_mut().remove(&tv.itemNew.hItem.0);
-                    self.drop_fill(tv.itemNew.hItem.0);
+                    self.forget_reads(tv.itemNew.hItem.0);
                     send(self.hwnd, TVM_EXPAND, (TVE_COLLAPSE.0 | TVE_COLLAPSERESET.0) as usize, tv.itemNew.hItem.0);
                 }
                 None
@@ -579,9 +584,7 @@ impl FolderTree {
             TVN_DELETEITEMW => {
                 // The handle dies with the node (collapse, fill(), shutdown); a read still in flight must not insert under it.
                 let node = unsafe { (*(nm as *const NMTREEVIEWW)).itemOld.hItem.0 };
-                self.reading.borrow_mut().remove(&node);
-                self.stale.borrow_mut().remove(&node);
-                self.drop_fill(node);
+                self.forget_reads(node);
                 self.paths.borrow_mut().remove(&node);
                 None
             }
