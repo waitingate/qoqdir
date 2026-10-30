@@ -17,11 +17,14 @@ namespace {
 
 enum : int { ID_BACK = 100, ID_FORWARD, ID_UP, ID_ADDRESS, ID_FILTER, ID_TABS, ID_PLUS, ID_TREE, ID_LIST, ID_STATUS, ID_REFRESH };
 enum : UINT {
-    WM_APP_LOADED = WM_APP + 1, WM_APP_CHANGED, WM_APP_CLOSETAB, WM_APP_RENAME, WM_APP_ICONS, WM_APP_TREE,
+    WM_APP_LOADED = WM_APP + 1, WM_APP_CLOSETAB, WM_APP_RENAME, WM_APP_ICONS, WM_APP_TREE,
     WM_APP_MIDDLECLICK, WM_APP_TABS_SAVED, WM_APP_TABS_READ, WM_APP_PRESSTAB, WM_APP_DRAGTAB, WM_APP_TREE_ICONS,
     WM_APP_BOOKMARKS, WM_APP_NEWWINDOW, WM_APP_BOOKMARKED, WM_APP_DELETED, WM_APP_COMMAND, WM_APP_TERMINAL,
-    WM_APP_WANTICONS
+    WM_APP_WANTICONS, WM_APP_CHANGED
 };
+// The numbers from WM_APP_CHANGED on are the folder watch's, a new one for each watch: a notice the old one sent before
+// it went is told from the new one's, which it would otherwise look like.
+constexpr UINT kWatchMessages = 16;
 // The tab bar's own press and close carry this in lParam: their numbers are in the WM_APP range, which other
 // programs broadcast in too. A drag along the bar comes only while the bar holds the mouse.
 constexpr LPARAM kFromTabBar = 0x716F71;
@@ -448,6 +451,11 @@ LRESULT App::onMessage(UINT msg, WPARAM wp, LPARAM lp) {
     if (!lp && (msg == WM_APP_LOADED || msg == WM_APP_ICONS || msg == WM_APP_TREE || msg == WM_APP_TREE_ICONS ||
                 msg == WM_APP_TABS_READ || msg == WM_APP_DELETED || msg == WM_APP_COMMAND))
         return 0;
+    if (msg >= WM_APP_CHANGED && msg < WM_APP_CHANGED + kWatchMessages) {
+        acknowledgeChange(wp, lp);
+        if (msg == watch_.message()) onFolderChanged();
+        return 0;
+    }
     switch (msg) {
     case WM_SIZE:   // not while minimized: a list with no height loses its scroll position in a refresh (4.5)
         if (wp != SIZE_MINIMIZED) layout();
@@ -521,10 +529,6 @@ LRESULT App::onMessage(UINT msg, WPARAM wp, LPARAM lp) {
         onLoaded(std::move(*listing), UINT(wp));
         return 0;
     }
-    case WM_APP_CHANGED:
-        acknowledgeChange(wp, lp);
-        onFolderChanged();
-        return 0;
     case WM_APP_BOOKMARKS:   // a shortcut or folder came or went in Bookmarks: a drop on its node, or another program
         acknowledgeChange(wp, lp);
         ++bookmarkNotices_;
@@ -632,7 +636,8 @@ LRESULT App::onMessage(UINT msg, WPARAM wp, LPARAM lp) {
         if ((wp == DBT_DEVICEARRIVAL || wp == DBT_DEVICEREMOVECOMPLETE) && lp &&
             reinterpret_cast<DEV_BROADCAST_HDR*>(lp)->dbch_devicetype == DBT_DEVTYP_VOLUME) {
             tree_.refreshDrives();   // only This PC changes; the rest of the tree stays as the user left it
-            queueRefresh();   // This PC lists drives, and a tab's folder may be on the drive (its watch can't tell)
+            // This PC lists drives, and a tab's folder may be on the drive (its watch can't tell).
+            queueRefresh(std::nullopt);
         }
         return TRUE;
     case WM_SETCURSOR:
@@ -698,21 +703,22 @@ LRESULT App::onMessage(UINT msg, WPARAM wp, LPARAM lp) {
     return DefWindowProcW(wnd_, msg, wp, lp);
 }
 
-// At most one refresh per interval; it waits while a rename or a load is in progress (onTimer).
-void App::queueRefresh() {
-    refreshForWatch_ = false;
-    if (refreshQueued_) return;
-    refreshQueued_ = true;
+// At most one refresh per interval. The newest request says what it is about, but one for whichever folder stays that.
+void App::queueRefresh(std::optional<std::wstring> dir, bool above, ViewState view) {
+    if (view.asks()) {
+        queued_.view = std::move(view);
+        queued_.visit = list_.visit();
+    }
+    if (!refreshQueued_ || queued_.dir) {
+        queued_.dir = std::move(dir);
+        queued_.above = above;
+    }
+    if (std::exchange(refreshQueued_, true)) return;
     SetTimer(wnd_, kRefreshTimer, 400, nullptr);
 }
 
-// A refresh only changes in the folder shown asked for, from its watch or seen by its read, is about that folder: it
-// goes with the folder's watch (onLoaded).
-void App::onFolderChanged() {
-    bool alone = !refreshQueued_ || refreshForWatch_;
-    queueRefresh();
-    refreshForWatch_ = alone;
-}
+// About the folder it watches, or the one that is in, which it watches too for that folder going (4.5).
+void App::onFolderChanged() { queueRefresh(watch_.dir(), true); }
 
 void App::onTimer(UINT_PTR id) {
     if (id == kRefreshTimer) {
@@ -720,9 +726,10 @@ void App::onTimer(UINT_PTR id) {
         if (list_.renaming() || loading()) return;
         KillTimer(wnd_, kRefreshTimer);
         refreshQueued_ = false;
-        // What a delete, rename or new folder asked to select, if its folder is still shown. Not available: F5 (4.3).
-        QueuedView q = std::exchange(queuedView_, {});
-        if (!tab().unavailable) refresh(list_.shows(q.dir) ? std::move(q.view) : ViewState{});
+        QueuedRefresh q = std::exchange(queued_, {});
+        // About a folder no longer shown, it is of no use (4.5). Not available: F5 (4.3).
+        bool wanted = !q.dir || list_.shows(*q.dir) || (q.above && list_.shows(parentPath(*q.dir)));
+        if (wanted && !tab().unavailable) refresh(q.visit == list_.visit() ? std::move(q.view) : ViewState{});
     } else if (id == kTreeTimer) {   // more of a big folder's subfolders (the tree sets it)
         tree_.fillMore();
     } else if (id == kStatusTimer) {
@@ -1043,8 +1050,10 @@ void App::open(const std::wstring& path, Nav nav, ViewState view, Origin origin)
     // on that tab; anything else makes it of no use. Set before the newest load is, so that read never stops.
     bool move = nav == Nav::New || nav == Nav::Back || nav == Nav::Forward;
     bool replacing = move && pending_.generation && pending_.tabId == tab().id;   // this tab's load still out
-    // A refresh of the tab's folder that a move replaces goes with it: if the move fails, it is asked for again (4.5).
-    bool refreshLost = replacing && (pending_.nav == Nav::Refresh || pending_.refreshLost);
+    // A refresh of the tab's folder that a move replaces waits for it: it reads again if the move fails (4.5), keeping
+    // what it was asked to select unless a newer request waits.
+    if (replacing && pending_.nav == Nav::Refresh)
+        queueRefresh(tab().path, false, queued_.view.asks() ? ViewState{} : std::move(pending_.view));
     if (replacing && pending_.nav == Nav::Switch) {
         kept_ = std::move(pending_);
     } else if (!move) {
@@ -1053,7 +1062,7 @@ void App::open(const std::wstring& path, Nav nav, ViewState view, Origin origin)
     g_keptLoad = kept_.generation;
     UINT generation = ++generation_;
     g_newestLoad = generation;
-    pending_ = {generation, nav, std::move(view), tab().id, std::move(origin), std::move(filter), refreshLost};
+    pending_ = {generation, nav, std::move(view), tab().id, std::move(origin), std::move(filter)};
     SetTimer(wnd_, kLoadingTimer, 250, nullptr);   // say "Loading..." only if it is slow
     if (nav == Nav::Switch) {
         // Show the new tab at once; until its folder loads the list has none, so nothing acts on the old one.
@@ -1097,8 +1106,7 @@ void App::onLoaded(Listing&& listing, UINT generation) {
     if (p.nav == Nav::Refresh && list_.renaming()) {
         // 4.2: never apply a refresh under an open rename box (Enter would rename whatever row moved there).
         // Retry once it closes, keeping what this load was asked to select unless a newer request waits.
-        if (p.view.asks() && !queuedView_.view.asks()) queuedView_ = {list_.dir(), std::move(p.view)};
-        queueRefresh();
+        queueRefresh(list_.dir(), false, queued_.view.asks() ? ViewState{} : std::move(p.view));
         return;
     }
     // A move's hint (5.3), said once it lands; an error takes its place. A move still out keeps its own.
@@ -1150,16 +1158,13 @@ void App::onLoaded(Listing&& listing, UINT generation) {
 
     t.path = listing.path;
     t.unavailable = false;
-    // The watch stays while it watches the folder shown: a reload is not a change. Otherwise the old one goes first,
-    // and with it a refresh only it asked for: that was about a folder no longer shown, unless this one is the folder
-    // it was in, which it watched too (4.5). The new one comes once the rows are drawn (below).
-    if (!watch_.watches(t.path)) {
-        bool above = watch_.watchesChildOf(t.path);
-        watch_ = {};
-        if (refreshQueued_ && refreshForWatch_ && !above) {
-            KillTimer(wnd_, kRefreshTimer);
-            refreshQueued_ = false;
-        }
+    // A move that lands on the folder a queued refresh is about has just read it. Not one from the watch, whose notice
+    // may have come during this read, nor one with an item to select (4.5).
+    if (moved && refreshQueued_ && queued_.dir && samePath(*queued_.dir, t.path) && !queued_.above &&
+        !queued_.view.asks()) {
+        KillTimer(wnd_, kRefreshTimer);
+        refreshQueued_ = false;
+        queued_ = {};
     }
     FILETIME written = listing.written;
     // The tree follows the folder shown: its node is read again when the subfolders or shortcuts changed (5.5).
@@ -1188,12 +1193,15 @@ void App::onLoaded(Listing&& listing, UINT generation) {
     showStatus();
 
     // The folder shows first, then gets its watch: setting one up takes up to 75 ms, which the rows waited for (4.7).
+    // The watch stays while it watches the folder shown: a reload is not a change.
     RedrawWindow(wnd_, nullptr, nullptr, RDW_UPDATENOW | RDW_ALLCHILDREN);
-    if (!watch_.watches(t.path)) watch_ = FolderWatch(wnd_, WM_APP_CHANGED, t.path);
-    // A change during the read, before the watch was there, is missed by both: the folder's own time tells. That
-    // refresh is about this folder, as the watch's would be, so it goes if another one is shown first (4.5).
+    if (!watch_.watches(t.path)) {
+        watchNumber_ = (watchNumber_ + 1) % kWatchMessages;
+        watch_ = FolderWatch(wnd_, WM_APP_CHANGED + watchNumber_, t.path);
+    }
+    // A change during the read, before the watch was there, is missed by both: the folder's own time tells (4.5).
     FILETIME now = folderWritten(t.path);
-    if (CompareFileTime(&now, &written) != 0) onFolderChanged();
+    if (CompareFileTime(&now, &written) != 0) queueRefresh(t.path);
 }
 
 // The address bar, title, buttons and tabs follow the current tab's folder: shown by a tab switch at once, and by a
@@ -1227,9 +1235,6 @@ void App::onLoadFailed(const Listing& listing, const Pending& p) {
     if (GetWindowTextLengthW(filter_) == 0) SetWindowTextW(filter_, p.filter.c_str());
     // A tab switch this move took over reads on: the tab waits for what it finds (onLoaded, 4.2).
     if (kept_.generation) SetTimer(wnd_, kLoadingTimer, 250, nullptr);   // "Loading..." if it is slow (4.1)
-    // The refresh of the tab's folder this move replaced (open, 4.5), about that folder as the watch's would be: it
-    // goes if another one is shown first.
-    if (p.refreshLost) onFolderChanged();
     if (!p.origin.shortcut.empty() && listing.isFile) {
         // A shortcut that leads to a file: Windows opens it (never an unreachable one: that would hang, then fail).
         openFile(wnd_, p.origin.shortcut);
@@ -1287,12 +1292,10 @@ bool App::refresh(ViewState view) {
     // interrupted (4.2): the refresh is queued, and the queue waits for the rename to end (onTimer).
     bool renaming = list_.renaming();
     if (loading() || renaming) {
-        bool asks = view.asks();
-        if (asks) queuedView_ = {list_.dir(), std::move(view)};
-        if (asks || renaming) queueRefresh();
+        if (view.asks() || renaming) queueRefresh(list_.dir(), false, std::move(view));
         return false;
     }
-    if (view.asks()) queuedView_ = {};   // newer than any request still waiting
+    if (view.asks()) queued_.view = {};   // newer than any request still waiting
     open(tab().path, Nav::Refresh, std::move(view));
     return true;
 }

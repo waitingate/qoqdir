@@ -915,6 +915,7 @@ pub fn post<T>(wnd: usize, msg: u32, wp: usize, object: Box<T>) {
 /// Posts `msg` to `owner` when something in `dir` changes, or `dir` itself goes; stops when dropped.
 pub struct FolderWatch {
     ids: [u32; 2],
+    msg: u32,
     location: Option<Location>, // none: Windows refused it (the next load tries again)
 }
 
@@ -934,16 +935,20 @@ impl FolderWatch {
         if let Location::Dir(_) = dir {
             ids[1] = watch(&dir.parent(), itself.0 as i32);
         }
-        FolderWatch { ids, location: (ids[0] != 0).then(|| dir.clone()) }
+        FolderWatch { ids, msg, location: (ids[0] != 0).then(|| dir.clone()) }
     }
 
     pub fn watches(&self, location: &Location) -> bool {
         self.location.as_ref().is_some_and(|l| l.same(location))
     }
 
-    /// Its folder is in `location`, which it watches too, for that folder going.
-    pub fn watches_child_of(&self, location: &Location) -> bool {
-        self.location.as_ref().is_some_and(|l| matches!(l, Location::Dir(_)) && l.parent().same(location))
+    pub fn dir(&self) -> Option<Location> {
+        self.location.clone()
+    }
+
+    /// What its notices come as.
+    pub fn message(&self) -> u32 {
+        self.msg
     }
 }
 

@@ -683,7 +683,7 @@ ULONG watch(HWND owner, UINT msg, const std::wstring& dir, LONG events) {
 }
 }  // namespace
 
-FolderWatch::FolderWatch(HWND owner, UINT msg, const std::wstring& dir) {
+FolderWatch::FolderWatch(HWND owner, UINT msg, const std::wstring& dir) : msg_(msg) {
     ids_[0] = watch(owner, msg, dir,
                     SHCNE_CREATE | SHCNE_DELETE | SHCNE_MKDIR | SHCNE_RMDIR | SHCNE_RENAMEITEM | SHCNE_RENAMEFOLDER |
                         SHCNE_UPDATEITEM | SHCNE_UPDATEDIR | SHCNE_ATTRIBUTES | SHCNE_DRIVEADD | SHCNE_DRIVEREMOVED |
@@ -701,11 +701,13 @@ FolderWatch::~FolderWatch() {
 
 FolderWatch::FolderWatch(FolderWatch&& o) noexcept {
     std::swap(ids_, o.ids_);
+    std::swap(msg_, o.msg_);
     std::swap(dir_, o.dir_);
 }
 
 FolderWatch& FolderWatch::operator=(FolderWatch&& o) noexcept {
     std::swap(ids_, o.ids_);
+    std::swap(msg_, o.msg_);
     std::swap(dir_, o.dir_);
     return *this;
 }

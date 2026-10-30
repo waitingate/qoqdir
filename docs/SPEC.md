@@ -166,8 +166,9 @@ These describe what the user sees. Each must hold in every situation.
   up by themselves within about half a second, keeping the selection, focus and
   scroll position. A burst of changes causes one refresh, not hundreds, and the
   watch stays while the folder shown stays. When another folder is shown, a
-  refresh that only the old one's changes asked for is dropped, unless the old
-  one is in it. A change made while the folder was still being read is caught
+  refresh asked for the old one is dropped, unless the old one's changes asked for
+  it and the old one is in the new one. A notice the old watch sent before it went
+  reads nothing. A change made while the folder was still being read is caught
   too: the folder's own modified time is compared once the watch is in place.
 - If the shown folder itself is deleted or renamed by another program, the tab
   notices and shows the "not available" state (4.3).
@@ -931,7 +932,11 @@ result:
     not read again in the move's folder, and a hint of the move still waits for
     it when that read fails first. A tab made on a file whose read a move
     overtook goes where the move goes, not to the file's folder. A refresh that
-    a failed move replaced is asked for again, and a move to the folder shown
+    a failed move replaced is asked for again, keeping a newer request to select
+    an item; one a move replaced, or that a rename asks for while a move is
+    loading, is not read again where the move lands, even on that same folder. A
+    notice the old watch sent before it went reads nothing, and one from the
+    watch it has now reads the folder again. A move to the folder shown
     leaves what the user types into the address bar meanwhile; a Back to that
     folder still sets the Back and Forward buttons. A This PC tab left while its
     list is emptied keeps its selection.

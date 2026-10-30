@@ -102,7 +102,7 @@ const ID_STATUS: i32 = 109;
 const ID_REFRESH: i32 = 110;
 
 pub(crate) const WM_APP_LOADED: u32 = WM_APP + 1; // what a folder's read comes back as (the self-test waits for one)
-const WM_APP_CHANGED: u32 = WM_APP + 2;
+const WM_APP_WANTICONS: u32 = WM_APP + 2;
 const WM_APP_CLOSETAB: u32 = WM_APP + 3;
 const WM_APP_RENAME: u32 = WM_APP + 4;
 const WM_APP_ICONS: u32 = WM_APP + 5;
@@ -119,7 +119,10 @@ const WM_APP_BOOKMARKED: u32 = WM_APP + 15;
 const WM_APP_DELETED: u32 = WM_APP + 16;
 const WM_APP_COMMAND: u32 = WM_APP + 17;
 const WM_APP_TERMINAL: u32 = WM_APP + 18;
-const WM_APP_WANTICONS: u32 = WM_APP + 19;
+/// The numbers from here on are the folder watch's, a new one for each watch: a notice the old one sent before it went
+/// is told from the new one's, which it would otherwise look like.
+const WM_APP_CHANGED: u32 = WM_APP + 19;
+const WATCH_MESSAGES: u32 = 16;
 /// The tab bar's own press and close carry this in lParam: their numbers are in the WM_APP range, which other
 /// programs broadcast in too. A drag along the bar comes only while the bar holds the mouse.
 const FROM_TAB_BAR: isize = 0x716F71;
@@ -204,7 +207,15 @@ pub struct Pending {
     tab_id: u32,
     origin: Origin,
     filter: OsString, // the filter box before this load cleared it: a failed one puts it back
-    refresh_lost: bool, // a move that replaced a refresh of its tab's folder: a failed one asks again (4.5)
+}
+
+/// What the refresh that is queued is for (App::queue_refresh).
+#[derive(Default)]
+pub struct QueuedRefresh {
+    dir: Option<Location>,
+    above: bool,
+    pub visit: u32, // the list's visit that `view` belongs to (FileList::visit)
+    pub view: ViewState,
 }
 
 pub struct State {
@@ -215,8 +226,7 @@ pub struct State {
     // A tab switch a move took over: its read goes on, and the tab shows what it finds as soon as it is back, as the
     // switch would have (4.2). Until then it counts as loading.
     pub kept: Option<Pending>,
-    // What a delete, rename or new folder asked to select while a load was pending, and in which folder.
-    pub queued_view: Option<(Location, ViewState)>,
+    pub queued: QueuedRefresh,
     // Done after the edit box has closed: path, new name, the list's visit to the folder it was typed in.
     rename: Option<(PathBuf, OsString, u32)>,
     last_focus: Option<HWND>,
@@ -277,10 +287,10 @@ pub struct App {
     pub splitter_x: Cell<i32>,
     pub dragging: Cell<bool>,   // moving the tree/list splitter
     pub refresh_queued: Cell<bool>,
-    refresh_for_watch: Cell<bool>, // ...and only a change in the folder shown asked for it (on_folder_changed)
     // Out of `st`: a watch talks to the shell as it goes, which can call straight back into on_message, so each is
     // taken out of its cell (take, replace) before it drops.
     pub watch: RefCell<Option<FolderWatch>>,
+    watch_number: Cell<u32>, // which of its message numbers the watch has (on_loaded)
     bookmarks_watch: RefCell<Option<FolderWatch>>, // Bookmarks' node follows its folder whatever the list shows (5.5)
     kept_said: RefCell<String>, // what "Loading..." covered while the tab waited for State::kept: back with the folder
     load_message_shown: Cell<bool>, // the status bar says "Loading..." or "not available" (set_message clears it)
@@ -695,8 +705,8 @@ impl App {
                 splitter_x: Cell::new(0),
                 dragging: Cell::new(false),
                 refresh_queued: Cell::new(false),
-                refresh_for_watch: Cell::new(false),
                 watch: RefCell::new(None),
+                watch_number: Cell::new(0),
                 bookmarks_watch: RefCell::new(None),
                 kept_said: RefCell::new(String::new()),
                 load_message_shown: Cell::new(false),
@@ -716,7 +726,7 @@ impl App {
                     next_tab_id: 1,
                     pending: None,
                     kept: None,
-                    queued_view: None,
+                    queued: QueuedRefresh::default(),
                     rename: None,
                     last_focus: None,
                 }),
@@ -989,6 +999,13 @@ impl App {
         {
             return LRESULT(0);
         }
+        if (WM_APP_CHANGED..WM_APP_CHANGED + WATCH_MESSAGES).contains(&msg) {
+            acknowledge_change(wp, lp);
+            if self.watch.borrow().as_ref().is_some_and(|w| w.message() == msg) {
+                self.on_folder_changed();
+            }
+            return LRESULT(0);
+        }
         unsafe {
             match msg {
                 WM_SIZE => {
@@ -1075,11 +1092,6 @@ impl App {
                 WM_APP_LOADED => {
                     let listing = Box::from_raw(lp.0 as *mut Listing);
                     self.on_loaded(*listing, wp.0 as u32);
-                    return LRESULT(0);
-                }
-                WM_APP_CHANGED => {
-                    acknowledge_change(wp, lp);
-                    self.on_folder_changed();
                     return LRESULT(0);
                 }
                 WM_APP_BOOKMARKS => {
@@ -1239,7 +1251,8 @@ impl App {
                     let arrival = wp.0 == DBT_DEVICEARRIVAL || wp.0 == DBT_DEVICEREMOVECOMPLETE;
                     if arrival && lp.0 != 0 && *((lp.0 as *const u32).add(1)) == DBT_DEVTYP_VOLUME {
                         self.tree.refresh_drives(); // only This PC changes; the rest of the tree stays as the user left it
-                        self.queue_refresh(); // This PC lists drives, and a tab's folder may be on the drive (its watch can't tell)
+                        // This PC lists drives, and a tab's folder may be on the drive (its watch can't tell).
+                        self.queue_refresh(None, false, ViewState::default());
                     }
                     return LRESULT(1);
                 }
@@ -1327,9 +1340,23 @@ impl App {
         x >= sx && x < sx + scale(SPLITTER_WIDTH, self.dpi.get())
     }
 
-    /// At most one refresh per interval; it waits while a rename or a load is in progress (on_timer).
-    pub fn queue_refresh(&self) {
-        self.refresh_for_watch.set(false);
+    /// One coalesced refresh, once no rename or load is in progress (on_timer). It is about the folder `dir`, and with
+    /// `above` the folder that one is in too: if neither is shown by then, it is of no use. None: whichever is shown
+    /// then. `view`: what to select, if the list is still on this visit to its folder. At most one refresh per
+    /// interval. The newest request says what it is about, but one for whichever folder stays that.
+    pub fn queue_refresh(&self, dir: Option<Location>, above: bool, view: ViewState) {
+        let visit = self.list.visit();
+        {
+            let mut st = self.st.borrow_mut();
+            if view.asks() {
+                st.queued.view = view;
+                st.queued.visit = visit;
+            }
+            if !self.refresh_queued.get() || st.queued.dir.is_some() {
+                st.queued.dir = dir;
+                st.queued.above = above;
+            }
+        }
         if !self.refresh_queued.replace(true) {
             unsafe {
                 SetTimer(Some(self.wnd), TIMER_REFRESH, 400, None);
@@ -1337,12 +1364,11 @@ impl App {
         }
     }
 
-    /// A refresh only changes in the folder shown asked for, from its watch or seen by its read, is about that folder:
-    /// it goes with the folder's watch (on_loaded).
+    /// A notice from the folder's watch: about the folder it watches, or the one that is in, which it watches too for
+    /// that folder going (4.5).
     pub fn on_folder_changed(&self) {
-        let alone = !self.refresh_queued.get() || self.refresh_for_watch.get();
-        self.queue_refresh();
-        self.refresh_for_watch.set(alone);
+        let dir = self.watch.borrow().as_ref().and_then(|w| w.dir());
+        self.queue_refresh(dir, true, ViewState::default());
     }
 
     fn on_timer(&self, id: usize) {
@@ -1353,12 +1379,11 @@ impl App {
                     if !self.list.renaming() && !self.is_loading() {
                         let _ = KillTimer(Some(self.wnd), TIMER_REFRESH);
                         self.refresh_queued.set(false);
-                        // What a delete, rename or new folder asked to select, if its folder is still shown.
-                        // Not available: F5 (4.3).
-                        let queued = self.st.borrow_mut().queued_view.take();
-                        if !self.with_tab(|t| t.unavailable) {
-                            let view = queued.filter(|(dir, _)| self.list.shows(dir)).map(|(_, view)| view);
-                            self.refresh(view.unwrap_or_default());
+                        let q = std::mem::take(&mut self.st.borrow_mut().queued);
+                        // About a folder no longer shown, it is of no use (4.5). Not available: F5 (4.3).
+                        let shown = |d: &Location| self.list.shows(d) || (q.above && self.list.shows(&d.parent()));
+                        if q.dir.as_ref().is_none_or(shown) && !self.with_tab(|t| t.unavailable) {
+                            self.refresh(if q.visit == self.list.visit() { q.view } else { ViewState::default() });
                         }
                     }
                 }
@@ -1876,22 +1901,30 @@ impl App {
         let moving = matches!(nav, Nav::New | Nav::Back | Nav::Forward);
         let generation = self.generation.get() + 1;
         self.generation.set(generation);
+        // A refresh of the tab's folder that a move replaces waits for it: it reads again if the move fails (4.5),
+        // keeping what it was asked to select unless a newer request waits.
+        let lost = {
+            let mut st = self.st.borrow_mut();
+            let tab_id = st.tabs[st.active].id;
+            st.pending.take_if(|p| moving && p.tab_id == tab_id && p.nav == Nav::Refresh)
+        };
+        if let Some(lost) = lost {
+            let waiting = self.st.borrow().queued.view.asks();
+            let view = if waiting { ViewState::default() } else { lost.view };
+            self.queue_refresh(Some(self.location()), false, view);
+        }
         {
             let mut st = self.st.borrow_mut();
             let tab_id = st.tabs[st.active].id;
             let replacing = st.pending.as_ref().filter(|p| moving && p.tab_id == tab_id); // this tab's load still out
-            let switching = replacing.is_some_and(|p| p.nav == Nav::Switch);
-            // A refresh of the tab's folder that a move replaces goes with it: if the move fails, it is asked for again
-            // (4.5).
-            let refresh_lost = replacing.is_some_and(|p| p.nav == Nav::Refresh || p.refresh_lost);
-            if switching {
+            if replacing.is_some_and(|p| p.nav == Nav::Switch) {
                 st.kept = st.pending.take();
             } else if !moving {
                 st.kept = None;
             }
             KEPT_LOAD.store(st.kept.as_ref().map_or(0, |k| k.generation), Ordering::SeqCst);
             NEWEST_LOAD.store(generation, Ordering::SeqCst);
-            st.pending = Some(Pending { generation, nav, view, tab_id, origin, filter, refresh_lost });
+            st.pending = Some(Pending { generation, nav, view, tab_id, origin, filter });
         }
         unsafe {
             SetTimer(Some(self.wnd), TIMER_LOADING, 250, None); // say "Loading..." only if it is slow
@@ -1964,14 +1997,9 @@ impl App {
         if pending.nav == Nav::Refresh && self.list.renaming() {
             // 4.2: never apply a refresh under an open rename box (Enter would rename whatever row moved there).
             // Retry once it closes, keeping what this load was asked to select unless a newer request waits.
-            let shown = self.list.location();
-            {
-                let mut st = self.st.borrow_mut();
-                if pending.view.asks() && st.queued_view.is_none() {
-                    st.queued_view = Some((shown, pending.view));
-                }
-            }
-            self.queue_refresh();
+            let waiting = self.st.borrow().queued.view.asks();
+            let view = if waiting { ViewState::default() } else { pending.view };
+            self.queue_refresh(Some(self.list.location()), false, view);
             return;
         }
         // A move's hint (5.3), said once it lands; an error takes its place. A move still out keeps its own.
@@ -2034,18 +2062,20 @@ impl App {
 
         let location = listing.location.clone();
         let written = listing.written;
-        // The watch stays while it watches the folder shown: a reload is not a change. Otherwise the old one goes
-        // first, and with it a refresh only it asked for: that was about a folder no longer shown, unless this one is
-        // the folder it was in, which it watched too (4.5). The new one comes once the rows are drawn (below).
-        if !self.watch.borrow().as_ref().is_some_and(|w| w.watches(&location)) {
-            let above = self.watch.borrow().as_ref().is_some_and(|w| w.watches_child_of(&location));
-            drop(self.watch.take());
-            if self.refresh_queued.get() && self.refresh_for_watch.get() && !above {
-                unsafe {
-                    let _ = KillTimer(Some(self.wnd), TIMER_REFRESH);
-                }
-                self.refresh_queued.set(false);
+        // A move that lands on the folder a queued refresh is about has just read it. Not one from the watch, whose
+        // notice may have come during this read, nor one with an item to select (4.5).
+        let read_it = {
+            let st = self.st.borrow();
+            let q = &st.queued;
+            let about_it = q.dir.as_ref().is_some_and(|d| d.same(&location));
+            moved && self.refresh_queued.get() && about_it && !q.above && !q.view.asks()
+        };
+        if read_it {
+            unsafe {
+                let _ = KillTimer(Some(self.wnd), TIMER_REFRESH);
             }
+            self.refresh_queued.set(false);
+            self.st.borrow_mut().queued = QueuedRefresh::default();
         }
         // The tree follows the folder shown: its node is read again when the subfolders or shortcuts changed (5.5).
         // Most folders have no node there, and then their names need no comparing.
@@ -2087,17 +2117,18 @@ impl App {
         self.show_status();
 
         // The folder shows first, then gets its watch: setting one up takes up to 75 ms, which the rows waited for
-        // (4.7).
+        // (4.7). The watch stays while it watches the folder shown: a reload is not a change.
         unsafe {
             let _ = RedrawWindow(Some(self.wnd), None, None, RDW_UPDATENOW | RDW_ALLCHILDREN);
         }
         if !self.watch.borrow().as_ref().is_some_and(|w| w.watches(&location)) {
-            let _ = self.watch.replace(Some(FolderWatch::new(self.wnd, WM_APP_CHANGED, &location)));
+            let number = (self.watch_number.get() + 1) % WATCH_MESSAGES;
+            self.watch_number.set(number);
+            let _ = self.watch.replace(Some(FolderWatch::new(self.wnd, WM_APP_CHANGED + number, &location)));
         }
-        // A change during the read, before the watch was there, is missed by both: the folder's own time tells. That
-        // refresh is about this folder, as the watch's would be, so it goes if another one is shown first (4.5).
+        // A change during the read, before the watch was there, is missed by both: the folder's own time tells (4.5).
         if location.path().is_some_and(|p| folder_written(p) != written) {
-            self.on_folder_changed();
+            self.queue_refresh(Some(location), false, ViewState::default());
         }
     }
 
@@ -2143,11 +2174,6 @@ impl App {
             unsafe {
                 let _ = SetTimer(Some(self.wnd), TIMER_LOADING, 250, None); // "Loading..." if it is slow (4.1)
             }
-        }
-        // The refresh of the tab's folder this move replaced (open_from, 4.5), about that folder as the watch's would
-        // be: it goes if another one is shown first.
-        if pending.refresh_lost {
-            self.on_folder_changed();
         }
         match (&pending.origin, &listing.location) {
             // A shortcut that leads to a file: Windows opens it (never an unreachable one: that would hang, then fail).
@@ -2223,18 +2249,13 @@ impl App {
         // interrupted (4.2): the refresh is queued, and the queue waits for the rename to end (on_timer).
         let renaming = self.list.renaming();
         if self.is_loading() || renaming {
-            let asks = view.asks();
-            if asks {
-                let shown = self.list.location();
-                self.st.borrow_mut().queued_view = Some((shown, view));
-            }
-            if asks || renaming {
-                self.queue_refresh();
+            if view.asks() || renaming {
+                self.queue_refresh(Some(self.list.location()), false, view);
             }
             return false;
         }
         if view.asks() {
-            self.st.borrow_mut().queued_view = None; // newer than any request still waiting
+            self.st.borrow_mut().queued.view = ViewState::default(); // newer than any request still waiting
         }
         self.open(self.location(), Nav::Refresh, view);
         true

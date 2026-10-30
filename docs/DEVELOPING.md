@@ -84,7 +84,8 @@ instead of corrupting data, and the crash log says where.
   replaced folder read stops within 256 entries. A tab's path, history
   and title change only in `onLoaded`. `refresh()` does nothing while a load is
   pending (so holding F5 starts one load); what it was asked to select is kept in
-  `queuedView_` for the refresh that follows.
+  `queued_` for the refresh that follows, if the list is still on that visit to
+  the folder (`FileList::visit`).
 - A tab remembers its selection, focus and scroll (`rememberView()`) when it
   leaves the screen, but only if the list shows that tab's own folder.
 - A failed Refresh or tab switch leaves the tab "not available": empty list,
@@ -103,13 +104,15 @@ instead of corrupting data, and the crash log says where.
   read at a time for the folder shown, and `setIcons()` adds what it found.
 - The right-click menu is modal, so Qoqdir's own commands in it only act if the
   folder and the selection are the same as when it opened.
-- Live updates: `FolderWatch` posts `WM_APP_CHANGED`, and a burst of changes
-  becomes one refresh after 400 ms, which waits while a rename or a load runs.
-  `onLoaded` replaces the watch only when it does not watch the folder shown
-  (`FolderWatch::watches`), and drops a refresh only that watch asked for,
-  except when going up to the folder it was in (`watchesChildOf`). A second
-  watch on the Bookmarks folder posts `WM_APP_BOOKMARKS`, which re-reads its
-  tree node at once. A drive coming or going re-reads only This PC in the tree.
+- Live updates: `FolderWatch` posts a number from `WM_APP_CHANGED` on, another for
+  each watch, so a notice the old one sent before it went can't pass for the new
+  one's. A burst of changes becomes one refresh after 400 ms, which waits while a
+  rename or a load runs. Each request says what it is about (`queueRefresh`), and
+  `onTimer` drops one about a folder no longer shown, except a watch's when going
+  up to the folder it was in. `onLoaded` replaces the watch only when it does not
+  watch the folder shown (`FolderWatch::watches`). A second watch on the Bookmarks
+  folder posts `WM_APP_BOOKMARKS`, which re-reads its tree node at once. A drive
+  coming or going re-reads only This PC in the tree.
 - The file list is virtual (`LVS_OWNERDATA`): row i is `items_[view_[i]]`, and only
   `FileList::update` changes `view_`, rebuilding it before any ListView call.
   Hidden items are always read; Ctrl+H only shows or hides them. A read's worker

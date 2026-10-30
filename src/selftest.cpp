@@ -1168,8 +1168,9 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
         });
     add(L"a newer request to select an item replaces an older one still waiting",
         [=, this] {
-            queuedView_ = {dir, ViewState::selecting(L"file1.txt")};   // an older request, waiting (a slow folder)
-            refresh(ViewState::selecting(L"added.txt"));               // then a newer one, as after a second rename
+            queued_.view = ViewState::selecting(L"file1.txt");   // an older request, waiting (a slow folder)
+            queued_.visit = list_.visit();
+            refresh(ViewState::selecting(L"added.txt"));         // then a newer one, as after a second rename
         },
         [=, this] { return idle() && list_.focusedName() == L"added.txt"; });
     add(L"...so the waiting refresh, when it runs, leaves the newer item selected",
@@ -1203,6 +1204,68 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
             selfTest_->note = L"focused " + list_.focusedName();
             return idle() && list_.focusedName() == L"file1.txt";
         });
+    add(L"a move that replaces a refresh keeps a newer request to select an item, for when the move fails (4.6)",
+        [=, this] {
+            refresh(ViewState::selecting(L"file1.txt"));
+            refresh(ViewState::selecting(L"added.txt"));   // newer, as after a second rename: it waits for the read
+            open(path(L"no such folder"), Nav::New);
+        },
+        [=, this] {
+            selfTest_->note = L"focused " + list_.focusedName();
+            return idle() && !refreshQueued_ && list_.focusedName() == L"added.txt";
+        });
+    // A refresh asked for while a move is out is about the folder it was asked in, and the move may land elsewhere.
+    // These steps go on in quieter folders than the test folder, whose earlier changes are still being reported.
+    auto readsBefore = std::make_shared<UINT>(0);
+    auto oldWatch = std::make_shared<UINT>(0);
+    add(L"a refresh a rename asks for while a move is loading is not read again where the move lands (4.5)",
+        [=, this] {
+            *readsBefore = generation_;
+            *oldWatch = watch_.message();
+            open(path(L"sub"), Nav::New);
+            refresh(ViewState::selecting(L"file1.txt"));
+        },
+        [=, this] {
+            selfTest_->note = std::to_wstring(generation_ - *readsBefore) + L" read(s)";
+            return at(path(L"sub")) && !refreshQueued_ && generation_ == *readsBefore + 1;
+        });
+    // Each watch's notices come under a number of their own: one still on its way when the watch goes is told apart.
+    add(L"a notice the old watch sent before it went reads nothing (4.5)",
+        [=, this] {
+            *readsBefore = generation_;
+            PostMessageW(wnd_, *oldWatch, 0, 0);
+        },
+        [=, this] {
+            selfTest_->note = std::to_wstring(generation_ - *readsBefore) + L" read(s)";
+            return GetTickCount64() - selfTest_->startTick >= 800 && !refreshQueued_ && generation_ == *readsBefore;
+        });
+    add(L"...and one from the watch it has now reads the folder again (4.5)",
+        [=, this] {
+            *readsBefore = generation_;
+            PostMessageW(wnd_, watch_.message(), 0, 0);
+        },
+        [=, this] { return idle() && !refreshQueued_ && generation_ == *readsBefore + 1; });
+    add(L"a refresh that a move replaced is not read again where the move lands (4.5)",
+        [=, this] {
+            *readsBefore = generation_;
+            refresh();
+            open(path(L"Bookmarks"), Nav::New);
+        },
+        [=, this] {
+            selfTest_->note = std::to_wstring(generation_ - *readsBefore) + L" read(s)";
+            return at(path(L"Bookmarks")) && !refreshQueued_ && generation_ == *readsBefore + 2;
+        });
+    add(L"...not even when the move lands on the folder that refresh was reading (4.5)",
+        [=, this] {
+            *readsBefore = generation_;
+            refresh();
+            open(path(L"Bookmarks"), Nav::New);
+        },
+        [=, this] {
+            selfTest_->note = std::to_wstring(generation_ - *readsBefore) + L" read(s)";
+            return at(path(L"Bookmarks")) && !refreshQueued_ && generation_ == *readsBefore + 2;
+        });
+    backHome(L"(back to the test folder)");
     add(L"a command that does not exist says Can't find",
         [=, this] { goTo(L"no-such-program-qoqdir"); },
         [=, this] {
@@ -1425,7 +1488,7 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
         });
     add(L"a refresh queued just before a tab became not available waits for F5 (4.3)",
         [=, this] {
-            queueRefresh();   // a change in the folder, just before
+            queueRefresh(std::nullopt);   // a drive came or went, just before
             showUnavailable(dir, ERROR_BAD_NETPATH);   // then it became unreachable
             SendMessageW(wnd_, WM_TIMER, kRefreshTimer, 0);          // and the queued refresh fires
         },
@@ -2781,7 +2844,7 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
     add(L"...and a refresh asked for meanwhile waits for it, reading nothing beside it (4.2)",
         [=, this] {
             *reads = generation_;
-            queueRefresh();
+            queueRefresh(std::nullopt);   // a drive came or went: for whichever folder the tab comes to show
         },
         [=, this] {
             selfTest_->note = std::to_wstring(generation_ - *reads) + L" read(s)";

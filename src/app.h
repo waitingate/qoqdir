@@ -74,8 +74,11 @@ private:
 
     // Messages
     LRESULT onMessage(UINT msg, WPARAM wp, LPARAM lp);
-    void queueRefresh();   // one coalesced refresh of the current tab, once no rename or load is in progress
-    void onFolderChanged();   // a change in the folder shown: from its watch, or seen by its read (onLoaded)
+    // One coalesced refresh, once no rename or load is in progress (onTimer). It is about the folder `dir`, and with
+    // `above` the folder that one is in too: if neither is shown by then, it is of no use. None: whichever is shown
+    // then. `view`: what to select, if the list is still on this visit to its folder.
+    void queueRefresh(std::optional<std::wstring> dir, bool above = false, ViewState view = {});
+    void onFolderChanged();   // a notice from the folder's watch
     void onTimer(UINT_PTR id);
     void onMiddleClick(HWND from, POINT screenPt);
     LRESULT onNotify(NMHDR* nm);
@@ -208,11 +211,12 @@ private:
     bool asking_ = false;          // the "Save these tabs?" box is up: a second WM_CLOSE is ignored (5.7)
     bool filterEmpty_ = true;       // the filter box is empty, so it shows its funnel (filterProc)
     bool refreshQueued_ = false;
-    bool refreshForWatch_ = false;   // ...and only a change in the folder shown asked for it (onFolderChanged)
-    struct QueuedView {             // kept by refresh() while a load is pending: what a delete, rename or new
-        std::wstring dir;           // folder wanted selected. The queued refresh applies it if 'dir' is still shown.
+    struct QueuedRefresh {          // what it is for (queueRefresh)
+        std::optional<std::wstring> dir;
+        bool above = false;
+        UINT visit = 0;             // the list's visit that `view` belongs to (FileList::visit)
         ViewState view;
-    } queuedView_;
+    } queued_;
     bool loadMessageShown_ = false; // the status bar says "Loading..." or "not available" (setMessage clears it)
     const wchar_t* lateHint_ = nullptr;   // a hint for when the folder being loaded lands (a navigation clears messages)
     bool firstFolder_ = true;   // no folder shown yet: the first says "F1 shows the keys" (5.10)
@@ -228,7 +232,6 @@ private:
         int tabId = 0;
         Origin origin;
         std::wstring filter;        // the filter box before this load cleared it: a failed one puts it back
-        bool refreshLost = false;   // a move that replaced a refresh of its tab's folder: a failed one asks again (4.5)
     } pending_;
     // A tab switch a move took over: its read goes on, and the tab shows what it finds as soon as it is back, as the
     // switch would have (4.2). Until then it counts as loading.
@@ -249,6 +252,7 @@ private:
     } rename_;
 
     FolderWatch watch_;
+    UINT watchNumber_ = 0;         // which of its message numbers the watch has (onLoaded)
     FolderWatch bookmarksWatch_;   // the Bookmarks node follows its folder whatever the list shows (5.5)
     std::wstring ini_;
     std::map<std::wstring, std::wstring> iniValues_;   // its [Window] section, read once (create)

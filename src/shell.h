@@ -130,13 +130,12 @@ public:
     FolderWatch(const FolderWatch&) = delete;
     FolderWatch& operator=(const FolderWatch&) = delete;
     bool watches(const std::wstring& dir) const { return dir_ && samePath(*dir_, dir); }   // "" is This PC
-    // Its folder is in 'dir', which it watches too, for that folder going.
-    bool watchesChildOf(const std::wstring& dir) const {
-        return dir_ && !dir_->empty() && samePath(parentPath(*dir_), dir);
-    }
+    const std::optional<std::wstring>& dir() const { return dir_; }
+    UINT message() const { return msg_; }   // what its notices come as
 
 private:
     ULONG ids_[2] = {};
+    UINT msg_ = 0;
     std::optional<std::wstring> dir_;   // none: it watches nothing, or Windows refused it (the next load tries again)
 };
 void acknowledgeChange(WPARAM wp, LPARAM lp);

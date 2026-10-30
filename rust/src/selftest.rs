@@ -231,6 +231,7 @@ thread_local! {
     static EFFECT: Cell<u32> = const { Cell::new(0) };  // what a simulated drag was allowed to do
     static DRAGGED: RefCell<Option<IDataObject>> = const { RefCell::new(None) }; // what a simulated drag carries
     static COUNT: Cell<u32> = const { Cell::new(0) };   // a load count to compare with
+    static OLD_WATCH: Cell<u32> = const { Cell::new(0) }; // what the watch before this one's notices came as
     static NOTICES: Cell<u32> = const { Cell::new(0) }; // Bookmarks notices before the step
     static LOADS: Cell<(u32, u32)> = const { Cell::new((0, 0)) };
     static FLAG: Cell<bool> = const { Cell::new(false) };
@@ -602,6 +603,10 @@ impl App {
 
     fn focused_is(&self, name: &str) -> bool {
         self.list.focused_name().is_some_and(|n| n == name)
+    }
+
+    fn watch_message(&self) -> u32 {
+        self.watch.borrow().as_ref().map_or(0, |w| w.message())
     }
 
     fn select_one(&self, name: &str) -> Option<usize> {
@@ -1821,7 +1826,12 @@ impl App {
             "a newer request to select an item replaces an older one still waiting",
             move |a| {
                 // An older request, waiting (a slow folder); then a newer one, as after a second rename.
-                a.st.borrow_mut().queued_view = Some((Location::dir(dir()), ViewState::selecting("file1.txt")));
+                let visit = a.list.visit();
+                {
+                    let mut st = a.st.borrow_mut();
+                    st.queued.view = ViewState::selecting("file1.txt");
+                    st.queued.visit = visit;
+                }
                 a.refresh(ViewState::selecting("added.txt"));
             },
             |a| a.idle() && a.focused_is("added.txt"),
@@ -1866,6 +1876,79 @@ impl App {
                 a.idle() && a.focused_is("file1.txt")
             },
         );
+        s.add(
+            "a move that replaces a refresh keeps a newer request to select an item, for when the move fails (4.6)",
+            |a| {
+                a.refresh(ViewState::selecting("file1.txt"));
+                a.refresh(ViewState::selecting("added.txt")); // newer, as after a second rename: it waits for the read
+                a.open(Location::dir(p("no such folder")), Nav::New, ViewState::default());
+            },
+            |a| {
+                note(format!("focused {:?}", a.list.focused_name().unwrap_or_default()));
+                a.idle() && !a.refresh_queued.get() && a.focused_is("added.txt")
+            },
+        );
+        // A refresh asked for while a move is out is about the folder it was asked in, and the move may land elsewhere.
+        // These steps go on in quieter folders than the test folder, whose earlier changes are still being reported.
+        s.add(
+            "a refresh a rename asks for while a move is loading is not read again where the move lands (4.5)",
+            |a| {
+                COUNT.set(a.generation.get());
+                OLD_WATCH.set(a.watch_message());
+                a.open(Location::dir(p("sub")), Nav::New, ViewState::default());
+                a.refresh(ViewState::selecting("file1.txt"));
+            },
+            |a| {
+                note(format!("{} read(s)", a.generation.get() - COUNT.get()));
+                a.at(&p("sub")) && !a.refresh_queued.get() && a.generation.get() == COUNT.get() + 1
+            },
+        );
+        // Each watch's notices come under a number of their own: one still on its way when the watch goes is told
+        // apart.
+        s.add(
+            "a notice the old watch sent before it went reads nothing (4.5)",
+            |a| {
+                COUNT.set(a.generation.get());
+                let _ = unsafe { PostMessageW(Some(a.wnd), OLD_WATCH.get(), WPARAM(0), LPARAM(0)) };
+            },
+            |a| {
+                note(format!("{} read(s)", a.generation.get() - COUNT.get()));
+                step_ms() >= 800 && !a.refresh_queued.get() && a.generation.get() == COUNT.get()
+            },
+        );
+        s.add(
+            "...and one from the watch it has now reads the folder again (4.5)",
+            |a| {
+                COUNT.set(a.generation.get());
+                let _ = unsafe { PostMessageW(Some(a.wnd), a.watch_message(), WPARAM(0), LPARAM(0)) };
+            },
+            |a| a.idle() && !a.refresh_queued.get() && a.generation.get() == COUNT.get() + 1,
+        );
+        s.add(
+            "a refresh that a move replaced is not read again where the move lands (4.5)",
+            |a| {
+                COUNT.set(a.generation.get());
+                a.refresh(ViewState::default());
+                a.open(Location::dir(p("Bookmarks")), Nav::New, ViewState::default());
+            },
+            |a| {
+                note(format!("{} read(s)", a.generation.get() - COUNT.get()));
+                a.at(&p("Bookmarks")) && !a.refresh_queued.get() && a.generation.get() == COUNT.get() + 2
+            },
+        );
+        s.add(
+            "...not even when the move lands on the folder that refresh was reading (4.5)",
+            |a| {
+                COUNT.set(a.generation.get());
+                a.refresh(ViewState::default());
+                a.open(Location::dir(p("Bookmarks")), Nav::New, ViewState::default());
+            },
+            |a| {
+                note(format!("{} read(s)", a.generation.get() - COUNT.get()));
+                a.at(&p("Bookmarks")) && !a.refresh_queued.get() && a.generation.get() == COUNT.get() + 2
+            },
+        );
+        s.home("(back to the test folder)");
         s.add("a command that does not exist says Can't find", |a| a.go_to("no-such-program-qoqdir"), move |a| {
             let (mut from, mut to) = (0u32, 0u32); // the text stays selected, so it can be corrected (5.3)
             send(a.address, EM_GETSEL, &mut from as *mut _ as usize, &mut to as *mut _ as isize);
@@ -2152,7 +2235,7 @@ impl App {
         s.add(
             "a refresh queued just before a tab became not available waits for F5 (4.3)",
             move |a| {
-                a.queue_refresh(); // a change in the folder, just before
+                a.queue_refresh(None, false, ViewState::default()); // a drive came or went, just before
                 // Then it became unreachable.
                 a.show_unavailable(&Location::dir(dir()), "The network path was not found.");
                 send(a.wnd, WM_TIMER, TIMER_REFRESH, 0); // and the queued refresh fires
@@ -4009,7 +4092,8 @@ impl App {
             "...and a refresh asked for meanwhile waits for it, reading nothing beside it (4.2)",
             |a| {
                 COUNT.set(a.generation.get());
-                a.queue_refresh();
+                // A drive came or went: for whichever folder the tab comes to show.
+                a.queue_refresh(None, false, ViewState::default());
             },
             |a| {
                 note(format!("{} read(s)", a.generation.get() - COUNT.get()));
