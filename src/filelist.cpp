@@ -113,7 +113,8 @@ void FileList::update(bool keepSelection, const std::function<void()>& change) {
         names = selectedNames();
         focus = focusedName();
     }
-    // The edit box knows a row, not a file: close it before rows move, or Enter renames whatever lands there.
+    // The edit box knows a row, not a file: close it before rows move, or Enter renames whatever lands there. This
+    // keeps the typed name, as Enter does: only Esc drops it.
     if (renaming()) ListView_CancelEditLabel(lv_);
     // Rebuild view_ before any ListView call: those can ask for a row's text at once.
     change();

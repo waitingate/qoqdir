@@ -287,6 +287,7 @@ impl FileList {
     fn update(&self, keep_selection: bool, change: impl FnOnce(&mut Model)) {
         let (names, focus) = if keep_selection { (self.selected_names(), self.focused_name()) } else { (Vec::new(), None) };
         // The edit box knows a row, not a file: close it before rows move, or Enter renames whatever lands there.
+        // This keeps the typed name, as Enter does: only Esc drops it.
         if self.renaming() {
             send(self.hwnd, LVM_CANCELEDITLABEL, 0, 0);
         }

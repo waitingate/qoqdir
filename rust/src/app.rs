@@ -374,9 +374,8 @@ fn is_new_tab_verb(verb: &str) -> bool {
 /// what the list's menu was opened on: it is modal, and a load can land meanwhile.
 pub struct MenuItems {
     dir: Location,
-    names: Vec<OsString>,
-    rows: Vec<usize>,
-    opens_here: bool, // a folder or shortcut among them: Open and the new-tab verbs open them here
+    names: Vec<OsString>, // not rows: a load keeps them selected, but rows above them come and go
+    opens_here: bool,     // a folder or shortcut among them: Open and the new-tab verbs open them here
 }
 
 /// A window number from qoqdir.ini (`ini` is the file path, wide): missing, not a number, or far off any screen (a
@@ -1407,7 +1406,7 @@ impl App {
                 }
             }
             let m = self.menu_items();
-            if m.rows.is_empty() {
+            if m.names.is_empty() {
                 let dir = &m.dir;
                 // The folder's own menu, with Paste; none when the list shows no folder.
                 if matches!(dir, Location::Dir(_))
@@ -1454,7 +1453,7 @@ impl App {
         let rows = self.list.selection();
         // With a folder or shortcut among them, activate opens them all (folders here, files with Windows).
         let opens_here = rows.iter().any(|&r| self.list.item(r).is_some_and(|i| i.is_dir() || is_shortcut(&i.name)));
-        MenuItems { dir: self.list.location(), names: self.list.selected_names(), rows, opens_here }
+        MenuItems { dir: self.list.location(), names: self.list.selected_names(), opens_here }
     }
 
     pub fn item_verb(&self, verb: &str, m: &MenuItems) -> bool {
@@ -1467,7 +1466,9 @@ impl App {
             return true; // changed: do nothing
         }
         // The focused item when it is one the menu was for; the keyboard can leave the focus on an item not selected.
-        let row = self.list.focused().filter(|f| m.rows.contains(f)).or(m.rows.first().copied());
+        // Their rows as they are now: a load while the menu was open can have moved them.
+        let rows = self.list.selection();
+        let row = self.list.focused().filter(|f| rows.contains(f)).or(rows.first().copied());
         if is("rename") {
             self.list.rename(row);
         } else if is("delete") {
@@ -2145,11 +2146,16 @@ impl App {
     /// False: a load was in progress, so none was started.
     pub fn refresh(&self, view: ViewState) -> bool {
         // A load is in progress: start nothing (a held F5 would pile up stuck threads on a dead share). That load
-        // may predate the caller's change, so keep what it wants selected for a queued refresh.
-        if self.is_loading() {
-            if view.asks() {
+        // may predate the caller's change, so keep what it wants selected for a queued refresh. A rename is never
+        // interrupted (4.2): the refresh is queued, and the queue waits for the rename to end (on_timer).
+        let renaming = self.list.renaming();
+        if self.is_loading() || renaming {
+            let asks = view.asks();
+            if asks {
                 let shown = self.list.location();
                 self.st.borrow_mut().queued_view = Some((shown, view));
+            }
+            if asks || renaming {
                 self.queue_refresh();
             }
             return false;
@@ -2387,8 +2393,8 @@ impl App {
             self.show_tabs();
             return;
         }
-        // The tab bar never takes the focus, so an open rename box would be cancelled and the typed name lost. Commit
-        // it first by moving the focus to the list, as a click anywhere else does (5.4).
+        // The tab bar never takes the focus: commit an open rename box first by moving the focus to the list, as a
+        // click anywhere else does (5.4).
         if self.list.renaming() {
             focus(self.list.hwnd());
         }

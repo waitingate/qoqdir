@@ -43,7 +43,7 @@ use windows::Win32::System::Threading::{
 };
 use windows::Win32::UI::Controls::{
     EM_GETCUEBANNER, LVIR_BOUNDS, LVIS_DROPHILITED, LVM_GETHEADER, LVM_GETITEMSTATE,
-    EM_SETSEL, EM_GETSEL, EM_REPLACESEL, HTREEITEM, LVIF_IMAGE, LVIR_LABEL, LVITEMW, LVM_CANCELEDITLABEL, LVM_ENSUREVISIBLE, LVM_GETBKCOLOR, LVM_GETCOUNTPERPAGE,
+    EM_SETSEL, EM_GETSEL, EM_REPLACESEL, HTREEITEM, LVIF_IMAGE, LVIR_LABEL, LVITEMW, LVM_ENSUREVISIBLE, LVM_GETBKCOLOR, LVM_GETCOUNTPERPAGE,
     LVM_GETTEXTBKCOLOR, TVM_GETBKCOLOR,
     LVM_GETITEMRECT, LVM_GETITEMW, TCIF_TEXT, TCITEMW,
     TCM_GETCURSEL, TCM_GETITEMCOUNT, TCM_GETITEMRECT, TCM_GETITEMW, TCM_SETCURFOCUS, UPDOWN_CLASSW,
@@ -73,7 +73,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
     UIS_CLEAR, UIS_SET, UISF_HIDEFOCUS, WM_QUERYUISTATE, WM_UPDATEUISTATE,
 };
 
-use crate::app::{App, Key, Nav, TIMER_LOADING, TIMER_REFRESH, ViewState};
+use crate::app::{App, Key, MenuItems, Nav, TIMER_LOADING, TIMER_REFRESH, ViewState};
 use crate::folder::{
     Item, Listing, Location, SortKey, command_line_words, exists, folder_written, is_directory, is_shortcut,
     list_folder, parse_command_line, sort_items, system_dir,
@@ -236,6 +236,7 @@ thread_local! {
     static USAGE: Cell<[u32; 3]> = const { Cell::new([0; 3]) }; // handles, GDI and USER objects held before them
     static NEXT: RefCell<OsString> = const { RefCell::new(OsString::new()) }; // the item after the one Delete removes
     static KEPT: RefCell<OsString> = const { RefCell::new(OsString::new()) }; // selected there while a delete is out
+    static MENU: RefCell<Option<MenuItems>> = const { RefCell::new(None) }; // what an item menu was opened on
     // What `sub` held before the paste step, and anything the paste brought in that isn't the test's file (a cut made
     // elsewhere just as it started): then the test folder is kept, not deleted (7.2).
     static SUB_BEFORE: RefCell<BTreeSet<OsString>> = const { RefCell::new(BTreeSet::new()) };
@@ -581,8 +582,11 @@ impl App {
         self.list.edit_control().map(text_of).unwrap_or_default()
     }
 
+    /// Esc, as a person cancels a rename: LVM_CANCELEDITLABEL keeps the typed name, as Enter does.
     fn cancel_rename(&self) {
-        send(self.list.hwnd(), LVM_CANCELEDITLABEL, 0, 0);
+        if self.list.renaming() {
+            self.press(VK_ESCAPE, 0);
+        }
     }
 
     /// The middle of a tab, in screen coordinates, where a drag is aimed.
@@ -1154,6 +1158,48 @@ impl App {
             |a| a.list.renaming() && a.edit_text() == "file1.txt",
         );
         s.add("(cancel that rename)", |a| a.cancel_rename(), |a| !a.list.renaming());
+        // The menu is modal, and a reload can land while it is open: one with a new file above the item the menu is
+        // for keeps that item selected, a row further down.
+        s.add(
+            "(an item menu opened on file1.txt, and a file that sorts above it comes in while it is open)",
+            |a| {
+                a.select_one("file1.txt");
+                MENU.set(Some(a.menu_items()));
+                write_file(&p("aaa above.txt"));
+                a.refresh(ViewState::default());
+            },
+            |a| a.idle() && a.listed("aaa above.txt") && a.list.selected_names() == [OsString::from("file1.txt")],
+        );
+        s.add(
+            "Rename on that menu then renames the item it was opened on, not the one now in its row",
+            |a| {
+                focus(a.list.hwnd());
+                if let Some(menu) = MENU.take() {
+                    a.item_verb("rename", &menu);
+                }
+            },
+            |a| a.list.renaming() && a.edit_text() == "file1.txt",
+        );
+        s.add("(cancel that rename)", |a| a.cancel_rename(), |a| !a.list.renaming());
+        s.remove_listed("(remove the new file)", "aaa above.txt");
+        // A delete's reply asks for a refresh when the recycle is done (WM_APP_DELETED), which can be while another
+        // item is being renamed: it waits for the rename, as one the folder's watch asks for does (4.2).
+        s.add(
+            "a refresh asked for while a rename is open, as a delete's reply does, waits for the rename (4.2)",
+            |a| {
+                focus(a.list.hwnd());
+                a.select_one("file1.txt");
+                a.press(VK_F2, 0);
+                if let Some(edit) = a.list.edit_control() {
+                    set_text(edit, "typed.txt");
+                }
+                a.refresh(ViewState::selecting("file1.txt"));
+            },
+            |a| a.list.renaming() && a.edit_text() == "typed.txt" && a.refresh_queued.get(),
+        );
+        s.add("(cancel that rename: the refresh then runs)", |a| a.cancel_rename(), |a| {
+            !a.list.renaming() && !a.refresh_queued.get() && a.idle()
+        });
         s.add(
             "a refresh that lands during a rename waits for it",
             |a| {

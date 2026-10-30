@@ -164,6 +164,10 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
         HWND edit = ListView_GetEditControl(list_.hwnd());
         return edit ? windowText(edit) : std::wstring();
     };
+    // Esc, as a person cancels a rename: LVM_CANCELEDITLABEL keeps the typed name, as Enter does.
+    auto cancelRename = [this] {
+        if (list_.renaming()) selfTestKey(VK_ESCAPE);
+    };
     auto tabRect = [this](int index) {   // a tab's rectangle in the bar
         RECT r{};
         TabCtrl_GetItemRect(tabBar_, index, &r);
@@ -660,7 +664,7 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
         });
     add(L"(cancel that rename and remove the folder)",
         [=, this] {
-            ListView_CancelEditLabel(list_.hwnd());
+            cancelRename();
             RemoveDirectoryW(path(L"New folder").c_str());
             RemoveDirectoryW(path(L"New folder (2)").c_str());
             refresh();
@@ -689,8 +693,44 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
             itemVerb(L"rename", menuItems());
         },
         [=, this] { return list_.renaming() && editText() == L"file1.txt"; });
-    add(L"(cancel that rename)", [=, this] { ListView_CancelEditLabel(list_.hwnd()); },
+    add(L"(cancel that rename)", [=, this] { cancelRename(); },
         [=, this] { return !list_.renaming(); });
+    // The menu is modal, and a reload can land while it is open: one with a new file above the item the menu is for
+    // keeps that item selected, a row further down.
+    auto menu = std::make_shared<MenuItems>();
+    add(L"(an item menu opened on file1.txt, and a file that sorts above it comes in while it is open)",
+        [=, this] {
+            list_.select({L"file1.txt"}, L"file1.txt");
+            *menu = menuItems();
+            writeFile(path(L"aaa above.txt"));
+            refresh();
+        },
+        [=, this] {
+            return idle() && listed(L"aaa above.txt") &&
+                   list_.selectedNames() == std::vector<std::wstring>{L"file1.txt"};
+        });
+    add(L"Rename on that menu then renames the item it was opened on, not the one now in its row",
+        [=, this] {
+            SetFocus(list_.hwnd());
+            itemVerb(L"rename", *menu);
+        },
+        [=, this] { return list_.renaming() && editText() == L"file1.txt"; });
+    add(L"(cancel that rename)", [=, this] { cancelRename(); },
+        [=, this] { return !list_.renaming(); });
+    removeListed(L"(remove the new file)", L"aaa above.txt");
+    // A delete's reply asks for a refresh when the recycle is done (WM_APP_DELETED), which can be while another item
+    // is being renamed: it waits for the rename, as one the folder's watch asks for does (4.2).
+    add(L"a refresh asked for while a rename is open, as a delete's reply does, waits for the rename (4.2)",
+        [=, this] {
+            SetFocus(list_.hwnd());
+            list_.select({L"file1.txt"}, L"file1.txt");
+            selfTestKey(VK_F2);
+            SetWindowTextW(ListView_GetEditControl(list_.hwnd()), L"typed.txt");
+            refresh(ViewState::selecting(L"file1.txt"));
+        },
+        [=, this] { return list_.renaming() && editText() == L"typed.txt" && refreshQueued_; });
+    add(L"(cancel that rename: the refresh then runs)", [=, this] { cancelRename(); },
+        [=, this] { return !list_.renaming() && !refreshQueued_ && idle(); });
     add(L"a refresh that lands during a rename waits for it",
         [=, this] {
             SetWindowTextW(filter_, L"");
@@ -1026,7 +1066,7 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
         [=, this] { return at(dir) && list_.renaming() && GetFocus() != address_; });
     add(L"a refresh asked to select an item, landing during a rename, keeps that for later",
         [=, this] {
-            ListView_CancelEditLabel(list_.hwnd());   // the box from the step before
+            cancelRename();   // the box from the step before
             SetFocus(list_.hwnd());
             list_.select({L"file1.txt"}, L"file1.txt");
             refresh(ViewState::selecting(L"added.txt"));   // as after a rename or a new folder; the load is in flight
@@ -1034,7 +1074,7 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
         },
         [=, this] { return idle() && list_.renaming(); });
     add(L"...and once the box closes the queued refresh selects it",
-        [=, this] { ListView_CancelEditLabel(list_.hwnd()); },
+        [=, this] { cancelRename(); },
         [=, this] {
             selfTest_->note = L"focused " + list_.focusedName();
             return idle() && !refreshQueued_ && list_.focusedName() == L"added.txt";
@@ -1835,7 +1875,7 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
         [=, this] { return at(dir) && list_.renaming() && list_.focusedName() == L"sub"; });
     add(L"a folder made in Bookmarks shows up in the tree by itself (5.5)",
         [=, this] {
-            ListView_CancelEditLabel(list_.hwnd());   // the box from the step before
+            cancelRename();   // the box from the step before
             CreateDirectoryW(path(L"Bookmarks\\two").c_str(), nullptr);
         },
         [=] { return bookmarkNodes() == L"one,two,sub"; });

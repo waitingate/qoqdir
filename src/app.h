@@ -84,8 +84,7 @@ private:
     // Item menus: the verbs Qoqdir does itself instead of handing them to Windows (4.4). False: Windows does it.
     struct MenuItems {            // what the list's menu was opened on: it is modal, and a load can land meanwhile
         std::wstring dir;
-        std::vector<std::wstring> names;
-        std::vector<int> rows;
+        std::vector<std::wstring> names;   // not rows: a load keeps them selected, but rows above them come and go
         bool opensHere = false;   // a folder or shortcut among them: Open and the new-tab verbs open them here
     };
     MenuItems menuItems() const;

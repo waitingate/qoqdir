@@ -762,7 +762,7 @@ void App::onContextMenu(HWND from, POINT pt) {
             ClientToScreen(list_.hwnd(), &pt);
         }
         const MenuItems m = menuItems();
-        if (m.rows.empty()) {
+        if (m.names.empty()) {
             const std::wstring& dir = m.dir;
             if (!dir.empty()) {
                 bool copied = canPaste();   // else Paste is greyed
@@ -796,9 +796,10 @@ void App::onContextMenu(HWND from, POINT pt) {
 }
 
 App::MenuItems App::menuItems() const {
-    MenuItems m{list_.dir(), list_.selectedNames(), list_.selection()};
+    MenuItems m{list_.dir(), list_.selectedNames()};
     // With a folder or shortcut among them, activate opens them all (folders here, files with Windows).
-    m.opensHere = std::any_of(m.rows.begin(), m.rows.end(), [&](int r) {
+    std::vector<int> rows = list_.selection();
+    m.opensHere = std::any_of(rows.begin(), rows.end(), [&](int r) {
         return list_.at(r).isDir() || isShortcut(list_.at(r).name);
     });
     return m;
@@ -809,8 +810,10 @@ bool App::itemVerb(const std::wstring& verb, const MenuItems& m) {
     if (!is(verb, L"rename") && !is(verb, L"delete") && !location && !(m.opensHere && (open || inNewTab))) return false;
     if (!list_.shows(m.dir) || list_.selectedNames() != m.names) return true;   // changed: do nothing
     // The focused item when it is one the menu was for; the keyboard can leave the focus on an item not selected.
+    // Their rows as they are now: a load while the menu was open can have moved them.
+    std::vector<int> rows = list_.selection();
     int focus = list_.focused();
-    int row = std::find(m.rows.begin(), m.rows.end(), focus) != m.rows.end() ? focus : m.rows[0];
+    int row = std::find(rows.begin(), rows.end(), focus) != rows.end() ? focus : rows[0];
     if (is(verb, L"rename")) list_.rename(row);
     else if (is(verb, L"delete")) deleteSelection(GetKeyState(VK_SHIFT) < 0);   // like the Delete key (4.6)
     else if (location) openTargetLocation(list_.pathAt(row));                   // a shortcut's Open file location
@@ -1228,12 +1231,13 @@ bool App::goUp() {
 
 bool App::refresh(ViewState view) {
     // A load is in progress: start nothing (a held F5 would pile up stuck threads on a dead share). That load
-    // may predate the caller's change, so keep what it wants selected for a queued refresh.
-    if (loading()) {
-        if (view.asks()) {
-            queuedView_ = {list_.dir(), std::move(view)};
-            queueRefresh();
-        }
+    // may predate the caller's change, so keep what it wants selected for a queued refresh. A rename is never
+    // interrupted (4.2): the refresh is queued, and the queue waits for the rename to end (onTimer).
+    bool renaming = list_.renaming();
+    if (loading() || renaming) {
+        bool asks = view.asks();
+        if (asks) queuedView_ = {list_.dir(), std::move(view)};
+        if (asks || renaming) queueRefresh();
         return false;
     }
     if (view.asks()) queuedView_ = {};   // newer than any request still waiting
@@ -1401,8 +1405,8 @@ void App::switchTab(int index) {
         showTabs();
         return;
     }
-    // The tab bar never takes the focus, so an open rename box would be cancelled and the typed name lost. Commit it
-    // first by moving the focus to the list, as a click anywhere else does (5.4).
+    // The tab bar never takes the focus: commit an open rename box first by moving the focus to the list, as a click
+    // anywhere else does (5.4).
     if (list_.renaming()) SetFocus(list_.hwnd());
     rememberView();
     active_ = index;
