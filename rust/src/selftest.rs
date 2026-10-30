@@ -178,6 +178,28 @@ impl Steps {
         );
     }
 
+    /// A step that deletes a file of the test folder and reads the folder again once it is gone, trying again while
+    /// the delete fails.
+    fn remove_listed(&mut self, name: &'static str, file: &'static str) {
+        self.add(
+            name,
+            move |a| {
+                if remove_file(&p(file)) {
+                    a.refresh(ViewState::default());
+                }
+            },
+            move |a| {
+                if exists(&p(file)) {
+                    if remove_file(&p(file)) {
+                        a.refresh(ViewState::default());
+                    }
+                    return false;
+                }
+                !a.listed(file) && a.idle()
+            },
+        );
+    }
+
     fn push(&mut self, name: &'static str, act: Option<Act>, done: Check) -> &mut Step {
         self.0.push(Step { name, act, done, timeout_ms: 5000, while_loading: false, copies: false });
         self.0.last_mut().expect("just added")
@@ -303,6 +325,19 @@ pub fn prepare() -> Location {
 
 fn write_file(path: &Path) {
     let _ = std::fs::write(path, "x");
+}
+
+/// A file just made can be open in another program for a moment (the shell reading a new shortcut, a virus scanner),
+/// and then deleting it fails: true once it is gone, else the error goes in the step's note.
+fn remove_file(path: &Path) -> bool {
+    match std::fs::remove_file(path) {
+        Ok(()) => true,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => true,
+        Err(e) => {
+            note(format!("the delete failed at first (error {})", e.raw_os_error().unwrap_or(0)));
+            false
+        }
+    }
 }
 
 fn clipboard_files() -> Vec<PathBuf> {
@@ -964,6 +999,8 @@ impl App {
                 SUB_BEFORE.with(|b| *b.borrow_mut() = names_in(&p("sub")));
                 if test_file_on_clipboard(a) {
                     a.press(letter(b'V'), CTRL);
+                } else {
+                    note("the clipboard was not the test's: no paste".into());
                 }
             },
             |_| {
@@ -990,6 +1027,8 @@ impl App {
             |a| {
                 if test_file_on_clipboard(a) {
                     paste_into(a.wnd, &a.list.location(), true);
+                } else {
+                    note("the clipboard was not the test's: no paste".into());
                 }
             },
             |_| {
@@ -1226,11 +1265,20 @@ impl App {
         );
         // The tab keeps its gone folder (4.3), which a command must not get as its working folder.
         s.add("(F5 while it is still gone keeps it shown as not available)", |a| a.press(VK_F5, 0), gone_shown);
-        s.add("a command typed there still runs (the dead folder is not its working folder)", |a| a.go_to("rundll32"), |a| {
-            a.commands_done.get() == a.commands.get()
-                && a.at(&p("gone"))
-                && a.status_message().contains("not available")
-        });
+        // COUNT: typed commands before a step's own, which it must start.
+        s.add(
+            "a command typed there still runs (the dead folder is not its working folder)",
+            |a| {
+                COUNT.set(a.commands.get());
+                a.go_to("rundll32");
+            },
+            |a| {
+                a.commands.get() == COUNT.get() + 1
+                    && a.commands_done.get() == a.commands.get()
+                    && a.at(&p("gone"))
+                    && a.status_message().contains("not available")
+            },
+        );
         s.add(
             "F5 tries again once it is back",
             |a| {
@@ -1364,13 +1412,17 @@ impl App {
                 send(a.tab_bar, WM_LBUTTONDBLCLK, MK_LBUTTON.0 as usize, packed(x, y));
                 send(a.tab_bar, WM_LBUTTONUP, 0, packed(x, y));
             },
-            move |a| a.tabs() == 1 && a.active() == 0 && a.at(&dir()),
+            // After the posted "+" a wrong double-click would bring, not before it.
+            move |a| step_ms() >= 200 && a.tabs() == 1 && a.active() == 0 && a.at(&dir()),
         );
         s.add(
             "a double-click on the empty bar right of the tabs opens one, as \"+\" does",
             |a| {
-                let r = tab_rect(a, 0);
-                let (x, y) = (r.right + scale(20, a.dpi.get()), (r.top + r.bottom) / 2); // right of the only tab
+                if a.tabs() != 1 {
+                    note(format!("{} tabs before it", a.tabs()));
+                }
+                let r = tab_rect(a, a.tabs() - 1);
+                let (x, y) = (r.right + scale(20, a.dpi.get()), (r.top + r.bottom) / 2); // right of the last tab
                 send(a.tab_bar, WM_LBUTTONDBLCLK, MK_LBUTTON.0 as usize, packed(x, y));
                 send(a.tab_bar, WM_LBUTTONUP, 0, packed(x, y));
             },
@@ -1633,9 +1685,13 @@ impl App {
             |a| {
                 write_file(&p("rundll32.exe")); // not a program: run from here, it would fail
                 a.set_message("");
+                COUNT.set(a.commands.get());
                 a.go_to("rundll32");
             },
             move |a| {
+                if a.commands.get() != COUNT.get() + 1 {
+                    return false; // never started: no reply to wait for
+                }
                 if a.commands_done.get() != a.commands.get() {
                     return false; // looked up on a worker: the decoy stays until its reply
                 }
@@ -2059,19 +2115,28 @@ impl App {
              where the shortcut says it is, relative to itself (5.6)",
             |a| {
                 // The folder under a drive letter of its own, as on a flash drive: the shortcut is made through the letter,
-                // and then the letter goes, as it does when the drive comes back as another one.
+                // and then the letter goes, as it does when the drive comes back as another one. Only a free letter,
+                // and the shortcut opened only once it is there: Windows would ask what to do about a missing one.
                 let used = unsafe { GetLogicalDrives() };
-                let letter = (b'D'..=b'Z').rev().find(|l| used & (1 << (l - b'A')) == 0).unwrap_or(b'Z');
+                let Some(letter) = (b'D'..=b'Z').rev().find(|l| used & (1 << (l - b'A')) == 0) else {
+                    note("no drive letter free".into());
+                    return;
+                };
                 let drive = format!("{}:", letter as char);
                 let _ = std::fs::create_dir_all(p("pack\\target"));
                 let (drive_w, pack_w) = (wide(&drive), wide(p("pack")));
-                unsafe {
-                    let _ = DefineDosDeviceW(DDD_NO_BROADCAST_SYSTEM, pcwstr(&drive_w), pcwstr(&pack_w));
+                if unsafe { DefineDosDeviceW(DDD_NO_BROADCAST_SYSTEM, pcwstr(&drive_w), pcwstr(&pack_w)) }.is_err() {
+                    note(format!("can't make {drive}"));
+                    return;
                 }
                 make_shortcut(Path::new(&format!("{drive}\\go.lnk")), format!("{drive}\\target")); // both through the letter: Windows stores the way between them
-                unsafe {
-                    let gone = DDD_REMOVE_DEFINITION | DDD_EXACT_MATCH_ON_REMOVE | DDD_NO_BROADCAST_SYSTEM;
-                    let _ = DefineDosDeviceW(gone, pcwstr(&drive_w), pcwstr(&pack_w));
+                let gone = DDD_REMOVE_DEFINITION | DDD_EXACT_MATCH_ON_REMOVE | DDD_NO_BROADCAST_SYSTEM;
+                if unsafe { DefineDosDeviceW(gone, pcwstr(&drive_w), pcwstr(&pack_w)) }.is_err() {
+                    note(format!("can't remove {drive}"));
+                }
+                if !exists(&p("pack\\go.lnk")) {
+                    note("no shortcut made".into());
+                    return;
                 }
                 a.open_shortcut(p("pack\\go.lnk"), false);
             },
@@ -2176,8 +2241,12 @@ impl App {
             "(a folder of 300 shortcuts, each with its own icon)",
             |a| {
                 let _ = std::fs::create_dir(p("links"));
-                for i in 0..300 {
-                    make_shortcut(&p(&format!("links\\link {i}.lnk")), p("sub"));
+                // One saved, the rest copies of it: each save sends a shell notice, and a stream of them makes Windows
+                // report no other change, to any program, for a while (heard_again).
+                let first = p("links\\link 0.lnk");
+                make_shortcut(&first, p("sub"));
+                for i in 1..300 {
+                    let _ = std::fs::copy(&first, p(&format!("links\\link {i}.lnk")));
                 }
                 a.open(Location::dir(p("links")), Nav::New, ViewState::default());
             },
@@ -2345,7 +2414,9 @@ impl App {
             |a| {
                 let cursor = a.tab_point(a.active() + 1);
                 let data = data_object_at(a.wnd, &Location::dir(p("file1.txt"))); // what a drag carries
-                let (Some(data), Some(target)) = (data, a.tab_drop.borrow().clone()) else { return };
+                let (Some(data), Some(target)) = (data, a.tab_drop.borrow().clone()) else {
+                    return note("no data object or drop target".into());
+                };
                 unsafe {
                     let mut effect = DROPEFFECT_COPY;
                     let _ = target.DragEnter(&data, MK_LBUTTON, cursor, &mut effect);
@@ -2373,7 +2444,9 @@ impl App {
                 write_file(&p("held.txt"));
                 let cursor = a.tab_point(a.active() + 1);
                 let data = data_object_at(a.wnd, &Location::dir(p("held.txt")));
-                let (Some(data), Some(target)) = (data, a.tab_drop.borrow().clone()) else { return };
+                let (Some(data), Some(target)) = (data, a.tab_drop.borrow().clone()) else {
+                    return note("no data object or drop target".into());
+                };
                 let (any, keys) = (DROPEFFECT_COPY | DROPEFFECT_MOVE | DROPEFFECT_LINK, MK_LBUTTON | MK_CONTROL);
                 unsafe {
                     let mut effect = any;
@@ -2402,7 +2475,9 @@ impl App {
                 write_file(&p("into.txt"));
                 let cursor = a.row_point("sub");
                 let data = data_object_at(a.wnd, &Location::dir(p("into.txt")));
-                let (Some(data), Some(target)) = (data, a.list_drop.borrow().clone()) else { return };
+                let (Some(data), Some(target)) = (data, a.list_drop.borrow().clone()) else {
+                    return note("no data object or drop target".into());
+                };
                 unsafe {
                     let mut effect = DROPEFFECT_COPY;
                     let _ = target.DragEnter(&data, MK_LBUTTON, cursor, &mut effect);
@@ -2432,7 +2507,9 @@ impl App {
             |a| {
                 let data = data_object_at(a.wnd, &Location::dir(p("sub")));
                 let (list, tab) = (a.list_drop.borrow().clone(), a.tab_drop.borrow().clone());
-                let (Some(data), Some(list), Some(tab)) = (data, list, tab) else { return };
+                let (Some(data), Some(list), Some(tab)) = (data, list, tab) else {
+                    return note("no data object or drop target".into());
+                };
                 let any = DROPEFFECT_COPY | DROPEFFECT_MOVE | DROPEFFECT_LINK;
                 let mut seen = Vec::new();
                 unsafe {
@@ -2466,7 +2543,9 @@ impl App {
             |a| {
                 FLAG.set(false);
                 let data = data_object_at(a.wnd, &Location::dir(p("file1.txt")));
-                let (Some(data), Some(target)) = (data, a.list_drop.borrow().clone()) else { return };
+                let (Some(data), Some(target)) = (data, a.list_drop.borrow().clone()) else {
+                    return note("no data object or drop target".into());
+                };
                 let any = DROPEFFECT_COPY | DROPEFFECT_MOVE | DROPEFFECT_LINK;
                 unsafe {
                     let mut effect = any;
@@ -2496,7 +2575,9 @@ impl App {
                 let at = POINTL { x: r.left + 20, y: (r.top + r.bottom) / 2 }; // over the Name column's title
                 // From elsewhere: nothing here refuses it.
                 let data = data_object_at(a.wnd, &Location::dir(p("made\\file1.txt")));
-                let (Some(data), Some(target)) = (data, a.list_drop.borrow().clone()) else { return };
+                let (Some(data), Some(target)) = (data, a.list_drop.borrow().clone()) else {
+                    return note("no data object or drop target".into());
+                };
                 let first = a.list.item(0).map(|it| it.name.to_string_lossy().into_owned()).unwrap_or_default();
                 unsafe {
                     let mut effect = DROPEFFECT_COPY | DROPEFFECT_MOVE | DROPEFFECT_LINK;
@@ -2523,7 +2604,9 @@ impl App {
              shown (5.8)",
             |a| {
                 let data = data_object_at(a.wnd, &Location::dir(p("made\\file1.txt")));
-                let (Some(data), Some(target)) = (data, a.list_drop.borrow().clone()) else { return };
+                let (Some(data), Some(target)) = (data, a.list_drop.borrow().clone()) else {
+                    return note("no data object or drop target".into());
+                };
                 unsafe {
                     let mut effect = DROPEFFECT_COPY;
                     let _ = target.DragEnter(&data, MK_LBUTTON, a.row_point("vanished.lnk"), &mut effect);
@@ -2537,14 +2620,7 @@ impl App {
         );
         // Read again, not left to the watch: the shortcut's save sent a shell notice, and Windows may not report the
         // delete so soon after (heard_again).
-        s.add(
-            "(remove it)",
-            |a| {
-                let _ = std::fs::remove_file(p("vanished.lnk"));
-                a.refresh(ViewState::default());
-            },
-            |a| !a.listed("vanished.lnk") && a.idle(),
-        );
+        s.remove_listed("(remove it)", "vanished.lnk");
         s.add("(close the extra tab)", |a| a.close_tab(a.active() + 1), |a| a.idle() && a.tabs() == 1);
         s.add(
             "middle-click on a folder opens it in a new background tab",
@@ -3088,10 +3164,21 @@ impl App {
             "(remove it)",
             move |a| {
                 let name = dir().file_name().unwrap_or_default().to_string_lossy().into_owned();
-                let _ = std::fs::remove_file(p(&format!("Bookmarks\\{name}.lnk")));
-                a.tree.refresh_folder(a.tree.bookmarks());
+                if remove_file(&p(&format!("Bookmarks\\{name}.lnk"))) {
+                    a.tree.refresh_folder(a.tree.bookmarks());
+                }
             },
-            |a| a.bookmark_nodes() == "one,two,sub",
+            move |a| {
+                let name = dir().file_name().unwrap_or_default().to_string_lossy().into_owned();
+                let lnk = p(&format!("Bookmarks\\{name}.lnk"));
+                if exists(&lnk) {
+                    if remove_file(&lnk) {
+                        a.tree.refresh_folder(a.tree.bookmarks());
+                    }
+                    return false;
+                }
+                a.bookmark_nodes() == "one,two,sub"
+            },
         );
         // These two wait for Windows to pass on another program's change, which has taken it more than 5 s here after
         // this test's own floods of changes (10,000 folders): not a false alarm when the machine is busy. The note
@@ -3117,10 +3204,13 @@ impl App {
             "(and leaves the tree when deleted)",
             |a| {
                 NOTICES.set(a.bookmark_notices.get());
-                let _ = std::fs::remove_file(p("Bookmarks\\dropped.lnk"));
+                remove_file(&p("Bookmarks\\dropped.lnk"));
             },
             |a| {
                 notices_note(a);
+                if exists(&p("Bookmarks\\dropped.lnk")) && !remove_file(&p("Bookmarks\\dropped.lnk")) {
+                    return false;
+                }
                 a.bookmark_nodes() == "one,two,sub"
             },
         )
@@ -3386,8 +3476,13 @@ impl App {
             },
             |a| {
                 note(format!("{} reload(s)", a.loads_done.get() - COUNT.get()));
-                // 0.8 s of nothing (the watch's refresh comes at 400 ms).
-                step_ms() >= 800 && a.loads_done.get() == COUNT.get()
+                // The watch itself, as 0.8 s of nothing alone would pass a watch kept by mistake: Windows can take over
+                // a second to report the change.
+                let big = Location::dir(p("big"));
+                step_ms() >= 800
+                    && a.loads_done.get() == COUNT.get()
+                    && !a.refresh_queued.get()
+                    && a.watch.borrow().as_ref().is_some_and(|w| w.watches(&Location::ThisPc) && !w.watches(&big))
             },
         );
         s.add(

@@ -323,6 +323,27 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
                 return idle();
             });
     };
+    // A file just made can be open in another program for a moment (the shell reading a new shortcut, a virus
+    // scanner), and then deleting it fails: true once it is gone, else the error goes in the step's note.
+    auto removeFile = [this](const std::wstring& p) {
+        if (DeleteFileW(p.c_str())) return true;
+        DWORD error = GetLastError();
+        if (error == ERROR_FILE_NOT_FOUND || error == ERROR_PATH_NOT_FOUND) return true;
+        selfTest_->note = L"the delete failed at first (error " + std::to_wstring(error) + L")";
+        return false;
+    };
+    // A step that deletes a file of the test folder and reads the folder again once it is gone, trying again while
+    // the delete fails.
+    auto removeListed = [&](const wchar_t* name, std::wstring file) {
+        add(name, [=, this] { if (removeFile(path(file))) refresh(ViewState{}); },
+            [=, this] {
+                if (exists(path(file))) {
+                    if (removeFile(path(file))) refresh(ViewState{});
+                    return false;
+                }
+                return !listed(file) && idle();
+            });
+    };
     auto oneTabHome = [=, this] { return tabs_.size() == 1 && at(dir); };   // back to the test folder's own tab
     static double t0 = 0, keyMs = 0;   // keyMs: how long a key press kept the window busy
     static int rows = 0;               // list rows before a refresh that must wait
@@ -557,6 +578,7 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
         [=, this] {
             for (const Item& it : listFolder(path(L"sub"), true).items) selfTest_->subBefore.insert(it.name);
             if (testFileOnClipboard()) selfTestKey('V', true);
+            else selfTest_->note = L"the clipboard was not the test's: no paste";
         },
         [=, this] {
             // Only the test's file comes in. A cut made elsewhere just as the paste starts would bring someone's files
@@ -573,7 +595,10 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
         }, 10000);
     add(L"pasted file appears in the list by itself", nullptr, [=, this] { return idle() && listed(L"file1.txt"); });
     add(L"Paste shortcut makes a shortcut to the copied file",
-        [=, this] { if (testFileOnClipboard()) pasteInto(wnd_, list_.dir(), true); },
+        [=, this] {
+            if (testFileOnClipboard()) pasteInto(wnd_, list_.dir(), true);
+            else selfTest_->note = L"the clipboard was not the test's: no paste";
+        },
         [=, this] {
             bool folder = false;
             for (const Item& it : listFolder(path(L"sub"), false).items)
@@ -744,9 +769,16 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
     // The tab keeps its gone folder (4.3), which a command must not get as its working folder.
     add(L"(F5 while it is still gone keeps it shown as not available)", [=, this] { selfTestKey(VK_F5); },
         [=, this] { return at(path(L"gone")) && list_.count() == 0 && statusHas(L"not available"); });
+    auto commandsBefore = std::make_shared<UINT>(0);   // typed commands before a step's own: it must start one
     add(L"a command typed there still runs (the dead folder is not its working folder)",
-        [=, this] { goTo(L"rundll32"); },
-        [=, this] { return commandsDone_ == commands_ && at(path(L"gone")) && statusHas(L"not available"); });
+        [=, this] {
+            *commandsBefore = commands_;
+            goTo(L"rundll32");
+        },
+        [=, this] {
+            return commands_ == *commandsBefore + 1 && commandsDone_ == commands_ && at(path(L"gone")) &&
+                   statusHas(L"not available");
+        });
     add(L"F5 tries again once it is back", [=, this] { CreateDirectoryW(path(L"gone").c_str(), nullptr); selfTestKey(VK_F5); },
         [=, this] { return at(path(L"gone")) && list_.shows(path(L"gone")) && !statusHas(L"not available"); });
     add(L"(back up to the test folder)", [=, this] { SetFocus(list_.hwnd()); selfTestKey(VK_BACK); }, [=, this] { return at(dir); });
@@ -834,11 +866,14 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
             SendMessageW(tabBar_, WM_LBUTTONDBLCLK, MK_LBUTTON, MAKELPARAM(x, y));
             SendMessageW(tabBar_, WM_LBUTTONUP, 0, MAKELPARAM(x, y));
         },
-        [=, this] { return tabs_.size() == 1 && active_ == 0 && at(dir); });
+        [=, this] {   // after the posted "+" a wrong double-click would bring, not before it
+            return GetTickCount64() - selfTest_->startTick >= 200 && tabs_.size() == 1 && active_ == 0 && at(dir);
+        });
     add(L"a double-click on the empty bar right of the tabs opens one, as \"+\" does",
         [=, this] {
-            RECT r = tabRect(0);
-            int x = r.right + scale(20, dpi_), y = (r.top + r.bottom) / 2;   // right of the only tab
+            if (tabs_.size() != 1) selfTest_->note = std::to_wstring(tabs_.size()) + L" tabs before it";
+            RECT r = tabRect(TabCtrl_GetItemCount(tabBar_) - 1);
+            int x = r.right + scale(20, dpi_), y = (r.top + r.bottom) / 2;   // right of the last tab
             SendMessageW(tabBar_, WM_LBUTTONDBLCLK, MK_LBUTTON, MAKELPARAM(x, y));
             SendMessageW(tabBar_, WM_LBUTTONUP, 0, MAKELPARAM(x, y));
         },
@@ -1042,9 +1077,11 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
         [=, this] {
             writeFile(path(L"rundll32.exe"));   // not a program: run from here, it would fail
             setMessage(L"");
+            *commandsBefore = commands_;
             goTo(L"rundll32");
         },
         [=, this] {
+            if (commands_ != *commandsBefore + 1) return false;   // never started: no reply to wait for
             if (commandsDone_ != commands_) return false;   // looked up on a worker: the decoy stays until its reply
             DeleteFileW(path(L"rundll32.exe").c_str());
             selfTest_->note = L"status: " + statusMessage();
@@ -1332,17 +1369,30 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
         L"where the shortcut says it is, relative to itself (5.6)",
         [=, this] {
             // The folder under a drive letter of its own, as on a flash drive: the shortcut is made through the letter,
-            // and then the letter goes, as it does when the drive comes back as another one.
+            // and then the letter goes, as it does when the drive comes back as another one. Only a free letter, and
+            // the shortcut opened only once it is there: Windows would ask what to do about a missing one.
             DWORD used = GetLogicalDrives();
             wchar_t letter = L'Z';
-            while (letter > L'C' && (used & (1u << (letter - L'A')))) --letter;
+            while (letter >= L'D' && (used & (1u << (letter - L'A')))) --letter;
+            if (letter < L'D') {
+                selfTest_->note = L"no drive letter free";
+                return;
+            }
             std::wstring drive = std::wstring(1, letter) + L":";
             CreateDirectoryW(path(L"pack").c_str(), nullptr);
             CreateDirectoryW(path(L"pack\\target").c_str(), nullptr);
-            DefineDosDeviceW(DDD_NO_BROADCAST_SYSTEM, drive.c_str(), path(L"pack").c_str());
+            if (!DefineDosDeviceW(DDD_NO_BROADCAST_SYSTEM, drive.c_str(), path(L"pack").c_str())) {
+                selfTest_->note = L"can't make " + drive;
+                return;
+            }
             makeShortcut(drive + L"\\go.lnk", drive + L"\\target");   // both through the letter: Windows stores the way between them
-            DefineDosDeviceW(DDD_REMOVE_DEFINITION | DDD_EXACT_MATCH_ON_REMOVE | DDD_NO_BROADCAST_SYSTEM, drive.c_str(),
-                             path(L"pack").c_str());
+            if (!DefineDosDeviceW(DDD_REMOVE_DEFINITION | DDD_EXACT_MATCH_ON_REMOVE | DDD_NO_BROADCAST_SYSTEM,
+                                  drive.c_str(), path(L"pack").c_str()))
+                selfTest_->note = L"can't remove " + drive;
+            if (!exists(path(L"pack\\go.lnk"))) {
+                selfTest_->note = L"no shortcut made";
+                return;
+            }
             openShortcut(path(L"pack\\go.lnk"), false);
         },
         [=, this] { return at(path(L"pack\\target")); });
@@ -1421,8 +1471,12 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
     add(L"(a folder of 300 shortcuts, each with its own icon)",
         [=, this] {
             CreateDirectoryW(path(L"links").c_str(), nullptr);
-            for (int i = 0; i < 300; ++i)
-                makeShortcut(path(L"links\\link " + std::to_wstring(i) + L".lnk"), path(L"sub"));
+            // One saved, the rest copies of it: each save sends a shell notice, and a stream of them makes Windows
+            // report no other change, to any program, for a while (heardAgain).
+            std::wstring first = path(L"links\\link 0.lnk");
+            makeShortcut(first, path(L"sub"));
+            for (int i = 1; i < 300; ++i)
+                CopyFileW(first.c_str(), path(L"links\\link " + std::to_wstring(i) + L".lnk").c_str(), TRUE);
             open(path(L"links"), Nav::New);
         },
         [=, this] { return at(path(L"links")) && list_.count() == 300; }, 20000);
@@ -1671,12 +1725,7 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
         [=, this] { return selfTest_->note == L"taken, not lit"; });
     // Read again, not left to the watch: the shortcut's save sent a shell notice, and Windows may not report the
     // delete so soon after (heardAgain).
-    add(L"(remove it)",
-        [=, this] {
-            DeleteFileW(path(L"vanished.lnk").c_str());
-            refresh(ViewState{});
-        },
-        [=, this] { return !listed(L"vanished.lnk") && idle(); });
+    removeListed(L"(remove it)", L"vanished.lnk");
     add(L"(close the extra tab)", [=, this] { closeTab(active_ + 1); }, [=, this] { return idle() && tabs_.size() == 1; });
     add(L"middle-click on a folder opens it in a new background tab",
         [=, this] {
@@ -2103,10 +2152,16 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
         });
     add(L"(remove it)",
         [=, this] {
-            DeleteFileW(path(L"Bookmarks\\" + leafName(dir) + L".lnk").c_str());
-            tree_.refreshFolder(tree_.bookmarks());
+            if (removeFile(path(L"Bookmarks\\" + leafName(dir) + L".lnk"))) tree_.refreshFolder(tree_.bookmarks());
         },
-        [=, this] { return bookmarkNodes() == L"one,two,sub"; });
+        [=, this] {
+            std::wstring lnk = path(L"Bookmarks\\" + leafName(dir) + L".lnk");
+            if (exists(lnk)) {
+                if (removeFile(lnk)) tree_.refreshFolder(tree_.bookmarks());
+                return false;
+            }
+            return bookmarkNodes() == L"one,two,sub";
+        });
     // These two wait for Windows to pass on another program's change, which has taken it more than 5 s here after this
     // test's own floods of changes (10,000 folders): not a false alarm when the machine is busy. The note tells a
     // notice Windows never sent from a read of Bookmarks still out, or one the tree didn't show.
@@ -2129,10 +2184,11 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
     add(L"(and leaves the tree when deleted)",
         [=, this] {
             *noticesBefore = bookmarkNotices_;
-            DeleteFileW(path(L"Bookmarks\\dropped.lnk").c_str());
+            removeFile(path(L"Bookmarks\\dropped.lnk"));
         },
         [=, this] {
             noticesNote();
+            if (exists(path(L"Bookmarks\\dropped.lnk")) && !removeFile(path(L"Bookmarks\\dropped.lnk"))) return false;
             return bookmarkNodes() == L"one,two,sub";
         },
         20000);
@@ -2344,8 +2400,10 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
         [=, this] { *unwatched = loadsDone_; writeFile(path(L"big\\zz unwatched.dat")); },
         [=, this] {
             selfTest_->note = std::to_wstring(loadsDone_ - *unwatched) + L" reload(s)";
-            // 0.8 s of nothing (the watch's refresh comes at 400 ms).
-            return GetTickCount64() - selfTest_->startTick >= 800 && loadsDone_ == *unwatched;
+            // The watch itself, as 0.8 s of nothing alone would pass a watch kept by mistake: Windows can take over a
+            // second to report the change.
+            return GetTickCount64() - selfTest_->startTick >= 800 && loadsDone_ == *unwatched && !refreshQueued_ &&
+                   watch_.watches(L"") && !watch_.watches(path(L"big"));
         });
     add(L"(remove that file and close the tab)",
         [=, this] { DeleteFileW(path(L"big\\zz unwatched.dat").c_str()); closeTab(1); },
