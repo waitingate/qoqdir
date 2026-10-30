@@ -240,6 +240,11 @@ impl FolderTree {
         }
     }
 
+    /// The folder is in the tree (shown, or read to be).
+    pub fn has_node(&self, dir: &Location) -> bool {
+        self.paths.borrow().values().any(|(l, _)| l.same(dir))
+    }
+
     fn reread(&self, node: isize) {
         // A read already out may have listed the folder before the change this is for: one more follows it.
         if self.reading.borrow().contains_key(&node) {

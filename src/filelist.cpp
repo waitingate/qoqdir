@@ -216,7 +216,8 @@ int FileList::select(const std::vector<std::wstring>& names, const std::wstring&
         std::vector<int> rows;
         for (int row = 0; row < count(); ++row) {
             const std::wstring& name = at(row).name;
-            if (exact.count(name) || loose.count(toLower(name))) rows.push_back(row);
+            // Most selections have no name to match loosely, and lowering every name costs a copy each.
+            if (exact.count(name) || (!loose.empty() && loose.count(toLower(name)))) rows.push_back(row);
             if (found < 0 && at(row).name == focus) found = row;          // exact focus first
         }
         if (found < 0 && !focus.empty())                                  // then case-insensitive

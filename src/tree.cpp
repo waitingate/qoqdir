@@ -125,6 +125,10 @@ void FolderTree::refreshFolder(const std::wstring& dir) {
         if (samePath(info.path, dir)) reread(node);
 }
 
+bool FolderTree::hasNode(const std::wstring& dir) const {
+    return std::any_of(paths_.begin(), paths_.end(), [&](const auto& p) { return samePath(p.second.path, dir); });
+}
+
 void FolderTree::reread(HTREEITEM n) {
     // A read already out may have listed the folder before the change this is for: one more follows it.
     if (reading_.count(n)) {

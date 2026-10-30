@@ -33,6 +33,7 @@ public:
     void refreshDrives();   // reads This PC's drives again; the rest of the tree stays as it is
     void refresh();         // F5: reads again the folders whose subfolders are shown or known to be none (5.5)
     void refreshFolder(const std::wstring& dir);   // the same for that folder's nodes alone
+    bool hasNode(const std::wstring& dir) const;   // the folder is in the tree (shown, or read to be)
     void addChildren(TreeBatch& batch);   // takes its children
     // More of a big folder's subfolders, as many as about 30 ms allows; the timer brings the rest (showChildren).
     void fillMore();

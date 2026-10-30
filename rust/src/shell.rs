@@ -1145,6 +1145,7 @@ struct DropTarget {
     target: DropTargetFn,
     data: RefCell<Option<IDataObject>>,
     dragged: RefCell<Rc<[Location]>>,     // the paths of the files it carries (dragged_paths)
+    asked: RefCell<Option<Location>>,     // the folder target gave last, before drop_back (aim)
     dir: RefCell<Option<Location>>,       // the folder the drop currently goes to
     folder: RefCell<Option<IDropTarget>>, // and its shell drop target
     helper: Option<IDropTargetHelper>,
@@ -1158,6 +1159,7 @@ pub fn new_drop_target(owner: HWND, target: DropTargetFn) -> IDropTarget {
         target,
         data: RefCell::new(None),
         dragged: RefCell::new(Rc::from([])),
+        asked: RefCell::new(None),
         dir: RefCell::new(None),
         folder: RefCell::new(None),
         helper,
@@ -1170,15 +1172,22 @@ impl DropTarget {
     /// Aims the drop at the folder under the cursor; true if it changed (that folder has been told already).
     fn aim(&self, keys: MODIFIERKEYS_FLAGS, pt: &POINTL, effect: *mut DROPEFFECT) -> bool {
         let dragged = self.dragged.borrow().clone();
-        let dir = (self.target)(Some(POINT { x: pt.x, y: pt.y }), &dragged)
-            .filter(|d| drop_back(d, &dragged).is_none()); // never back where the files are, whoever asks (4.8)
+        let asked = (self.target)(Some(POINT { x: pt.x, y: pt.y }), &dragged);
         // Compared exactly, as the C++ version does: a folder can hold both "a" and "A".
-        let unchanged = match (&dir, &*self.dir.borrow()) {
+        let same = |a: &Option<Location>, b: &Option<Location>| match (a, b) {
             (Some(a), Some(b)) => a.path().map(Path::as_os_str) == b.path().map(Path::as_os_str),
             (None, None) => true,
             _ => false,
         };
-        if unchanged {
+        // The same folder as at the last move changes nothing, and drop_back walks all the paths dragged: with
+        // 10,000, once for every move of the mouse was too slow.
+        if same(&asked, &self.asked.borrow()) {
+            return false;
+        }
+        self.asked.replace(asked.clone());
+        // Never back where the files are, whoever asks (4.8).
+        let dir = asked.filter(|d| drop_back(d, &dragged).is_none());
+        if same(&dir, &self.dir.borrow()) {
             return false;
         }
         let old = self.folder.borrow_mut().take();
@@ -1208,6 +1217,7 @@ impl DropTarget {
                 let _ = folder.DragLeave();
             }
         }
+        *self.asked.borrow_mut() = None;
         *self.dir.borrow_mut() = None;
         self.clear_tip();
         *self.data.borrow_mut() = None;

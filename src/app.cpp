@@ -277,9 +277,18 @@ bool App::create(HINSTANCE instance, const CommandLine& cmd, bool useSettings) {
     // Dropping on a tab puts the files in that tab's folder.
     tabDrop_ = newDropTarget(wnd_, [this](const POINT* pt, const auto&) { return tabDropTarget(pt); });
     // And on a folder in the tree, in that folder. A node that refuses says why in the status bar (5.5).
-    treeDrop_ = newDropTarget(wnd_, [this](const POINT* pt, const auto& dragged) -> std::optional<std::wstring> {
+    // dropBack walks all the paths dragged: worked out once for each node, not at every move of the mouse.
+    treeDrop_ = newDropTarget(wnd_, [this, seen = std::optional<std::wstring>(), back = std::optional<DropBack>()](
+                                        const POINT* pt, const auto& dragged) mutable -> std::optional<std::wstring> {
         std::optional<std::wstring> dir = tree_.dropTarget(pt);
-        std::optional<DropBack> back = dir ? dropBack(*dir, dragged) : std::nullopt;
+        if (!pt) {   // the drag is over: the next one carries other paths
+            seen.reset();
+            back.reset();
+        }
+        if (dir != seen) {
+            seen = dir;
+            back = dir ? dropBack(*dir, dragged) : std::nullopt;
+        }
         std::wstring over;
         if ((!dir || back) && pt && tree_.pathAt(*pt, &over))
             setMessage(back == DropBack::source ? L"The files come from there"
@@ -1115,9 +1124,11 @@ void App::onLoaded(Listing&& listing, UINT generation) {
     }
     FILETIME written = listing.written;
     // The tree follows the folder shown: its node is read again when the subfolders or shortcuts changed (5.5).
-    std::vector<std::wstring> treeNames = reload ? list_.treeNames() : std::vector<std::wstring>{};
+    // Most folders have no node there, and then their names need no comparing.
+    bool inTree = reload && tree_.hasNode(t.path);
+    std::vector<std::wstring> treeNames = inTree ? list_.treeNames() : std::vector<std::wstring>{};
     list_.setListing(std::move(listing));
-    if (reload && treeNames != list_.treeNames()) tree_.refreshFolder(t.path);
+    if (inTree && treeNames != list_.treeNames()) tree_.refreshFolder(t.path);
     int row = list_.select(view.select, view.focus);
     if (row < 0 && !requested && view.focusRow >= 0 && list_.count() > 0)   // the focused item is gone (4.5):
         row = list_.focusRow(std::min(view.focusRow, list_.count() - 1));   // the item in its place takes the focus

@@ -857,6 +857,10 @@ private:
     bool aim(DWORD keys, POINTL pt, DWORD* effect) {
         POINT p{pt.x, pt.y};
         std::optional<std::wstring> dir = target_(&p, dragged_);
+        // The same folder as at the last move changes nothing, and dropBack walks all the paths dragged: with
+        // 10,000, once for every move of the mouse was too slow.
+        if (dir == asked_) return false;
+        asked_ = dir;
         if (dir && dropBack(*dir, dragged_)) dir.reset();   // never back where the files are, whoever asks (4.8)
         if (dir == dir_) return false;
         if (folder_) folder_->DragLeave();
@@ -872,6 +876,7 @@ private:
         target_(nullptr, {});
         if (folder_) folder_->DragLeave();
         folder_.reset();
+        asked_.reset();
         dir_.reset();
         clearTip();
         data_.reset();
@@ -908,6 +913,7 @@ private:
     DropTargetFn target_;
     Com<IDataObject> data_;
     std::vector<std::wstring> dragged_;   // the paths of the files it carries (draggedPaths)
+    std::optional<std::wstring> asked_;   // the folder target_ gave last, before dropBack (aim)
     std::optional<std::wstring> dir_;     // the folder the drop currently goes to
     Com<IDropTarget> folder_;             // and its shell drop target
     Com<IDropTargetHelper> helper_;

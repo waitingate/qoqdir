@@ -713,13 +713,24 @@ impl App {
             let weak: Weak<App> = Rc::downgrade(&app);
             let tab_drop = new_drop_target(wnd, Box::new(move |pt, _: &[Location]| weak.upgrade()?.tab_drop_target(pt)));
             // And on a folder in the tree, in that folder. A node that refuses says why in the status bar (5.5).
+            // drop_back walks all the paths dragged: worked out once for each node, not at every move of the mouse.
             let weak: Weak<App> = Rc::downgrade(&app);
+            let seen: RefCell<Option<(Location, Option<DropBack>)>> = RefCell::new(None);
             let tree_drop = new_drop_target(
                 wnd,
                 Box::new(move |pt, dragged: &[Location]| {
                     let app = weak.upgrade()?;
                     let dir = app.tree.drop_target(pt);
-                    let back = dir.as_ref().and_then(|d| drop_back(d, dragged));
+                    if pt.is_none() {
+                        seen.replace(None); // the drag is over: the next one carries other paths
+                    }
+                    let back = dir.as_ref().and_then(|d| {
+                        let mut seen = seen.borrow_mut();
+                        if !seen.as_ref().is_some_and(|(at, _)| at.same(d)) {
+                            *seen = Some((d.clone(), drop_back(d, dragged)));
+                        }
+                        seen.as_ref().and_then(|&(_, back)| back)
+                    });
                     if (dir.is_none() || back.is_some()) && pt.is_some_and(|pt| app.tree.location_at(pt).is_some()) {
                         app.set_message(match back {
                             Some(DropBack::Source) => "The files come from there",
@@ -1989,9 +2000,11 @@ impl App {
             }
         }
         // The tree follows the folder shown: its node is read again when the subfolders or shortcuts changed (5.5).
-        let tree_names = if reload { self.list.tree_names() } else { Vec::new() };
+        // Most folders have no node there, and then their names need no comparing.
+        let in_tree = reload && self.tree.has_node(&location);
+        let tree_names = if in_tree { self.list.tree_names() } else { Vec::new() };
         self.list.set_listing(listing);
-        if reload && tree_names != self.list.tree_names() {
+        if in_tree && tree_names != self.list.tree_names() {
             self.tree.refresh_folder(&location);
         }
         let mut row = self.list.select(&view.select, view.focus.as_deref());

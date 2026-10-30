@@ -437,7 +437,8 @@ impl FileList {
             let mut focus_row = None;
             for (row, &i) in m.view.iter().enumerate() {
                 let name = &m.items[i].name;
-                if exact.contains(name.as_os_str()) || loose.contains(&to_lower(name)) {
+                // Most selections have no name to match loosely, and lowering every name costs a copy each.
+                if exact.contains(name.as_os_str()) || (!loose.is_empty() && loose.contains(&to_lower(name))) {
                     rows.push(row);
                 }
                 if focus_row.is_none() && focus == Some(name.as_os_str()) {
