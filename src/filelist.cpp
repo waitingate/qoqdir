@@ -338,7 +338,7 @@ bool FileList::onNotify(NMHDR* nm, LRESULT* result) {
             switch (lvi.iSubItem) {
             case 0: text = it.shown(); break;
             case 1: text = formatTime(it.modified); break;
-            case 2: text = typeName(it); break;
+            case 2: text = it.typeText(); break;
             case 3: if (!it.isDir()) text = formatSize(it.size); break;
             }
             lstrcpynW(lvi.pszText, text.c_str(), lvi.cchTextMax);

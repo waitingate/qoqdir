@@ -38,8 +38,8 @@ use windows::core::w;
 
 use crate::folder::{Item, Listing, Location, SortKey, drop_back, equal_no_case, is_shortcut, matches_filter, sort_items, to_lower, format_size, format_time};
 use crate::shell::{
-    IconBatch, has_own_icon, in_background, local_folder, post, read_own_icons, set_theme, system_image_list, type_icon,
-    type_name,
+    IconBatch, has_own_icon, in_background, local_folder, post, read_own_icons, set_theme, shared_type_name,
+    system_image_list, type_icon,
 };
 use crate::util::{copy_to, focus, send, wide};
 
@@ -179,7 +179,7 @@ impl FileList {
             for it in &mut m.items {
                 // Cached per extension, so this is quick; lets Type sort by what is shown.
                 if it.type_text.is_none() {
-                    it.type_text = Some(type_name(it));
+                    it.type_text = Some(shared_type_name(it));
                 }
             }
             sort_items(&mut m.items, m.key, m.ascending);
@@ -632,7 +632,7 @@ impl FileList {
                     let text: OsString = match lvi.iSubItem {
                         0 => it.shown().to_os_string(),
                         1 => format_time(it.modified),
-                        2 => type_name(it).to_os_string(),
+                        2 => it.type_shown().to_os_string(),
                         3 if !it.is_dir() => format_size(it.size),
                         _ => OsString::new(),
                     };

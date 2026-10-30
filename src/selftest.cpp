@@ -1660,7 +1660,8 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
             bool ordered = true;
             for (int row = 0; row + 1 < list_.count(); ++row) {
                 const Item &a = list_.at(row), &b = list_.at(row + 1);
-                if (a.isDir() == b.isDir() && StrCmpLogicalW(typeName(a).c_str(), typeName(b).c_str()) > 0) ordered = false;
+                if (a.isDir() == b.isDir() && StrCmpLogicalW(a.typeText().c_str(), b.typeText().c_str()) > 0)
+                    ordered = false;
             }
             list_.setSort(SortKey::Name, true);
             return ordered;

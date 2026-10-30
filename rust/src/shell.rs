@@ -310,8 +310,9 @@ pub fn folder_icon() -> i32 {
     type_info(&Item { attrs: FILE_ATTRIBUTE_DIRECTORY.0, ..Default::default() }).0
 }
 
-pub fn type_name(it: &Item) -> Arc<OsStr> {
-    it.type_text.clone().unwrap_or_else(|| type_info(it).1)
+/// The type name for an item the loader left without one, to keep in Item::type_text; UI thread only (cached).
+pub fn shared_type_name(it: &Item) -> Arc<OsStr> {
+    type_info(it).1
 }
 
 pub fn known_folder(id: &GUID) -> Option<PathBuf> {

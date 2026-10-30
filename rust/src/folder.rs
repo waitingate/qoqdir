@@ -388,6 +388,10 @@ impl Item {
     pub fn shown(&self) -> &OsStr {
         self.label.as_deref().unwrap_or(&self.name)
     }
+    /// The type name to show: "" while unknown too.
+    pub fn type_shown(&self) -> &OsStr {
+        self.type_text.as_deref().unwrap_or_default()
+    }
 }
 
 #[derive(Default)]
@@ -578,7 +582,7 @@ pub fn sort_items(items: &mut Vec<Item>, key: SortKey, ascending: bool) {
         items
             .iter()
             .map(|it| {
-                let t = it.type_text.as_deref().unwrap_or_default();
+                let t = it.type_shown();
                 *seen.entry(t).or_insert_with(|| {
                     type_keys.push(sort_key(t));
                     type_keys.len() - 1

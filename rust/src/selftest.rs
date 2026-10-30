@@ -83,7 +83,7 @@ use crate::folder::{
 };
 use crate::shell::{
     Terminal, can_paste, command_program, copy_to_clipboard, data_object_at, file_info, in_background, item_menu_at,
-    known_folder, paste_into, pidl_from, save_folder_shortcuts, shortcut_target, terminal_program, type_name,
+    known_folder, paste_into, pidl_from, save_folder_shortcuts, shortcut_target, terminal_program,
 };
 use windows::core::{Interface, PCSTR, w};
 
@@ -2524,7 +2524,7 @@ impl App {
                 a.list.set_sort(SortKey::Type, true);
                 let items: Vec<_> = (0..a.list.count()).filter_map(|r| a.list.item(r)).collect();
                 let ordered = items.windows(2).all(|w| {
-                    let (x, y) = (wide(type_name(&w[0])), wide(type_name(&w[1])));
+                    let (x, y) = (wide(w[0].type_shown()), wide(w[1].type_shown()));
                     w[0].is_dir() != w[1].is_dir() || unsafe { StrCmpLogicalW(pcwstr(&x), pcwstr(&y)) } <= 0
                 });
                 a.list.set_sort(SortKey::Name, true);

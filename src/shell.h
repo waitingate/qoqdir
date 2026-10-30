@@ -29,8 +29,8 @@ int folderIcon();
 // asked once per extension. Worker thread: a file type's icon handler (a DLL some program installed) can hang, and
 // asked here it hangs the load, not the window.
 void fillTypes(std::vector<Item>& items);
-const std::wstring& typeName(const Item& it);          // UI thread only (cached)
-std::shared_ptr<const std::wstring> sharedTypeName(const Item& it);   // the same, to keep in Item::type
+// The type name for an item the loader left without one, to keep in Item::type; UI thread only (cached).
+std::shared_ptr<const std::wstring> sharedTypeName(const Item& it);
 std::wstring knownFolder(REFKNOWNFOLDERID id);
 
 // ---------------------------------------------------------------- menus

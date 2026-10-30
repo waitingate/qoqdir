@@ -242,9 +242,7 @@ int folderIcon() {
     return typeInfo(dir).icon;
 }
 
-std::shared_ptr<const std::wstring> sharedTypeName(const Item& it) { return it.type ? it.type : typeInfo(it).type; }
-
-const std::wstring& typeName(const Item& it) { return it.type ? *it.type : *typeInfo(it).type; }
+std::shared_ptr<const std::wstring> sharedTypeName(const Item& it) { return typeInfo(it).type; }
 
 std::wstring knownFolder(REFKNOWNFOLDERID id) {
     PWSTR p = nullptr;
