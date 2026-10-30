@@ -1070,9 +1070,11 @@ void App::open(const std::wstring& path, Nav nav, ViewState view, Origin origin)
         showLocation();
         showStatus();
     }
-    inBackground([wnd = wnd_, generation, path, key = list_.sortKey(), ascending = list_.sortAscending()] {
+    bool tabsOwn = nav == Nav::Refresh || nav == Nav::Switch;   // the tab's own folder, not one it moves to
+    inBackground([wnd = wnd_, generation, path, tabsOwn, key = list_.sortKey(), ascending = list_.sortAscending()] {
         auto replaced = [generation] { return g_newestLoad != generation && g_keptLoad != generation; };
-        auto result = std::make_unique<Listing>(listFolder(path, true, replaced));
+        auto result = std::make_unique<Listing>(tabsOwn ? listTabFolder(path, true, replaced)
+                                                        : listFolder(path, true, replaced));
         if (!replaced()) {   // off the window's thread: the shell's type names and icons, and a big folder's sort
             fillTypes(result->items);
             sortItems(result->items, key, ascending);
@@ -1142,6 +1144,12 @@ void App::onLoaded(Listing&& listing, UINT generation) {
     if (t.forward.size() > kMaxHistory) t.forward.erase(t.forward.begin());
 
     ViewState view = std::move(p.view);
+    if (!listing.file.empty()) {   // the tab's own folder turned out to be a file (5.10)
+        view = ViewState::selecting(listing.file);
+        // Another folder than the one a refresh began in, so it starts unfiltered (5.4). A tab switch cleared the
+        // filter as it began, and what was typed since stays.
+        if (p.nav == Nav::Refresh) SetWindowTextW(filter_, L"");
+    }
     // An item a rename, delete or new folder asked for (a tab switch restores the scroll exactly instead).
     bool requested = p.nav == Nav::Refresh && view.asks();
     bool moved = p.nav == Nav::New || p.nav == Nav::Back || p.nav == Nav::Forward;
@@ -1219,15 +1227,6 @@ void App::showLocation(bool sameFolder) {
 // The folder could not be read: decide what to show or do instead.
 void App::onLoadFailed(const Listing& listing, const Pending& p) {
     if (p.nav == Nav::Refresh || p.nav == Nav::Switch) {
-        // A tab made on a file (qoqdir C:\src\main.cpp) shows the file's folder with the file selected, as explorer
-        // /select does (5.10). The switch's read gives the tab that folder, with no history entry for the file. Not
-        // while a move that took over from that read is still out (kept_, 4.2): a new switch would replace the move,
-        // which decides where the tab goes.
-        if (listing.isFile && samePath(tab().path, listing.path) && !parentPath(listing.path).empty() &&
-            !pending_.generation) {
-            open(parentPath(listing.path), Nav::Switch, ViewState::selecting(leafName(listing.path)));
-            return;
-        }
         showUnavailable(listing.path, listing.error);
         return;
     }

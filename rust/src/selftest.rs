@@ -15,7 +15,7 @@ use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
 
 use windows::Win32::Foundation::{
-    COLORREF, ERROR_BAD_NETPATH, ERROR_DIRECTORY, GlobalFree, HGLOBAL, HWND, LPARAM, POINT, POINTL, RECT, WPARAM,
+    COLORREF, ERROR_BAD_NETPATH, GlobalFree, HGLOBAL, HWND, LPARAM, POINT, POINTL, RECT, WPARAM,
 };
 use windows::Win32::Graphics::Gdi::{
     COLOR_WINDOW, ClientToScreen, GetMonitorInfoW, GetSysColor, GetSysColorBrush, MONITOR_DEFAULTTONEAREST, MONITORINFO,
@@ -79,7 +79,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
 use crate::app::{App, Key, MenuItems, Nav, TIMER_LOADING, TIMER_REFRESH, ViewState, WM_APP_LOADED};
 use crate::folder::{
     Item, Listing, Location, SortKey, command_line_words, exists, folder_written, is_directory, is_shortcut,
-    list_folder, parse_command_line, sort_items, system_dir,
+    list_folder, list_tab_folder, parse_command_line, sort_items, system_dir,
 };
 use crate::shell::{
     Terminal, can_paste, command_program, copy_to_clipboard, data_object_at, file_info, in_background, item_menu_at,
@@ -2731,6 +2731,43 @@ impl App {
             },
         );
         s.add("(close it)", |a| a.close_tab(a.active()), one_tab_home);
+        // In a folder of its own: late notices of the test folder's earlier changes read that one again.
+        s.add(
+            "a tab made on a file takes one read: the one that finds the file reads its folder too (5.10)",
+            |a| {
+                write_file(&p("sub\\one read.txt"));
+                COUNT.set(a.generation.get());
+                a.new_tab(Location::dir(p("sub\\one read.txt")), true);
+            },
+            |a| {
+                note(format!("{} read(s)", a.generation.get() - COUNT.get()));
+                a.tabs() == 2 && a.at(&p("sub")) && a.generation.get() == COUNT.get() + 1
+            },
+        );
+        s.add(
+            "(close that one, and remove the file)",
+            |a| {
+                a.close_tab(a.active());
+                let _ = std::fs::remove_file(p("sub\\one read.txt"));
+            },
+            one_tab_home,
+        );
+        s.add(
+            "a tab made on a file whose read a failed move overtakes still shows the file's folder (4.2)",
+            |a| {
+                a.new_tab(Location::dir(p("file1.txt")), true);
+                a.open(Location::dir(p("no such folder")), Nav::New, ViewState::default());
+            },
+            move |a| {
+                a.tabs() == 2
+                    && a.idle()
+                    && a.list.shows(&Location::dir(dir()))
+                    && !a.unavailable()
+                    && a.list.selected_names() == [OsString::from("file1.txt")]
+                    && a.status_message().contains("no such folder")
+            },
+        );
+        s.add("(close that one too)", |a| a.close_tab(a.active()), one_tab_home);
         s.add(
             "a drag over a tab whose folder was never shown is refused at once (nobody has checked that folder)",
             |a| {
@@ -4230,13 +4267,13 @@ impl App {
         s.first_tab();
         s.add(
             "a tab made on a file goes where a move that overtook its read goes, not to the file's folder (4.2)",
-            |a| {
+            move |a| {
                 a.st.borrow_mut().tabs[1].location = Location::dir(p("file1.txt")); // as qoqdir with a file makes it
                 overtake(a, "big");
                 let found = Listing {
-                    location: Location::dir(p("file1.txt")),
-                    error: Some(ERROR_DIRECTORY.to_hresult().into()), // what reading a file as a folder answers
-                    is_file: true,
+                    location: Location::dir(dir()), // what its read brings back: the file's folder
+                    written: folder_written(&dir()),
+                    file: Some("file1.txt".into()),
                     ..Default::default()
                 };
                 a.on_loaded(found, STUCK_READ); // the move is still out
@@ -4253,6 +4290,29 @@ impl App {
                 a.open(Location::dir(p("missing six")), Nav::New, ViewState::default());
             },
             |a| a.idle() && !a.refresh_queued.get() && a.generation.get() == COUNT.get() + 3,
+        );
+        // Another program can replace the tab's folder with a file. The folder that file is in is another folder, so it
+        // starts unfiltered (5.4). Stood in for by what the read would bring back: a folder that is shown can't be
+        // removed and made again at once while its watch holds it.
+        s.add(
+            "(on to sub)",
+            |a| a.open(Location::dir(p("sub")), Nav::New, ViewState::default()),
+            |a| a.at(&p("sub")),
+        );
+        s.add(
+            "a refresh that finds a file in its folder's place shows the folder that file is in, unfiltered (5.10)",
+            |a| {
+                set_text(a.filter, "nothing like it");
+                a.refresh(ViewState::default());
+                if let Some(pending) = a.st.borrow_mut().pending.as_mut() {
+                    pending.generation = STUCK_READ; // the real read comes back as one replaced, and is dropped
+                }
+                a.on_loaded(list_tab_folder(&Location::dir(p("file1.txt")), true, None), STUCK_READ);
+            },
+            move |a| {
+                note(format!("filter {:?}", text_of(a.filter)));
+                a.at(&dir()) && text_of(a.filter).is_empty() && a.list.selected_names() == [OsString::from("file1.txt")]
+            },
         );
         s.add(
             "(back into big)",

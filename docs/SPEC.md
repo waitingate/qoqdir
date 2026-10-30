@@ -797,7 +797,9 @@ result:
     bookmark in the tree. With This PC copied (an item with no file path, as a
     zip's or a phone's items are), empty space offers Paste. A tab made on a
     file, as `qoqdir <file>` makes one, shows the file's folder with the file
-    selected.
+    selected, in one read. One whose read a failed move overtakes still shows
+    that folder. A refresh that finds a file in its folder's place shows the
+    folder that file is in, with the file selected and no filter.
 29. Dropping a file (a drag simulated inside the process) on a second tab copies
     it into that tab's folder. While the file is over that tab, it shows as the
     current one; afterwards the real current tab does again. With Ctrl held, a

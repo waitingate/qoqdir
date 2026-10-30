@@ -1816,6 +1816,34 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
                    windowText(address_) == locationText(dir) && windowText(wnd_) == displayName(dir);
         });
     add(L"(close it)", [=, this] { closeTab(active_); }, oneTabHome);
+    // In a folder of its own: late notices of the test folder's earlier changes read that one again.
+    auto fileReads = std::make_shared<UINT>(0);
+    add(L"a tab made on a file takes one read: the one that finds the file reads its folder too (5.10)",
+        [=, this] {
+            writeFile(path(L"sub\\one read.txt"));
+            *fileReads = generation_;
+            newTab(path(L"sub\\one read.txt"), true);
+        },
+        [=, this] {
+            selfTest_->note = std::to_wstring(generation_ - *fileReads) + L" read(s)";
+            return tabs_.size() == 2 && at(path(L"sub")) && generation_ == *fileReads + 1;
+        });
+    add(L"(close that one, and remove the file)",
+        [=, this] {
+            closeTab(active_);
+            DeleteFileW(path(L"sub\\one read.txt").c_str());
+        },
+        oneTabHome);
+    add(L"a tab made on a file whose read a failed move overtakes still shows the file's folder (4.2)",
+        [=, this] {
+            newTab(path(L"file1.txt"), true);
+            open(path(L"no such folder"), Nav::New);
+        },
+        [=, this] {
+            return tabs_.size() == 2 && idle() && list_.shows(dir) && !tab().unavailable &&
+                   list_.selectedNames() == std::vector<std::wstring>{L"file1.txt"} && statusHas(L"no such folder");
+        });
+    add(L"(close that one too)", [=, this] { closeTab(active_); }, oneTabHome);
     add(L"a drag over a tab whose folder was never shown is refused at once (nobody has checked that folder)",
         [=, this] {
             newTab(path(L"made"), false);   // a second tab, right of the current one, as from --tab= or a middle-click
@@ -2938,9 +2966,9 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
             tabs_[1].path = path(L"file1.txt");   // as qoqdir with a file makes it
             overtake(L"big");
             Listing found;
-            found.path = path(L"file1.txt");
-            found.error = ERROR_DIRECTORY;   // what reading a file as a folder answers
-            found.isFile = true;
+            found.path = dir;   // what its read brings back: the file's folder
+            found.written = folderWritten(dir);
+            found.file = L"file1.txt";
             onLoaded(std::move(found), kStuckRead);   // the move is still out
         },
         [=, this] { return at(path(L"big")) && active_ == 1; });
@@ -2953,6 +2981,22 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
             open(path(L"missing six"), Nav::New);
         },
         [=, this] { return idle() && !refreshQueued_ && generation_ == *reads + 3; });
+    // Another program can replace the tab's folder with a file. The folder that file is in is another folder, so it
+    // starts unfiltered (5.4). Stood in for by what the read would bring back: a folder that is shown can't be removed
+    // and made again at once while its watch holds it.
+    add(L"(on to sub)", [=, this] { open(path(L"sub"), Nav::New); }, [=, this] { return at(path(L"sub")); });
+    add(L"a refresh that finds a file in its folder's place shows the folder that file is in, unfiltered (5.10)",
+        [=, this] {
+            SetWindowTextW(filter_, L"nothing like it");
+            refresh();
+            pending_.generation = kStuckRead;   // the real read comes back as one replaced, and is dropped
+            onLoaded(listTabFolder(path(L"file1.txt"), true), kStuckRead);
+        },
+        [=, this] {
+            selfTest_->note = L"filter \"" + windowText(filter_) + L"\"";
+            return at(dir) && windowText(filter_).empty() &&
+                   list_.selectedNames() == std::vector<std::wstring>{L"file1.txt"};
+        });
     add(L"(back into big)", [=, this] { open(path(L"big"), Nav::New); }, [=, this] { return at(path(L"big")); });
 
     add(L"copies 10,000 selected files to the clipboard",

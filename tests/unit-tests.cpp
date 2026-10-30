@@ -401,6 +401,13 @@ int main(int argc, char** argv) {
         Listing asFile = listFolder(exePath(), false);
         CHECK(asFile.error != 0 && asFile.isFile);
         CHECK(!listFolder(L"C:\\definitely\\not\\here", false).isFile);
+        // A tab's own folder that turns out to be a file reads the folder it is in, and names the file.
+        Listing tabOnFile = listTabFolder(exePath(), false);
+        CHECK(tabOnFile.error == 0 && samePath(tabOnFile.path, parentPath(exePath())) &&
+              samePath(tabOnFile.file, leafName(exePath())) && !tabOnFile.items.empty());
+        Listing tabOnFolder = listTabFolder(L"C:\\Windows", false);
+        CHECK(tabOnFolder.error == 0 && samePath(tabOnFolder.path, L"C:\\Windows") && tabOnFolder.file.empty());
+        CHECK(listTabFolder(L"C:\\definitely\\not\\here", false).error != 0);
         // A read that a newer load replaced stops early, keeping nothing (System32 has hundreds of entries).
         wchar_t sys[MAX_PATH];
         GetSystemDirectoryW(sys, MAX_PATH);

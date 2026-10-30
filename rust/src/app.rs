@@ -74,8 +74,8 @@ use crate::filelist::FileList;
 use crate::APP_NAME;
 use crate::folder::{
     CommandLine, DropBack, Listing, Location, SortKey, byte_size, drop_back, expand_vars, folder_written,
-    is_absolute_path, is_relative_path, is_shortcut, list_folder, normalize, parse_ini_section, row_after_deleting,
-    sort_items, tab_argument,
+    is_absolute_path, is_relative_path, is_shortcut, list_folder, list_tab_folder, normalize, parse_ini_section,
+    row_after_deleting, sort_items, tab_argument,
 };
 use crate::shell::{
     FolderWatch, IconBatch, OwnItem, acknowledge_change, fill_types, background_menu, bookmark_folder, copy_to_clipboard, delete_items, drag_out, open_in_explorer,
@@ -1936,12 +1936,17 @@ impl App {
             self.show_status();
         }
         let wnd = self.wnd.0 as usize; // HWND is just a handle; the thread only posts to it
+        let tabs_own = matches!(nav, Nav::Refresh | Nav::Switch); // the tab's own folder, not one it moves to
         let (key, ascending) = self.list.sort();
         in_background(move || {
             let replaced =
                 || NEWEST_LOAD.load(Ordering::SeqCst) != generation && KEPT_LOAD.load(Ordering::SeqCst) != generation;
             // Hidden items too: Ctrl+H only shows or hides them.
-            let mut listing = list_folder(&location, true, Some(&replaced));
+            let mut listing = if tabs_own {
+                list_tab_folder(&location, true, Some(&replaced))
+            } else {
+                list_folder(&location, true, Some(&replaced))
+            };
             if !replaced() {
                 // Off the window's thread: the shell's type names and icons, and a big folder's sort.
                 fill_types(&mut listing.items);
@@ -2016,6 +2021,15 @@ impl App {
         let moved = matches!(pending.nav, Nav::New | Nav::Back | Nav::Forward);
         let reload = pending.nav == Nav::Refresh && same_folder;
         let mut view = pending.view;
+        if let Some(file) = &listing.file {
+            // The tab's own folder turned out to be a file (5.10).
+            view = ViewState::selecting(file);
+            // Another folder than the one a refresh began in, so it starts unfiltered (5.4). A tab switch cleared the
+            // filter as it began, and what was typed since stays.
+            if pending.nav == Nav::Refresh {
+                set_text(self.filter, "");
+            }
+        }
         // An item a rename, delete or new folder asked for (a tab switch restores the scroll exactly instead).
         let requested = pending.nav == Nav::Refresh && view.asks();
         if reload {
@@ -2153,16 +2167,6 @@ impl App {
     /// The folder could not be read: decide what to show or do instead.
     fn on_load_failed(&self, listing: &Listing, error: &str, pending: &Pending) {
         if matches!(pending.nav, Nav::Refresh | Nav::Switch) {
-            // A tab made on a file (qoqdir C:\src\main.cpp) shows the file's folder with the file selected, as explorer
-            // /select does (5.10). The switch's read gives the tab that folder, with no history entry for the file. Not
-            // while a move that took over from that read is still out (State::kept, 4.2): a new switch would replace
-            // the move, which decides where the tab goes.
-            let parent = listing.location.parent();
-            let moving = self.st.borrow().pending.is_some();
-            let on_file = listing.is_file && self.location().same(&listing.location);
-            if on_file && matches!(parent, Location::Dir(_)) && !moving {
-                return self.open(parent, Nav::Switch, ViewState::selecting(listing.location.display_name()));
-            }
             return self.show_unavailable(&listing.location, error);
         }
         // A move that fails or opens a file leaves the tab where it was: its filter comes back, unless retyped.

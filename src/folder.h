@@ -78,11 +78,15 @@ struct Listing {
     DWORD error = 0;      // Win32 error code, 0 on success
     bool isFile = false;  // with an error: the path exists but is a file
     FILETIME written{};   // the folder's own last write, as it was before the read (folderWritten)
+    std::wstring file{};  // the file a tab's read found in the folder's place, in this folder (listTabFolder)
     std::optional<std::pair<SortKey, bool>> sorted{};   // how the items are sorted, if they are: key, ascending
 };
 
 // Reads a folder; blocking, so off the UI thread. Once `stop` says true it ends with ERROR_OPERATION_ABORTED.
 Listing listFolder(const std::wstring& path, bool showHidden, const std::function<bool()>& stop = nullptr);
+// The same for a tab's own folder, which may be a file (qoqdir C:\src\main.cpp): then the folder it is in, with `file`
+// naming it, as explorer /select shows it (5.10).
+Listing listTabFolder(const std::wstring& path, bool showHidden, const std::function<bool()>& stop = nullptr);
 std::vector<std::wstring> driveRoots();   // "C:\" and so on, for the drive letters in use
 FILETIME folderWritten(const std::wstring& path);   // the folder's own last-write time (zero if unknown): it changes with its contents
 

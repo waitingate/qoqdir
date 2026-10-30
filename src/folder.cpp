@@ -281,6 +281,14 @@ Listing listFolder(const std::wstring& path, bool showHidden, const std::functio
     return r;
 }
 
+Listing listTabFolder(const std::wstring& path, bool showHidden, const std::function<bool()>& stop) {
+    Listing read = listFolder(path, showHidden, stop);
+    if (!read.isFile || parentPath(path).empty()) return read;
+    Listing folder = listFolder(parentPath(path), showHidden, stop);
+    folder.file = leafName(path);
+    return folder;
+}
+
 FILETIME folderWritten(const std::wstring& path) {
     WIN32_FILE_ATTRIBUTE_DATA data{};
     GetFileAttributesExW(path.c_str(), GetFileExInfoStandard, &data);   // leaves the zeros if it fails

@@ -401,6 +401,7 @@ pub struct Listing {
     pub error: Option<windows::core::Error>,
     pub is_file: bool, // with an error: the path exists but is a file
     pub written: u64,  // the folder's own last write, as it was before the read (folder_written)
+    pub file: Option<OsString>, // the file a tab's read found in the folder's place, in this folder (list_tab_folder)
     pub sorted: Option<(SortKey, bool)>, // how the items are sorted, if they are: key, ascending
 }
 
@@ -483,6 +484,18 @@ pub fn list_folder(location: &Location, show_hidden: bool, stop: Option<&dyn Fn(
     // 10,000. Moving them to a block their size takes well under a millisecond.
     r.items.shrink_to_fit();
     r
+}
+
+/// The same for a tab's own folder, which may be a file (qoqdir C:\src\main.cpp): then the folder it is in, with `file`
+/// naming it, as explorer /select shows it (5.10).
+pub fn list_tab_folder(location: &Location, show_hidden: bool, stop: Option<&dyn Fn() -> bool>) -> Listing {
+    let read = list_folder(location, show_hidden, stop);
+    if read.is_file && let parent @ Location::Dir(_) = location.parent() {
+        let mut folder = list_folder(&parent, show_hidden, stop);
+        folder.file = Some(location.display_name());
+        return folder;
+    }
+    read
 }
 
 /// The folder's own last-write time (0 if unknown): it changes with its contents.
@@ -1160,6 +1173,16 @@ mod tests {
         // A path that is a file is reported as such (the app then opens the file instead).
         let as_file = list_folder(&Location::dir(std::env::current_exe().unwrap()), false, None);
         assert!(as_file.error.is_some() && as_file.is_file);
+        // A tab's own folder that turns out to be a file reads the folder it is in, and names the file.
+        let exe = Location::dir(std::env::current_exe().unwrap());
+        let tab_on_file = list_tab_folder(&exe, false, None);
+        assert!(tab_on_file.error.is_none() && tab_on_file.location.same(&exe.parent()));
+        assert!(!tab_on_file.items.is_empty());
+        assert_eq!(tab_on_file.file, Some(exe.display_name()));
+        let tab_on_folder = list_tab_folder(&dir("C:\\Windows"), false, None);
+        assert!(tab_on_folder.error.is_none() && tab_on_folder.location.same(&dir("C:\\Windows")));
+        assert_eq!(tab_on_folder.file, None);
+        assert!(list_tab_folder(&dir("C:\\definitely\\not\\here"), false, None).error.is_some());
         // A read that a newer load replaced stops early, keeping nothing (System32 has hundreds of entries).
         let system = Location::dir(system_dir().unwrap());
         let stopped = list_folder(&system, false, Some(&|| true));
