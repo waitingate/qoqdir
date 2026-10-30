@@ -304,6 +304,28 @@ pub struct App {
     gray: HBRUSH,          // the window's soft gray: lives as long as the process
 }
 
+/// The window's place and its monitor. `normal` is the place it goes back to when maximized or minimized, in screen
+/// coordinates, as a window is made at: Windows counts it from the work area's corner, which a taskbar at the top or
+/// left moves by its size.
+struct Placement {
+    window: WINDOWPLACEMENT,
+    monitor: MONITORINFO,
+    normal: RECT,
+}
+
+fn placement_of(wnd: HWND) -> Placement {
+    unsafe {
+        let mut window = WINDOWPLACEMENT { length: size_of::<WINDOWPLACEMENT>() as u32, ..Default::default() };
+        let _ = GetWindowPlacement(wnd, &mut window);
+        let mut monitor = MONITORINFO { cbSize: size_of::<MONITORINFO>() as u32, ..Default::default() };
+        let _ = GetMonitorInfoW(MonitorFromWindow(wnd, MONITOR_DEFAULTTONEAREST), &mut monitor);
+        let (dx, dy) = (monitor.rcWork.left - monitor.rcMonitor.left, monitor.rcWork.top - monitor.rcMonitor.top);
+        let r = window.rcNormalPosition;
+        let normal = RECT { left: r.left + dx, top: r.top + dy, right: r.right + dx, bottom: r.bottom + dy };
+        Placement { window, monitor, normal }
+    }
+}
+
 /// A high-contrast theme is on. (HIGHCONTRASTW is written out here: the crate feature with it holds all of UI
 /// Automation.)
 fn high_contrast_on() -> bool {
@@ -2747,24 +2769,14 @@ impl App {
         command_line.push("\" ");
         command_line.push(tab_argument(dir));
         let dpi = self.dpi.get();
+        let p = placement_of(self.wnd);
         unsafe {
-            let mut mi = MONITORINFO { cbSize: size_of::<MONITORINFO>() as u32, ..Default::default() };
-            let _ = GetMonitorInfoW(MonitorFromWindow(self.wnd, MONITOR_DEFAULTTONEAREST), &mut mi);
             let maximized = IsZoomed(self.wnd).as_bool();
-            let from = if maximized {
-                // the place it goes back to, which Windows counts from the work area's corner
-                let mut wp = WINDOWPLACEMENT { length: size_of::<WINDOWPLACEMENT>() as u32, ..Default::default() };
-                let _ = GetWindowPlacement(self.wnd, &mut wp);
-                let (dx, dy) = (mi.rcWork.left - mi.rcMonitor.left, mi.rcWork.top - mi.rcMonitor.top);
-                let r = wp.rcNormalPosition;
-                RECT { left: r.left + dx, top: r.top + dy, right: r.right + dx, bottom: r.bottom + dy }
-            } else {
-                window_rect(self.wnd)
-            };
+            let from = if maximized { p.normal } else { window_rect(self.wnd) };
             let title_bar = GetSystemMetricsForDpi(SM_CYCAPTION, dpi)
                 + GetSystemMetricsForDpi(SM_CYSIZEFRAME, dpi)
                 + GetSystemMetricsForDpi(SM_CXPADDEDBORDER, dpi);
-            NewWindow { exe, command_line, place: cascade(from, mi.rcWork, title_bar), maximized }
+            NewWindow { exe, command_line, place: cascade(from, p.monitor.rcWork, title_bar), maximized }
         }
     }
 
@@ -2863,21 +2875,15 @@ impl App {
                 }
             };
 
-            let mut wp = WINDOWPLACEMENT { length: size_of::<WINDOWPLACEMENT>() as u32, ..Default::default() };
-            let _ = GetWindowPlacement(self.wnd, &mut wp);
-            // Windows counts the place from the work area's corner, and create makes the window at screen
-            // coordinates: saved as they are, a taskbar at the top or left would move the window by its size at every
-            // start (as new_window knows).
-            let mut mi = MONITORINFO { cbSize: size_of::<MONITORINFO>() as u32, ..Default::default() };
-            let _ = GetMonitorInfoW(MonitorFromWindow(self.wnd, MONITOR_DEFAULTTONEAREST), &mut mi);
-            let (dx, dy) = (mi.rcWork.left - mi.rcMonitor.left, mi.rcWork.top - mi.rcMonitor.top);
-            let r = wp.rcNormalPosition;
-            number("X", r.left + dx);
-            number("Y", r.top + dy);
+            let p = placement_of(self.wnd);
+            let r = p.normal;
+            number("X", r.left);
+            number("Y", r.top);
             number("Width", r.right - r.left);
             number("Height", r.bottom - r.top);
             // Also true when closed while minimized from a maximized window.
-            let maximized = wp.showCmd == SW_SHOWMAXIMIZED.0 as u32 || wp.flags.0 & WPF_RESTORETOMAXIMIZED.0 != 0;
+            let w = p.window;
+            let maximized = w.showCmd == SW_SHOWMAXIMIZED.0 as u32 || w.flags.0 & WPF_RESTORETOMAXIMIZED.0 != 0;
             number("Maximized", maximized as i32);
             number("TreeWidth", self.tree_width.get());
             number("ShowHidden", self.list.show_hidden() as i32);

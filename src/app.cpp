@@ -96,6 +96,27 @@ bool opensInTab(const std::optional<ShortcutTarget>& target) {
     return target && (target->path.empty() || isAbsolutePath(target->path));
 }
 
+// The window's place and its monitor. `normal` is the place it goes back to when maximized or minimized, in screen
+// coordinates, as a window is made at: Windows counts it from the work area's corner, which a taskbar at the top or
+// left moves by its size.
+struct Placement {
+    WINDOWPLACEMENT window;
+    MONITORINFO monitor;
+    RECT normal;
+};
+
+Placement placementOf(HWND wnd) {
+    Placement p{};
+    p.window.length = sizeof p.window;
+    GetWindowPlacement(wnd, &p.window);
+    p.monitor.cbSize = sizeof p.monitor;
+    GetMonitorInfoW(MonitorFromWindow(wnd, MONITOR_DEFAULTTONEAREST), &p.monitor);
+    p.normal = p.window.rcNormalPosition;
+    OffsetRect(&p.normal, p.monitor.rcWork.left - p.monitor.rcMonitor.left,
+               p.monitor.rcWork.top - p.monitor.rcMonitor.top);
+    return p;
+}
+
 int tabAt(HWND bar, POINT screenPt) {   // the tab under a point on the screen, or -1
     TCHITTESTINFO hit{};
     hit.pt = screenPt;
@@ -1659,23 +1680,13 @@ App::NewWindow App::newWindow(const std::wstring& dir) const {
     NewWindow w;
     w.exe = exePath();
     w.commandLine = L"\"" + w.exe + L"\" " + tabArgument(dir);
-    MONITORINFO mi{};
-    mi.cbSize = sizeof mi;
-    GetMonitorInfoW(MonitorFromWindow(wnd_, MONITOR_DEFAULTTONEAREST), &mi);
-    RECT from{};
+    Placement p = placementOf(wnd_);
+    RECT from = p.normal;
     w.maximized = IsZoomed(wnd_) != 0;
-    if (w.maximized) {   // the place it goes back to, which Windows counts from the work area's corner
-        WINDOWPLACEMENT wp{};
-        wp.length = sizeof wp;
-        GetWindowPlacement(wnd_, &wp);
-        from = wp.rcNormalPosition;
-        OffsetRect(&from, mi.rcWork.left - mi.rcMonitor.left, mi.rcWork.top - mi.rcMonitor.top);
-    } else {
-        GetWindowRect(wnd_, &from);
-    }
+    if (!w.maximized) GetWindowRect(wnd_, &from);
     int titleBar = GetSystemMetricsForDpi(SM_CYCAPTION, dpi_) + GetSystemMetricsForDpi(SM_CYSIZEFRAME, dpi_) +
                    GetSystemMetricsForDpi(SM_CXPADDEDBORDER, dpi_);
-    w.place = cascade(from, mi.rcWork, titleBar);
+    w.place = cascade(from, p.monitor.rcWork, titleBar);
     return w;
 }
 
@@ -1747,21 +1758,14 @@ void App::saveSettings() {
             WritePrivateProfileStringW(L"Window", key.c_str(), text.c_str(), ini_.c_str());
     };
 
-    WINDOWPLACEMENT wp{};
-    wp.length = sizeof wp;
-    GetWindowPlacement(wnd_, &wp);
-    // Windows counts the place from the work area's corner, and create makes the window at screen coordinates: saved
-    // as they are, a taskbar at the top or left would move the window by its size at every start (as newWindow knows).
-    MONITORINFO mi{};
-    mi.cbSize = sizeof mi;
-    GetMonitorInfoW(MonitorFromWindow(wnd_, MONITOR_DEFAULTTONEAREST), &mi);
-    RECT r = wp.rcNormalPosition;
-    OffsetRect(&r, mi.rcWork.left - mi.rcMonitor.left, mi.rcWork.top - mi.rcMonitor.top);
+    Placement p = placementOf(wnd_);
+    const RECT& r = p.normal;
     number(L"X", r.left);
     number(L"Y", r.top);
     number(L"Width", r.right - r.left);
     number(L"Height", r.bottom - r.top);
-    bool maximized = wp.showCmd == SW_SHOWMAXIMIZED || (wp.flags & WPF_RESTORETOMAXIMIZED);   // also when minimized
+    // Also when minimized.
+    bool maximized = p.window.showCmd == SW_SHOWMAXIMIZED || (p.window.flags & WPF_RESTORETOMAXIMIZED);
     number(L"Maximized", maximized ? 1 : 0);
     number(L"TreeWidth", treeWidth_);
     number(L"ShowHidden", list_.showHidden() ? 1 : 0);
