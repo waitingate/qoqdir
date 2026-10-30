@@ -33,12 +33,13 @@ HRESULT uiObject(HWND owner, const std::wstring& path, REFIID iid, void** out) {
     return parent->GetUIObjectOf(owner, 1, &child, iid, nullptr, out);
 }
 
-// The listing's find data, handed to the shell (STR_FILE_SYS_BIND_DATA) so parsing a name needs no disk query.
-class FindData final : public IFileSystemBindData {
+// IUnknown for an object of ours that serves the one interface I: counted, and gone with its last reference.
+template <class I>
+class Unknown : public I {
 public:
     HRESULT STDMETHODCALLTYPE QueryInterface(REFIID iid, void** out) override {
-        if (iid == IID_IUnknown || iid == IID_IFileSystemBindData) {
-            *out = static_cast<IFileSystemBindData*>(this);
+        if (iid == IID_IUnknown || iid == __uuidof(I)) {
+            *out = static_cast<I*>(this);
             AddRef();
             return S_OK;
         }
@@ -51,6 +52,17 @@ public:
         if (n == 0) delete this;
         return ULONG(n);
     }
+
+protected:
+    virtual ~Unknown() = default;
+
+private:
+    LONG refs_ = 1;
+};
+
+// The listing's find data, handed to the shell (STR_FILE_SYS_BIND_DATA) so parsing a name needs no disk query.
+class FindData final : public Unknown<IFileSystemBindData> {
+public:
     HRESULT STDMETHODCALLTYPE SetFindData(const WIN32_FIND_DATAW* fd) override {
         fd_ = *fd;
         return S_OK;
@@ -61,7 +73,6 @@ public:
     }
 
 private:
-    LONG refs_ = 1;
     WIN32_FIND_DATAW fd_{};
 };
 
@@ -749,26 +760,10 @@ std::vector<std::wstring> draggedPaths(IDataObject* data, DWORD allowed) {
     return paths;
 }
 
-class DropTarget final : public IDropTarget {
+class DropTarget final : public Unknown<IDropTarget> {
 public:
     DropTarget(HWND owner, DropTargetFn target) : owner_(owner), target_(std::move(target)) {
         CoCreateInstance(CLSID_DragDropHelper, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(helper_.put()));
-    }
-
-    HRESULT STDMETHODCALLTYPE QueryInterface(REFIID iid, void** out) override {
-        if (iid == IID_IUnknown || iid == IID_IDropTarget) {
-            *out = static_cast<IDropTarget*>(this);
-            AddRef();
-            return S_OK;
-        }
-        *out = nullptr;
-        return E_NOINTERFACE;
-    }
-    ULONG STDMETHODCALLTYPE AddRef() override { return ULONG(InterlockedIncrement(&refs_)); }
-    ULONG STDMETHODCALLTYPE Release() override {
-        LONG n = InterlockedDecrement(&refs_);
-        if (n == 0) delete this;
-        return ULONG(n);
     }
 
     HRESULT STDMETHODCALLTYPE DragEnter(IDataObject* data, DWORD keys, POINTL pt, DWORD* effect) override {
@@ -859,7 +854,6 @@ private:
         described_ = data_ && setData(data_.get(), format, &tip, sizeof(tip)) && type != DROPIMAGE_INVALID;
     }
 
-    LONG refs_ = 1;
     HWND owner_;
     DropTargetFn target_;
     Com<IDataObject> data_;
