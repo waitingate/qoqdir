@@ -360,7 +360,8 @@ int main(int argc, char** argv) {
     CHECK(rowAfterDeleting({0, 1, 2, 3, 4, 5, 6, 7, 8, 9}, 10) == -1);
     CHECK(rowAfterDeleting({}, 5) == -1);
 
-    // matchesFilter
+    // ItemFilter
+    auto matchesFilter = [](const Item& it, const wchar_t* filter) { return ItemFilter(filter).matches(it); };
     CHECK(matchesFilter(file(L"Holiday Photo.jpg"), L"photo"));
     CHECK(matchesFilter(file(L"Holiday Photo.jpg"), L""));
     CHECK(!matchesFilter(file(L"Holiday Photo.jpg"), L"video"));
@@ -371,6 +372,14 @@ int main(int argc, char** argv) {
     CHECK(matchesFilter(file(L"ÄBC.txt"), L"äbc*"));
     CHECK(matchesFilter(file(L"a.png"), L"*.jpg; *.png") && !matchesFilter(file(L"a.gif"), L"*.jpg;*.png"));
     CHECK(matchesFilter(file(L"abc"), L"a?c") && !matchesFilter(file(L"ac"), L"a?c"));
+    {
+        // One filter, made once, for many items: what one item left behind doesn't count for the next.
+        ItemFilter wild(L"*.PDF; b*");
+        CHECK(wild.matches(file(L"long enough to need room.pdf")) && !wild.matches(file(L"a.txt")));
+        CHECK(wild.matches(file(L"B")) && !wild.matches(file(L"a")));
+        ItemFilter plain(L"OTO");
+        CHECK(plain.matches(file(L"Holiday Photo.jpg")) && !plain.matches(file(L"video.mp4")));
+    }
     {
         // Windows' matcher took 8.8 s here, 4 to 9 times longer with each star; the filter runs it on every file.
         ULONGLONG start = GetTickCount64();

@@ -374,17 +374,22 @@ bool wildcardMatch(std::wstring_view name, std::wstring_view pattern) {
 }
 }  // namespace
 
-bool matchesFilter(const Item& item, const std::wstring& filter) {
-    if (filter.empty()) return true;
-    if (filter.find_first_of(L"*?") == std::wstring::npos)
-        return StrStrIW(item.shown().c_str(), filter.c_str()) != nullptr;
-    // Wildcards, ignoring case, in one pattern or several separated by ';' ("*.jpg; *.png").
-    std::wstring name = toLower(item.shown()), patterns = toLower(filter) + L';';
-    for (size_t at = 0, end; (end = patterns.find(L';', at)) != std::wstring::npos; at = end + 1) {
-        size_t start = patterns.find_first_not_of(L' ', at);   // never past the ';'
-        if (wildcardMatch(name, std::wstring_view(patterns).substr(start, end - start))) return true;
+ItemFilter::ItemFilter(const std::wstring& text) : text_(text) {
+    if (text.find_first_of(L"*?") == std::wstring::npos) return;
+    std::wstring lower = toLower(text) + L';';
+    for (size_t at = 0, end; (end = lower.find(L';', at)) != std::wstring::npos; at = end + 1) {
+        size_t start = lower.find_first_not_of(L' ', at);   // never past the ';'
+        patterns_.push_back(lower.substr(start, end - start));
     }
-    return false;
+}
+
+bool ItemFilter::matches(const Item& item) {
+    if (text_.empty()) return true;
+    if (patterns_.empty()) return StrStrIW(item.shown().c_str(), text_.c_str()) != nullptr;
+    name_ = item.shown();
+    name_ = toLower(std::move(name_));
+    auto matches = [&](const std::wstring& pattern) { return wildcardMatch(name_, pattern); };
+    return std::any_of(patterns_.begin(), patterns_.end(), matches);
 }
 
 int rowAfterDeleting(const std::vector<int>& rows, int count) {

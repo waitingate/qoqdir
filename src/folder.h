@@ -89,8 +89,18 @@ enum class SortKey { Name = 0, Modified = 1, Type = 2, Size = 3 };
 // Folders always come first; names compare the way Explorer does ("file2" < "file10").
 void sortItems(std::vector<Item>& items, SortKey key, bool ascending);
 
-// Case-insensitive substring match, or a wildcard match when the filter contains * or ?.
-bool matchesFilter(const Item& item, const std::wstring& filter);
+// A filter as typed, made ready for many items: a case-insensitive substring, or a wildcard match when it contains * or
+// ?, in one pattern or several separated by ';' ("*.jpg; *.png").
+class ItemFilter {
+public:
+    explicit ItemFilter(const std::wstring& text);
+    bool matches(const Item& item);
+
+private:
+    std::wstring text_;
+    std::vector<std::wstring> patterns_;   // in lower case; none for a plain substring
+    std::wstring name_;                    // the item's name in lower case: its room is kept from item to item
+};
 
 // After deleting 'rows' (ascending), the row of the item that takes the first one's place, else the one before.
 int rowAfterDeleting(const std::vector<int>& rows, int count);

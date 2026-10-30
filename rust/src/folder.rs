@@ -621,21 +621,45 @@ pub fn sort_items(items: &mut Vec<Item>, key: SortKey, ascending: bool) {
     items.extend(order.into_iter().filter_map(|i| slots[i].take()));
 }
 
-/// Case-insensitive substring match, or a wildcard match when the filter has * or ?, in one pattern or several
-/// separated by ';' ("*.jpg; *.png"). `filter` ends in a NUL.
-pub fn matches_filter(item: &Item, filter: &[u16]) -> bool {
-    if filter.len() <= 1 {
-        return true;
+/// A filter as typed, made ready for many items: a case-insensitive substring, or a wildcard match when it has * or ?,
+/// in one pattern or several separated by ';' ("*.jpg; *.png").
+pub struct ItemFilter<'a> {
+    text: &'a [u16],         // ends in a NUL
+    patterns: Vec<Vec<u16>>, // in lower case; none for a plain substring
+    name: Vec<u16>,          // the item's name as they take it: its room is kept from item to item
+}
+
+impl<'a> ItemFilter<'a> {
+    pub fn new(text: &'a [u16]) -> ItemFilter<'a> {
+        let mut patterns = Vec::new();
+        if text.iter().any(|&c| c == b'*' as u16 || c == b'?' as u16) {
+            let lower = to_lower(&OsString::from_wide(&text[..text.len() - 1]));
+            patterns = lower
+                .split(|&c| c == b';' as u16)
+                .map(|p| {
+                    let spaces = p.iter().take_while(|&&c| c == b' ' as u16).count(); // spaces after a ';' don't count
+                    p[spaces..].to_vec()
+                })
+                .collect();
+        }
+        ItemFilter { text, patterns, name: Vec::new() }
     }
-    if !filter.iter().any(|&c| c == b'*' as u16 || c == b'?' as u16) {
-        return !unsafe { StrStrIW(pcwstr(&wide(item.shown())), pcwstr(filter)) }.is_null();
+
+    pub fn matches(&mut self, item: &Item) -> bool {
+        if self.text.len() <= 1 {
+            return true;
+        }
+        self.name.clear();
+        self.name.extend(item.shown().encode_wide());
+        if self.patterns.is_empty() {
+            self.name.push(0);
+            return !unsafe { StrStrIW(pcwstr(&self.name), pcwstr(self.text)) }.is_null();
+        }
+        if !self.name.is_empty() {
+            unsafe { CharLowerBuffW(&mut self.name) };
+        }
+        self.patterns.iter().any(|p| wildcard_match(&self.name, p))
     }
-    let name = to_lower(item.shown());
-    let patterns = to_lower(&OsString::from_wide(&filter[..filter.len() - 1]));
-    patterns.split(|&c| c == b';' as u16).any(|p| {
-        let spaces = p.iter().take_while(|&&c| c == b' ' as u16).count(); // spaces after a ';' don't count
-        wildcard_match(&name, &p[spaces..])
-    })
 }
 
 /// `*` is any run of characters and `?` any one, both in lower case. On a mismatch only the last star takes one more
@@ -1095,6 +1119,7 @@ mod tests {
 
     #[test]
     fn filtering() {
+        let matches_filter = |it: &Item, filter: &[u16]| ItemFilter::new(filter).matches(it);
         let photo = item("Holiday Photo.jpg", 0, false);
         assert!(matches_filter(&photo, &wide("photo")));
         assert!(matches_filter(&photo, &wide("")));
@@ -1107,6 +1132,15 @@ mod tests {
         assert!(matches_filter(&item("a.png", 0, false), &wide("*.jpg; *.png")));
         assert!(!matches_filter(&item("a.gif", 0, false), &wide("*.jpg;*.png")));
         assert!(matches_filter(&item("abc", 0, false), &wide("a?c")) && !matches_filter(&item("ac", 0, false), &wide("a?c")));
+        // One filter, made once, for many items: what one item left behind doesn't count for the next.
+        let text = wide("*.PDF; b*");
+        let mut wild = ItemFilter::new(&text);
+        assert!(wild.matches(&item("long enough to need room.pdf", 0, false)));
+        assert!(!wild.matches(&item("a.txt", 0, false)));
+        assert!(wild.matches(&item("B", 0, false)) && !wild.matches(&item("a", 0, false)));
+        let text = wide("OTO");
+        let mut plain = ItemFilter::new(&text);
+        assert!(plain.matches(&photo) && !plain.matches(&item("video.mp4", 0, false)));
         // Windows' matcher took 8.8 s here, 4 to 9 times longer with each star; the filter runs it on every file.
         let start = std::time::Instant::now();
         assert!(!matches_filter(&item(&"a".repeat(40), 0, false), &wide("*a*a*a*a*a*a*a*b")));

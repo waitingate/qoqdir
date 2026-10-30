@@ -35,7 +35,10 @@ use windows::Win32::UI::WindowsAndMessaging::{
 
 use windows::core::w;
 
-use crate::folder::{Item, Listing, Location, SortKey, drop_back, equal_no_case, is_shortcut, matches_filter, sort_items, to_lower, format_size, format_time};
+use crate::folder::{
+    Item, ItemFilter, Listing, Location, SortKey, drop_back, equal_no_case, is_shortcut, sort_items, to_lower,
+    format_size, format_time,
+};
 use crate::shell::{
     IconBatch, has_own_icon, in_background, local_folder, post, read_own_icons, set_theme, shared_type_name,
     system_image_list, type_icon,
@@ -298,7 +301,8 @@ impl FileList {
             let listed: Vec<usize> =
                 (0..m.items.len()).filter(|&i| m.show_hidden || m.items[i].attrs & FILE_ATTRIBUTE_HIDDEN.0 == 0).collect();
             m.total = listed.len();
-            m.view = listed.into_iter().filter(|&i| matches_filter(&m.items[i], &m.filter)).collect();
+            let mut filter = ItemFilter::new(&m.filter);
+            m.view = listed.into_iter().filter(|&i| filter.matches(&m.items[i])).collect();
             m.view.len()
         };
         // A drop's lit row is a row, not a file: the next move over the list works it out again (drop_folder).

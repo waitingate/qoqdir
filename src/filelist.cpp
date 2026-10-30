@@ -120,10 +120,11 @@ void FileList::update(bool keepSelection, const std::function<void()>& change) {
     change();
     view_.clear();
     total_ = 0;
+    ItemFilter filter(filter_);
     for (int i = 0; i < int(items_.size()); ++i) {
         if (!showHidden_ && (items_[i].attrs & FILE_ATTRIBUTE_HIDDEN)) continue;
         ++total_;
-        if (matchesFilter(items_[i], filter_)) view_.push_back(i);
+        if (filter.matches(items_[i])) view_.push_back(i);
     }
     // A drop's lit row is a row, not a file: the next move over the list works it out again (dropFolder).
     overRow_ = -1;
