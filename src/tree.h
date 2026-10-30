@@ -56,6 +56,7 @@ private:
     void reread(HTREEITEM node);   // what refresh() does for one node
     void showChildren(TreeBatch& batch);   // addChildren's batch, put in the tree
     void dropFill(HTREEITEM node);         // its children still to go in won't (the node closed, went, or is read anew)
+    bool filling(HTREEITEM node) const;    // its children are read but still to go in (they wait behind others')
     void forgetReads(HTREEITEM node);      // and its reads out, whose results must not land on it either
     // Runs `reader` on a worker thread to fill a batch, then posts it as the children of `node`.
     void startWorker(HTREEITEM node, std::function<void(TreeBatch&)> reader);

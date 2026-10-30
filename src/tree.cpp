@@ -3,6 +3,7 @@
 
 #include "shell.h"
 
+#include <algorithm>
 #include <unordered_map>
 
 // ---------------------------------------------------------------- reading, on a worker thread
@@ -99,9 +100,12 @@ HTREEITEM FolderTree::lastRoot() const {
 void FolderTree::refreshDrives() {
     HTREEITEM pc = lastRoot();
     if (!TreeView_GetChild(tv_, pc)) {
-        // No drives shown yet: their first read is still in flight (read again, so the drive that came or went is
-        // in the list), or This PC is closed and unread (its next expand reads them).
-        if (reading_.erase(pc)) startReading(pc);
+        // No drives shown yet: their first read is still in flight or waits to go in (read again, so the drive that
+        // came or went is in the list), or This PC is closed and unread (its next expand reads them).
+        if (reading_.count(pc) || filling(pc)) {
+            forgetReads(pc);
+            startReading(pc);
+        }
         return;
     }
     forgetReads(pc);
@@ -133,7 +137,8 @@ void FolderTree::reread(HTREEITEM n) {
     TreeView_GetItem(tv_, &item);
     // An empty Bookmarks keeps its arrow (addChildren), so the arrow can't tell: its last read does.
     bool emptyRoot = bookmarksEmpty_ && n == TreeView_GetRoot(tv_);
-    if (TreeView_GetChild(tv_, n) || (!item.cChildren && !shortcutNode(n)) || emptyRoot) startReading(n);
+    // Children still waiting to go in were read before the change too.
+    if (TreeView_GetChild(tv_, n) || filling(n) || (!item.cChildren && !shortcutNode(n)) || emptyRoot) startReading(n);
 }
 
 HTREEITEM FolderTree::add(HTREEITEM parent, const std::wstring& path, const std::wstring& text, int icon,
@@ -265,6 +270,10 @@ void FolderTree::dropFill(HTREEITEM node) {
     std::erase_if(fills_, [&](const Fill& f) { return f.node == node; });
 }
 
+bool FolderTree::filling(HTREEITEM node) const {
+    return std::any_of(fills_.begin(), fills_.end(), [&](const Fill& f) { return f.node == node; });
+}
+
 void FolderTree::forgetReads(HTREEITEM node) {
     reading_.erase(node);
     stale_.erase(node);
@@ -285,6 +294,11 @@ void FolderTree::setIcons(HTREEITEM node, const IconBatch& batch) {
         item.iImage = item.iSelectedImage = found->second;
         TreeView_SetItem(tv_, &item);
     }
+    // Those still waiting to go in (behind another folder's, fillMore) take theirs in.
+    for (Fill& f : fills_)
+        if (f.node == node)
+            for (TreeBatch::Child& c : f.children)
+                if (auto found = icons.find(toLower(c.path)); found != icons.end()) c.icon = found->second;
 }
 
 // ---------------------------------------------------------------- the mouse: paths and drops

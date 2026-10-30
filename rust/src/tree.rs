@@ -207,9 +207,10 @@ impl FolderTree {
             return;
         }
         if self.child(pc) == 0 {
-            // No drives shown yet: their first read is still in flight (read again, so the drive that came or went is
-            // in the list), or This PC is closed and unread (its next expand reads them).
-            if self.reading.borrow_mut().remove(&pc).is_some() {
+            // No drives shown yet: their first read is still in flight or waits to go in (read again, so the drive
+            // that came or went is in the list), or This PC is closed and unread (its next expand reads them).
+            if self.reading.borrow().contains_key(&pc) || self.filling(pc) {
+                self.forget_reads(pc);
                 self.start_reading(HTREEITEM(pc));
             }
             return;
@@ -250,7 +251,8 @@ impl FolderTree {
         let none = item.cChildren.0 == 0 && !self.shortcut_of(HTREEITEM(node));
         // An empty Bookmarks keeps its arrow (add_children), so the arrow can't tell: its last read does.
         let empty_root = self.bookmarks_empty.get() && node == self.root();
-        if self.child(node) != 0 || none || empty_root {
+        // Children still waiting to go in were read before the change too.
+        if self.child(node) != 0 || self.filling(node) || none || empty_root {
             self.start_reading(HTREEITEM(node));
         }
     }
@@ -478,6 +480,11 @@ impl FolderTree {
         self.fills.borrow_mut().retain(|f| f.node != node);
     }
 
+    /// Its children are read but still to go in: they wait behind another folder's.
+    fn filling(&self, node: isize) -> bool {
+        self.fills.borrow().iter().any(|f| f.node == node)
+    }
+
     /// And its reads out, whose results must not land on it either.
     fn forget_reads(&self, node: isize) {
         self.reading.borrow_mut().remove(&node);
@@ -506,6 +513,14 @@ impl FolderTree {
                     ..Default::default()
                 };
                 send(self.hwnd, TVM_SETITEMW, 0, &item as *const _ as isize);
+            }
+        }
+        // Those still waiting to go in (behind another folder's, fill_more) take theirs in.
+        for fill in self.fills.borrow_mut().iter_mut().filter(|f| f.node == node) {
+            for child in &mut fill.children {
+                if let Some(&icon) = icons.get(&to_lower(&child.location.text())) {
+                    child.icon = Some(icon);
+                }
             }
         }
     }
