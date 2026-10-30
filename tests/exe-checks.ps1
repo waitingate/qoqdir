@@ -10,16 +10,13 @@
 param([Parameter(Mandatory)][string]$Exe)
 # A missing exe or an unreadable one must fail the check, not let the size and user-path checks pass on a null.
 $ErrorActionPreference = 'Stop'
+. "$PSScriptRoot\check.ps1"
 
 $protected ='^(KERNEL32|USER32|GDI32|ole32|OLEAUT32|SHELL32|SHLWAPI|COMCTL32|combase|ntdll|api-ms-win-[a-z0-9-]+)\.dll$'
 $file = Get-Item $Exe
 $size = $file.Length
 $imports = @(objdump -p $Exe | Select-String 'DLL Name: (\S+)' | ForEach-Object { $_.Matches[0].Groups[1].Value })
 $others = @($imports | Where-Object { $_ -notmatch $protected } | Sort-Object -Unique)
-$failures = 0
-function Check([bool]$ok, [string]$what) {
-  if ($ok) { "ok    $what" } else { "FAIL  $what"; $script:failures++ }
-}
 
 # A copy of the exe with another Windows DLL beside it under the import's name: that one has none of the functions
 # the exe asks for, so if Windows took it the copy could not start. --help into a pipe prints and exits: no window.
@@ -64,4 +61,4 @@ $taken = @($others | Where-Object { -not (StartsWithStandIn $_) })   # imports W
 $what = 'it imports only DLLs Windows protects'
 if ($others) { $what += ", and $($others -join ', '), which Windows takes from System32 even with one beside the exe" }
 Check ($taken.Count -eq 0) "$what$(if ($taken) { ': not ' + ($taken -join ', ') })"
-if ($failures) { "$failures check(s) failed"; exit 1 } else { 'all checks passed' }
+FinishChecks

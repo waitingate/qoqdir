@@ -5,6 +5,7 @@
 #   powershell -File tests\cli-checks.ps1 -Exe build\qoqdir.exe
 #   powershell -File tests\cli-checks.ps1 -Exe rust\target\release\qoqdir.exe
 param([Parameter(Mandatory)][string]$Exe)
+. "$PSScriptRoot\check.ps1"
 
 Add-Type @'
 using System; using System.Runtime.InteropServices; using System.Text;
@@ -82,10 +83,6 @@ try {
   Copy-Item $Exe $dir -ErrorAction Stop
 } catch { "can't set up ${dir}: $($_.Exception.Message) (a copy from an earlier run still open?)"; exit 1 }
 $copy = Join-Path $dir (Split-Path $Exe -Leaf)
-$failures = 0
-function Check([bool]$ok, [string]$what) {
-  if ($ok) { "ok    $what" } else { "FAIL  $what"; $script:failures++ }
-}
 function WaitFor([scriptblock]$what, [int]$ms) {   # asks every 50 ms until $what gives something, for $ms at most
   $clock = [Diagnostics.Stopwatch]::StartNew()   # not the time of day, which a clock change moves
   while ($true) {
@@ -112,6 +109,19 @@ function StartQuiet([string]$exe, [string[]]$argList, [int[]]$place = @(0, 0, 0,
   if ($p) { [void]$p.Handle }   # opened while it runs, so that its exit code can be read after it ends
   $p
 }
+function CloseIt($p) { [void]$p.CloseMainWindow(); [void]$p.WaitForExit(5000) }
+# Starts the copy on one folder, with a place and size if given, and waits until its window shows it.
+function StartOnPublic([int[]]$place = @(0, 0, 0, 0)) {
+  $p = StartQuiet $copy '--tab=C:\Users\Public' $place
+  [void](WaitFor { $p.Refresh(); $p.HasExited -or $p.MainWindowTitle -eq 'Public' } 5000)
+  $p
+}
+function PlaceAfterStart([int[]]$place = @(0, 0, 0, 0)) {   # where that window is, and closes it
+  $p = StartOnPublic $place
+  $at = if ($p.HasExited) { 'none: it stopped' } else { [QoqdirHelp]::Place($p.MainWindowHandle) }
+  CloseIt $p
+  $at
+}
 # Starts the copy and waits until its window shows $title, or for a focus check $settle ms (time to take the focus,
 # if it would), then reads its title and whether it took the focus, and closes it.
 function TitleAfterStart([string[]]$argList, [string]$title, [int]$settle = 0) {
@@ -121,7 +131,7 @@ function TitleAfterStart([string[]]$argList, [string]$title, [int]$settle = 0) {
   if (-not $p -or $p.HasExited) { return @{ Title = ''; Focused = $false } }   # it stopped by itself (the crash log says why)
   $p.Refresh()
   $r = @{ Title = $p.MainWindowTitle; Focused = [QoqdirHelp]::GetForegroundWindow() -eq $p.MainWindowHandle }
-  [void]$p.CloseMainWindow(); [void]$p.WaitForExit(5000)
+  CloseIt $p
   $r
 }
 function HelpOutput([string]$arg) {   # runs the copy with its output going to a pipe, as in "qoqdir -h | more"
@@ -160,11 +170,10 @@ $r = HelpOutput '-x'
 Check ($r.Code -eq 1 -and $r.Text.StartsWith('Unknown option: -x') -and $r.Text -match 'Usage: qoqdir') `
   "-x writes the error, then the help, and exits with 1 (exit code $($r.Code))"
 # F1 in the window: posted to the file list as a key press would arrive (nothing global), then the box is closed.
-$p = StartQuiet $copy '--tab=C:\Users\Public'
-[void](WaitFor { $p.Refresh(); $p.MainWindowTitle -eq 'Public' } 5000)
+$p = StartOnPublic
 [void][QoqdirHelp]::PostMessage([QoqdirHelp]::GetDlgItem($p.MainWindowHandle, 108), 0x0100, [IntPtr]0x70, [IntPtr]::Zero)   # WM_KEYDOWN, VK_F1
 $r = CloseBox $p
-[void]$p.CloseMainWindow(); [void]$p.WaitForExit(5000)
+CloseIt $p
 Check ($r.Text.StartsWith('Navigation') -and $r.Text -match 'Refresh: F5' -and $r.Text -match 'type qoqdir --help') `
   "F1 in the window shows the keys and points to qoqdir --help (shown: $($r.Shown))"
 $r = HelpBox '-x'
@@ -174,18 +183,12 @@ Check ($r.Shown -and $r.Code -eq 1 -and $r.Text.StartsWith('Unknown option: -x')
 # for X, and the rest is taken as saved.
 $dw = [QoqdirHelp]::Scaled(820, 0, 0); $dh = [QoqdirHelp]::Scaled(540, 0, 0)
 Set-Content -Path $ini -Value "[Window]`r`nX=2147483000`r`nWidth=$dw`r`nHeight=$dh"
-$p = StartQuiet $copy '--tab=C:\Users\Public'
-[void](WaitFor { $p.Refresh(); $p.HasExited -or $p.MainWindowTitle -eq 'Public' } 5000)
-$place = if ($p.HasExited) { 'none: it stopped' } else { [QoqdirHelp]::Place($p.MainWindowHandle) }
-[void]$p.CloseMainWindow(); [void]$p.WaitForExit(5000)
+$place = PlaceAfterStart
 Check ($place -eq "0,0,$dw,$dh") "a damaged qoqdir.ini (X=2147483000) falls back to 0 for X and keeps the rest (at $place)"
 # Started with a place and size, as Open in new window starts one (5.8): there, not at the place saved.
 Set-Content -Path $ini -Value "[Window]`r`nX=300`r`nY=200`r`nWidth=600`r`nHeight=400"
 $w = [QoqdirHelp]::Scaled(600, 100, 80); $h = [QoqdirHelp]::Scaled(400, 100, 80)   # over its least size, 520 by 320
-$p = StartQuiet $copy '--tab=C:\Users\Public' @(100, 80, $w, $h)
-[void](WaitFor { $p.Refresh(); $p.MainWindowTitle -eq 'Public' } 5000)
-$place = [QoqdirHelp]::Place($p.MainWindowHandle)
-[void]$p.CloseMainWindow(); [void]$p.WaitForExit(5000)
+$place = PlaceAfterStart @(100, 80, $w, $h)
 Check ($place -eq "100,80,$(100 + $w),$(80 + $h)") `
   "started with a place and size, it opens there, not at the saved place (at $place)"
 
@@ -193,10 +196,7 @@ Check ($place -eq "100,80,$(100 + $w),$(80 + $h)") `
 # scaling does not resize it. Physical pixels, over the least size, on the primary monitor.
 $sw = [QoqdirHelp]::Scaled(820, 120, 90); $sh = [QoqdirHelp]::Scaled(540, 120, 90)
 Set-Content -Path $ini -Value "[Window]`r`nX=120`r`nY=90`r`nWidth=$sw`r`nHeight=$sh"
-$p = StartQuiet $copy '--tab=C:\Users\Public'
-[void](WaitFor { $p.Refresh(); $p.HasExited -or $p.MainWindowTitle -eq 'Public' } 5000)
-$place = [QoqdirHelp]::Place($p.MainWindowHandle)
-[void]$p.CloseMainWindow(); [void]$p.WaitForExit(5000)
+$place = PlaceAfterStart
 Check ($place -eq "120,90,$(120 + $sw),$(90 + $sh)") `
   "started with no place, it opens at the place saved in qoqdir.ini (at $place)"
 
@@ -210,11 +210,11 @@ $sid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
 $p = StartQuiet (Join-Path $ro (Split-Path $Exe -Leaf)) '--tab=C:\Users\Public'
 Start-Sleep -Milliseconds 2000
 $p.Refresh(); $title = $p.MainWindowTitle; $box = [QoqdirHelp]::Dialog([uint32]$p.Id)
-[void]$p.CloseMainWindow(); [void]$p.WaitForExit(5000)
+CloseIt $p
 $written = @(Get-ChildItem -LiteralPath $ro -Force | Where-Object { $_.Name -ne (Split-Path $Exe -Leaf) }).Count
 [void](icacls $ro /remove:d "*$sid")
 Check ($title -eq 'Public' -and $box -eq [IntPtr]::Zero -and $p.ExitCode -eq 0 -and $written -eq 0) `
   "from a folder it can't write to, it runs and closes with no error box and writes nothing there ('$title', exit code $($p.ExitCode), files written: $written)"
 
 Remove-Item -LiteralPath $dir -Recurse -Force
-if ($failures) { "$failures check(s) failed"; exit 1 } else { 'all checks passed' }
+FinishChecks

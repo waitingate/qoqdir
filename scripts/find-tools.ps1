@@ -1,5 +1,6 @@
 # Puts the build tools on the PATH when they aren't there yet, from where the build guide puts them (no admin rights
-# needed), and keeps this PC's folders out of the Rust exe. Dot-sourced by build.ps1 and release.ps1.
+# needed), and keeps this PC's folders out of the Rust exe. Dot-sourced by build.ps1 and release.ps1, along with what
+# they both run the tests with.
 # MinGW-w64 (g++, with CMake, Ninja and windres): %LOCALAPPDATA%\Programs\mingw64. Only that per-user folder is
 # looked in; a folder at the root of C: is writable by other accounts on the PC, so tools kept there are trusted
 # only when the owner has put them on the PATH (docs\BUILDING.md, section 1).
@@ -25,3 +26,6 @@ $cargoHome = if ($env:CARGO_HOME) { $env:CARGO_HOME } else { "$env:USERPROFILE\.
 if (-not ($env:RUSTFLAGS -or $env:CARGO_ENCODED_RUSTFLAGS)) {
     $env:CARGO_ENCODED_RUSTFLAGS = "--remap-path-prefix=$cargoHome=cargo"
 }
+
+function RunScript([string]$file) { powershell -NoProfile -ExecutionPolicy Bypass -File $file @args }
+$selfTestLogs = "$env:TEMP\qoqdir-selftest.log", "$env:TEMP\qoqdir-rs-selftest.log"   # C++, Rust

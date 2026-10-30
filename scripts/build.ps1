@@ -24,27 +24,20 @@ Step 'Rust build with the self-test' { cargo build --release @rust @selftest }
 if (-not $Test) { return }
 
 Step 'C++ unit tests' { build\unit_tests.exe }
-Step 'exe checks, C++' { powershell -NoProfile -ExecutionPolicy Bypass -File tests\exe-checks.ps1 -Exe build\qoqdir.exe }
+Step 'exe checks, C++' { RunScript tests\exe-checks.ps1 -Exe build\qoqdir.exe }
 Step 'Rust unit tests' { cargo test @rust }
-Step 'exe checks, Rust' {
-    powershell -NoProfile -ExecutionPolicy Bypass -File tests\exe-checks.ps1 -Exe rust\target\release\qoqdir.exe
-}
+Step 'exe checks, Rust' { RunScript tests\exe-checks.ps1 -Exe rust\target\release\qoqdir.exe }
 Step 'clippy' { cargo clippy --all-targets @rust '--' -D warnings }
 Step 'clippy with the self-test' { cargo clippy --all-targets @rust @selftest '--' -D warnings }
-Step 'command-line checks, C++' { powershell -NoProfile -ExecutionPolicy Bypass -File tests\cli-checks.ps1 -Exe build\qoqdir.exe }
-Step 'command-line checks, Rust' {
-    powershell -NoProfile -ExecutionPolicy Bypass -File tests\cli-checks.ps1 -Exe rust\target\release\qoqdir.exe
-}
+Step 'command-line checks, C++' { RunScript tests\cli-checks.ps1 -Exe build\qoqdir.exe }
+Step 'command-line checks, Rust' { RunScript tests\cli-checks.ps1 -Exe rust\target\release\qoqdir.exe }
 # One self-test at a time, as they share the clipboard. Then both versions must have taken the same steps with the
 # same results (the notes and timings at the line ends aside).
-$logs = "$env:TEMP\qoqdir-selftest.log", "$env:TEMP\qoqdir-rs-selftest.log"
-Step 'self-test, C++' {
-    powershell -NoProfile -ExecutionPolicy Bypass -File tests\watch-windows.ps1 -Exe build\qoqdir-test.exe -Log $logs[0]
-}
+Step 'self-test, C++' { RunScript tests\watch-windows.ps1 -Exe build\qoqdir-test.exe -Log $selfTestLogs[0] }
 Step 'self-test, Rust' {
-    powershell -NoProfile -ExecutionPolicy Bypass -File tests\watch-windows.ps1 -Exe rust\target\selftest\release\qoqdir.exe -Log $logs[1]
+    RunScript tests\watch-windows.ps1 -Exe rust\target\selftest\release\qoqdir.exe -Log $selfTestLogs[1]
 }
 Step 'the same self-test steps in both' {
-    powershell -NoProfile -ExecutionPolicy Bypass -File tests\compare-selftests.ps1 -CppLog $logs[0] -RustLog $logs[1]
+    RunScript tests\compare-selftests.ps1 -CppLog $selfTestLogs[0] -RustLog $selfTestLogs[1]
 }
 'all checks passed'

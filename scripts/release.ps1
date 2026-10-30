@@ -50,14 +50,12 @@ if ((Test-Path $zip) -or ($tag -and (git rev-parse "v$version^{commit}") -ne (gi
 $work = Join-Path $out 'work'
 if (Test-Path $work) { Remove-Item $work -Recurse -Force }
 $tests = "$work\src\tests"
-$logs = "$env:TEMP\qoqdir-selftest.log", "$env:TEMP\qoqdir-rs-selftest.log"
 function Check([string]$step) { if ($LASTEXITCODE) { throw "$step failed" } }
 # The checks on an exe that ships, then the self-test of the build that has it.
 function CheckExe([string]$name, [string]$exe, [string]$selftest, [string]$log) {
-    powershell -NoProfile -ExecutionPolicy Bypass -File "$tests\exe-checks.ps1" -Exe $exe; Check "exe checks, $name"
-    powershell -NoProfile -ExecutionPolicy Bypass -File "$tests\cli-checks.ps1" -Exe $exe; Check "CLI checks, $name"
-    powershell -NoProfile -ExecutionPolicy Bypass -File "$tests\watch-windows.ps1" -Exe $selftest -Log $log
-    Check "self-test, $name"
+    RunScript "$tests\exe-checks.ps1" -Exe $exe; Check "exe checks, $name"
+    RunScript "$tests\cli-checks.ps1" -Exe $exe; Check "CLI checks, $name"
+    RunScript "$tests\watch-windows.ps1" -Exe $selftest -Log $log; Check "self-test, $name"
 }
 
 git clone --quiet . "$work\src"; Check 'git clone'
@@ -70,7 +68,7 @@ cmake --build "$work\build"; Check 'build'
 & "$work\build\unit_tests.exe"; Check 'unit tests'
 $exe = "$work\qoqdir.exe"
 strip -o $exe "$work\build\qoqdir.exe"; Check 'strip'
-CheckExe 'C++' $exe "$work\build\qoqdir-test.exe" $logs[0]
+CheckExe 'C++' $exe "$work\build\qoqdir-test.exe" $selfTestLogs[0]
 
 # Rust: the crates in Cargo.lock, and the release profile, but with line tables and symbols for the debug copy, whose
 # paths start at the work folder too. The flags go in CARGO_ENCODED_RUSTFLAGS, one per 0x1F, which cargo takes
@@ -89,8 +87,8 @@ cargo test @rust --target-dir "$work\rust"; Check 'Rust unit tests'
 # The self-test build in the same folder and with the same flags: only qoqdir itself is compiled again.
 cargo build --release @rust @symbols --features selftest --target-dir "$work\rust"
 Check 'Rust build with the self-test'
-CheckExe 'Rust' $rsExe "$work\rust\release\qoqdir.exe" $logs[1]
-powershell -NoProfile -ExecutionPolicy Bypass -File "$tests\compare-selftests.ps1" -CppLog $logs[0] -RustLog $logs[1]
+CheckExe 'Rust' $rsExe "$work\rust\release\qoqdir.exe" $selfTestLogs[1]
+RunScript "$tests\compare-selftests.ps1" -CppLog $selfTestLogs[0] -RustLog $selfTestLogs[1]
 Check 'the same self-test steps in both'
 
 # Each zip holds the exe, README, LICENSE and the notices for what else is in that exe. The Rust exe holds Rust's
