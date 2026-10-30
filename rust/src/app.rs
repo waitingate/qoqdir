@@ -2615,7 +2615,12 @@ impl App {
         if paths.is_empty() {
             return;
         }
-        let text = paths.iter().map(|p| format!("\"{}\"", p.display())).collect::<Vec<_>>().join("\r\n");
+        let mut text = OsString::new();
+        for (i, path) in paths.iter().enumerate() {
+            text.push(if i == 0 { "\"" } else { "\r\n\"" });
+            text.push(path);
+            text.push("\"");
+        }
         if copy_text(self.wnd, &text) {
             self.set_message(&format!("{} path(s) copied", paths.len()));
         } else {

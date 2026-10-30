@@ -803,9 +803,9 @@ pub fn start_terminal(owner: HWND, terminal: &Terminal, dir: &Path) -> bool {
     unsafe { ShellExecuteExW(&mut sei).is_ok() }
 }
 
-/// The clipboard then holds just this text.
-pub fn copy_text(owner: HWND, text: &str) -> bool {
-    let text: Vec<u16> = text.encode_utf16().chain(std::iter::once(0)).collect();
+/// The clipboard then holds just this text, as it is: a name can hold a lone surrogate, which no str can.
+pub fn copy_text(owner: HWND, text: &OsStr) -> bool {
+    let text: Vec<u16> = text.encode_wide().chain(std::iter::once(0)).collect();
     unsafe {
         let Ok(h) = GlobalAlloc(GMEM_MOVEABLE, text.len() * size_of::<u16>()) else { return false };
         let p = GlobalLock(h) as *mut u16;

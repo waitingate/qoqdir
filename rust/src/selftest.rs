@@ -6,7 +6,7 @@ use std::cell::{Cell, RefCell};
 use std::collections::BTreeSet;
 use std::ffi::{OsStr, OsString};
 use std::io::Write;
-use std::os::windows::ffi::OsStrExt;
+use std::os::windows::ffi::{OsStrExt, OsStringExt};
 use std::path::{Component, Path, PathBuf};
 use std::rc::Rc;
 
@@ -158,7 +158,7 @@ impl Steps {
         let file = |i: u32| format!("heard {i}.txt");
         self.add(name, |_| COUNT.set(0), move |a| {
             let made = COUNT.get();
-            if (0..made).any(|i| a.listed(&file(i))) {
+            if (0..made).any(|i| a.listed(file(i))) {
                 return true;
             }
             if u128::from(made) * 1000 <= step_ms() {
@@ -176,7 +176,7 @@ impl Steps {
                 }
                 a.refresh(ViewState::default());
             },
-            move |a| !(0..COUNT.get()).any(|i| a.listed(&file(i))) && a.idle(),
+            move |a| !(0..COUNT.get()).any(|i| a.listed(file(i))) && a.idle(),
         );
     }
 
@@ -372,8 +372,13 @@ fn clipboard_files() -> Vec<PathBuf> {
 
 /// The clipboard's text: empty when it holds none.
 fn clipboard_text() -> String {
+    String::from_utf16_lossy(&clipboard_wide())
+}
+
+/// The clipboard's text as it is, a lone surrogate too.
+fn clipboard_wide() -> Vec<u16> {
     const CF_UNICODETEXT: u32 = 13;
-    let mut text = String::new();
+    let mut text = Vec::new();
     unsafe {
         if OpenClipboard(None).is_err() {
             return text;
@@ -383,13 +388,19 @@ fn clipboard_text() -> String {
             let p = GlobalLock(global) as *const u16;
             if !p.is_null() {
                 let len = (0..).take_while(|&i| *p.add(i) != 0).count();
-                text = String::from_utf16_lossy(std::slice::from_raw_parts(p, len));
+                text = std::slice::from_raw_parts(p, len).to_vec();
             }
             let _ = GlobalUnlock(global);
         }
         let _ = CloseClipboard();
     }
     text
+}
+
+/// "lone?.txt", whose ? is a lone surrogate (NTFS takes any UTF-16 in a name): no &str can hold it.
+fn lone_name() -> OsString {
+    let w: Vec<u16> = "lone".encode_utf16().chain([0xD800]).chain(".txt".encode_utf16()).collect();
+    OsString::from_wide(&w)
 }
 
 /// Paste only the test's own file: after a failed Ctrl+C, pasting would move files the user cut.
@@ -592,11 +603,12 @@ impl App {
     }
 
     /// The row an item is in.
-    fn row_of(&self, name: &str) -> Option<usize> {
-        (0..self.list.count()).find(|&r| self.list.item(r).is_some_and(|i| i.name == name))
+    fn row_of(&self, name: impl AsRef<OsStr>) -> Option<usize> {
+        let name = name.as_ref();
+        (0..self.list.count()).find(|&r| self.list.item(r).is_some_and(|i| i.name.as_os_str() == name))
     }
 
-    fn listed(&self, name: &str) -> bool {
+    fn listed(&self, name: impl AsRef<OsStr>) -> bool {
         self.row_of(name).is_some()
     }
 
@@ -1111,6 +1123,47 @@ impl App {
             },
         )
         .copies();
+        // NTFS takes any UTF-16 in a name, a lone surrogate too: such a path is copied as it is, with no U+FFFD in it.
+        let lone = || p("sub").join(lone_name());
+        s.add(
+            "(a file whose name holds a lone surrogate)",
+            move |a| {
+                write_file(&lone());
+                a.refresh(ViewState::default());
+            },
+            |a| a.idle() && a.listed(lone_name()),
+        );
+        s.add(
+            "Ctrl+Shift+C copies a path that holds a lone surrogate as it is",
+            |a| {
+                let name = lone_name();
+                a.list.select(std::slice::from_ref(&name), Some(name.as_os_str()));
+                a.press(letter(b'C'), CTRL | SHIFT);
+            },
+            move |_| {
+                let quote = u16::from(b'"');
+                let want: Vec<u16> = [quote].into_iter().chain(lone().as_os_str().encode_wide()).chain([quote]).collect();
+                clipboard_wide() == want
+            },
+        )
+        .copies();
+        s.add(
+            "(remove that file)",
+            move |a| {
+                if remove_file(&lone()) {
+                    a.refresh(ViewState::default());
+                }
+            },
+            move |a| {
+                if exists(&lone()) {
+                    if remove_file(&lone()) {
+                        a.refresh(ViewState::default());
+                    }
+                    return false;
+                }
+                !a.listed(lone_name()) && a.idle()
+            },
+        );
         s.add(
             "Backspace goes up and selects the folder you came from, and the status bar says so the first time",
             |a| a.press(VK_BACK, 0),

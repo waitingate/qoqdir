@@ -660,6 +660,29 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
         },
         [=, this] { return clipboardText() == L"\"" + path(L"sub") + L"\"" && statusMessage() == L"1 path(s) copied"; })
         .copies = true;
+    // NTFS takes any UTF-16 in a name, a lone surrogate too: such a path is copied as it is, with no U+FFFD in it.
+    std::wstring lone = path(L"sub\\lone\xD800.txt");
+    add(L"(a file whose name holds a lone surrogate)",
+        [=, this] {
+            writeFile(lone);
+            refresh();
+        },
+        [=, this] { return idle() && listed(leafName(lone)); });
+    add(L"Ctrl+Shift+C copies a path that holds a lone surrogate as it is",
+        [=, this] {
+            list_.select({leafName(lone)}, leafName(lone));
+            selfTestKey('C', true, true);
+        },
+        [=, this] { return clipboardText() == L"\"" + lone + L"\""; })
+        .copies = true;
+    add(L"(remove that file)", [=, this] { if (removeFile(lone)) refresh(); },
+        [=, this] {
+            if (exists(lone)) {
+                if (removeFile(lone)) refresh();
+                return false;
+            }
+            return !listed(leafName(lone)) && idle();
+        });
     add(L"Backspace goes up and selects the folder you came from, and the status bar says so the first time",
         [=, this] { selfTestKey(VK_BACK); },
         [=, this] {
