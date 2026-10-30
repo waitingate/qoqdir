@@ -74,10 +74,13 @@ public class QoqdirHelp {
 }
 '@
 
+# A copy an earlier run left open keeps its exe in use: then stop, rather than check that old exe in place of -Exe.
 $dir = Join-Path $env:TEMP 'qoqdir-cli-checks'
-if (Test-Path $dir) { Remove-Item -LiteralPath $dir -Recurse -Force }
-New-Item -ItemType Directory $dir | Out-Null
-Copy-Item $Exe $dir
+try {
+  if (Test-Path $dir) { Remove-Item -LiteralPath $dir -Recurse -Force -ErrorAction Stop }
+  New-Item -ItemType Directory $dir -ErrorAction Stop | Out-Null
+  Copy-Item $Exe $dir -ErrorAction Stop
+} catch { "can't set up ${dir}: $($_.Exception.Message) (a copy from an earlier run still open?)"; exit 1 }
 $copy = Join-Path $dir (Split-Path $Exe -Leaf)
 $failures = 0
 function Check([bool]$ok, [string]$what) {
