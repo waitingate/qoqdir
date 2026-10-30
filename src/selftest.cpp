@@ -752,6 +752,24 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
             return idle() && !list_.renaming() && exists(path(L"renamed2.pdf")) && !exists(path(L"\u5831\u544A.pdf")) &&
                    listed(L"added.txt");
         });
+    // Windows can name a renamed item otherwise than typed: "b (2).txt" when b.txt is taken (once the user agrees), or
+    // without the trailing spaces typed. What it made is selected, not the name typed.
+    add(L"(a file to rename)", [=, this] { writeFile(path(L"spaced.txt")); refresh(); },
+        [=, this] { return idle() && listed(L"spaced.txt"); });
+    add(L"after a rename that Windows names otherwise than typed (it drops trailing spaces), the item it made is "
+        L"selected (5.4)",
+        [=, this] {
+            SetFocus(list_.hwnd());
+            list_.select({L"spaced.txt"}, L"spaced.txt");
+            selfTestKey(VK_F2);
+            SetWindowTextW(ListView_GetEditControl(list_.hwnd()), L"trimmed.txt  ");
+            selfTestKey(VK_RETURN);
+        },
+        [=, this] {
+            return idle() && exists(path(L"trimmed.txt")) &&
+                   list_.selectedNames() == std::vector<std::wstring>{L"trimmed.txt"};
+        });
+    removeListed(L"(remove the renamed file)", L"trimmed.txt");
     add(L"Delete moves the file to the Recycle Bin and selects the item after it",
         [=, this] {
             SetWindowTextW(filter_, L"");   // unfiltered, so there is an item after it (4.6)

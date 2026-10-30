@@ -566,11 +566,10 @@ LRESULT App::onMessage(UINT msg, WPARAM wp, LPARAM lp) {
         if (steps) switchTab(std::clamp(active_ - steps, 0, int(tabs_.size()) - 1));
         return 0;
     }
-    case WM_APP_RENAME: {
+    case WM_APP_RENAME: {   // what is selected then is the name Windows gave the item, which can differ from the typed
         Rename r = std::exchange(rename_, {});
-        if (!r.path.empty() && SUCCEEDED(renameItem(wnd_, r.path, r.name))) {
-            refresh(ViewState::selecting(r.name));
-        }
+        if (r.path.empty()) return 0;
+        if (std::optional<std::wstring> made = renameItem(wnd_, r.path, r.name)) refresh(ViewState::selecting(*made));
         return 0;
     }
     case WM_TIMER:

@@ -1223,6 +1223,31 @@ impl App {
                 && !exists(&p("\u{5831}\u{544A}.pdf"))
                 && a.listed("added.txt")
         });
+        // Windows can name a renamed item otherwise than typed: "b (2).txt" when b.txt is taken (once the user
+        // agrees), or without the trailing spaces typed. What it made is selected, not the name typed.
+        s.add(
+            "(a file to rename)",
+            |a| {
+                write_file(&p("spaced.txt"));
+                a.refresh(ViewState::default());
+            },
+            |a| a.idle() && a.listed("spaced.txt"),
+        );
+        s.add(
+            "after a rename that Windows names otherwise than typed (it drops trailing spaces), the item it made is \
+             selected (5.4)",
+            |a| {
+                focus(a.list.hwnd());
+                a.select_one("spaced.txt");
+                a.press(VK_F2, 0);
+                if let Some(edit) = a.list.edit_control() {
+                    set_text(edit, "trimmed.txt  ");
+                }
+                a.press(VK_RETURN, 0);
+            },
+            |a| a.idle() && exists(&p("trimmed.txt")) && a.list.selected_names() == [OsString::from("trimmed.txt")],
+        );
+        s.remove_listed("(remove the renamed file)", "trimmed.txt");
         s.add(
             "Delete moves the file to the Recycle Bin and selects the item after it",
             |a| {

@@ -48,7 +48,8 @@ use windows::Win32::UI::Shell::{
     CMINVOKECOMMANDINFO, CMINVOKECOMMANDINFOEX, CLSID_DragDropHelper, FOF_ALLOWUNDO,
     FOF_NOCONFIRMATION, FOF_WANTNUKEWARNING, FOFX_RECYCLEONDELETE, FOLDERID_ComputerFolder, FileOperation,
     GCS_VERBW, IContextMenu, IContextMenu2, IContextMenu3, IDropTargetHelper, IFileOperation,
-    IFileOperationProgressSink, IFileSystemBindData, IFileSystemBindData_Impl, ILFindLastID, ILIsEqual, IShellFolder,
+    IFileOperationProgressSink, IFileOperationProgressSink_Impl, IFileSystemBindData, IFileSystemBindData_Impl,
+    ILFindLastID, ILIsEqual, IShellFolder,
     IShellItem, IShellLinkW, KF_FLAG_DEFAULT, STR_FILE_SYS_BIND_DATA, SLR_NO_UI, SLR_NOLINKINFO, SLR_NOSEARCH,
     SLR_NOTRACK, SLR_NOUPDATE, SEE_MASK_FLAG_NO_UI, SEE_MASK_NOASYNC,
     SHBindToParent, SHCNE_ATTRIBUTES, SHCNE_CREATE, SHCNE_DELETE, SHCNE_DRIVEADD,
@@ -65,7 +66,9 @@ use windows::Win32::UI::WindowsAndMessaging::{
     MsgWaitForMultipleObjects, PM_REMOVE, PeekMessageW, PostMessageW, QS_ALLINPUT, SW_SHOWNORMAL, TPM_RETURNCMD,
     TPM_RIGHTBUTTON, TrackPopupMenuEx, TranslateMessage,
 };
-use windows::core::{GUID, HRESULT, IUnknown, Interface, PCSTR, PCWSTR, PSTR, PWSTR, Ref, Result, implement, s, w};
+use windows::core::{
+    ComObject, GUID, HRESULT, IUnknown, Interface, PCSTR, PCWSTR, PSTR, PWSTR, Ref, Result, implement, s, w,
+};
 
 use crate::folder::{
     Item, Location, SortKey, drop_back, drop_keys, exists, extension_of, is_directory, list_folder, normalize,
@@ -545,13 +548,101 @@ pub fn delete_items(owner: HWND, dir: &Location, items: &[Item], permanently: bo
     file_operation(owner, flags, |op| unsafe { op.DeleteItems(&obj) }).is_ok()
 }
 
-pub fn rename_item(owner: HWND, path: &Path, new_name: &OsStr) -> Result<()> {
+/// Hears the name a rename gave its item (rename_item).
+#[implement(IFileOperationProgressSink)]
+struct RenameSink(RefCell<Option<OsString>>); // None until Windows reports the rename done
+
+impl IFileOperationProgressSink_Impl for RenameSink_Impl {
+    fn PostRenameItem(&self, _: u32, _: Ref<IShellItem>, name: &PCWSTR, hr: HRESULT, _: Ref<IShellItem>) -> Result<()> {
+        if hr.is_ok() && !name.is_null() {
+            // The name itself: the new item's keeps any trailing spaces.
+            *self.0.borrow_mut() = Some(from_wide(unsafe { name.as_wide() }));
+        }
+        Ok(())
+    }
+    // Nothing else is of interest here.
+    fn StartOperations(&self) -> Result<()> {
+        Ok(())
+    }
+    fn FinishOperations(&self, _: HRESULT) -> Result<()> {
+        Ok(())
+    }
+    fn PreRenameItem(&self, _: u32, _: Ref<IShellItem>, _: &PCWSTR) -> Result<()> {
+        Ok(())
+    }
+    fn PreMoveItem(&self, _: u32, _: Ref<IShellItem>, _: Ref<IShellItem>, _: &PCWSTR) -> Result<()> {
+        Ok(())
+    }
+    fn PostMoveItem(
+        &self,
+        _: u32,
+        _: Ref<IShellItem>,
+        _: Ref<IShellItem>,
+        _: &PCWSTR,
+        _: HRESULT,
+        _: Ref<IShellItem>,
+    ) -> Result<()> {
+        Ok(())
+    }
+    fn PreCopyItem(&self, _: u32, _: Ref<IShellItem>, _: Ref<IShellItem>, _: &PCWSTR) -> Result<()> {
+        Ok(())
+    }
+    fn PostCopyItem(
+        &self,
+        _: u32,
+        _: Ref<IShellItem>,
+        _: Ref<IShellItem>,
+        _: &PCWSTR,
+        _: HRESULT,
+        _: Ref<IShellItem>,
+    ) -> Result<()> {
+        Ok(())
+    }
+    fn PreDeleteItem(&self, _: u32, _: Ref<IShellItem>) -> Result<()> {
+        Ok(())
+    }
+    fn PostDeleteItem(&self, _: u32, _: Ref<IShellItem>, _: HRESULT, _: Ref<IShellItem>) -> Result<()> {
+        Ok(())
+    }
+    fn PreNewItem(&self, _: u32, _: Ref<IShellItem>, _: &PCWSTR) -> Result<()> {
+        Ok(())
+    }
+    fn PostNewItem(
+        &self,
+        _: u32,
+        _: Ref<IShellItem>,
+        _: &PCWSTR,
+        _: &PCWSTR,
+        _: u32,
+        _: HRESULT,
+        _: Ref<IShellItem>,
+    ) -> Result<()> {
+        Ok(())
+    }
+    fn UpdateProgress(&self, _: u32, _: u32) -> Result<()> {
+        Ok(())
+    }
+    fn ResetTimer(&self) -> Result<()> {
+        Ok(())
+    }
+    fn PauseTimer(&self) -> Result<()> {
+        Ok(())
+    }
+    fn ResumeTimer(&self) -> Result<()> {
+        Ok(())
+    }
+}
+
+/// The name the item has now, which Windows can make other than new_name: "b (2).txt" when b.txt is taken (it
+/// asks first), and no trailing spaces. An error when it failed or the user said No.
+pub fn rename_item(owner: HWND, path: &Path, new_name: &OsStr) -> Result<OsString> {
     unsafe {
         let item: IShellItem = SHCreateItemFromParsingName(pcwstr(&wide(path)), None::<&IBindCtx>)?;
         let name = wide(new_name);
-        file_operation(owner, FOF_ALLOWUNDO.0, |op| {
-            op.RenameItem(&item, pcwstr(&name), None::<&IFileOperationProgressSink>)
-        })
+        let sink = ComObject::new(RenameSink(RefCell::new(None)));
+        let heard: IFileOperationProgressSink = sink.to_interface();
+        file_operation(owner, FOF_ALLOWUNDO.0, |op| op.RenameItem(&item, pcwstr(&name), &heard))?;
+        Ok(sink.0.take().unwrap_or_else(|| new_name.to_os_string())) // the name asked for if Windows said nothing
     }
 }
 

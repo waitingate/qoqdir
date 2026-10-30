@@ -1147,9 +1147,10 @@ impl App {
                     }
                 }
                 WM_APP_RENAME => {
+                    // What is selected then is the name Windows gave the item, which can differ from the typed.
                     let rename = self.st.borrow_mut().rename.take();
-                    if let Some((path, name)) = rename && rename_item(self.wnd, &path, &name).is_ok() {
-                        self.refresh(ViewState::selecting(name));
+                    if let Some((path, name)) = rename && let Ok(made) = rename_item(self.wnd, &path, &name) {
+                        self.refresh(ViewState::selecting(made));
                     }
                     return LRESULT(0);
                 }
