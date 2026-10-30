@@ -209,7 +209,9 @@ What each one is:
   never touches your `qoqdir.ini` or Bookmarks, replaces the clipboard and leaves
   two small files in the Recycle Bin. Each step has a timeout, and a failure
   doesn't stop the run, unless a folder load never ends: a step waits a minute
-  at most for one to finish, then the run stops there with a `FAIL`. The log
+  at most for one to finish, then the run stops there with a `FAIL`. A step's
+  timeout also stretches to that minute while a folder read is out, as a mapped
+  drive that doesn't answer holds This PC's read for 20 s or more. The log
   (`%TEMP%\qoqdir-selftest.log`, for Rust `%TEMP%\qoqdir-rs-selftest.log`) gets
   an `ok` or `FAIL` line as each step ends.
   There is no way to run one step alone.

@@ -3061,7 +3061,9 @@ void App::selfTestTick() {
         // Checked at once, not on the next tick: a step that is done right away costs no wait.
         bool ok = !s.done || s.done();
         ULONGLONG elapsed = GetTickCount64() - t.startTick;
-        if (!ok && elapsed < s.timeoutMs) {
+        // A folder read still out gets the minute a load gets above: a mapped drive that doesn't answer holds This PC's
+        // read for 20 s or more each time Windows tries it again.
+        if (!ok && (elapsed < s.timeoutMs || (loading() && elapsed < 60000))) {
             // The clipboard is shared with every program: the user's own copying may have taken it since. Copy again.
             if (s.copies) s.act();
             return;

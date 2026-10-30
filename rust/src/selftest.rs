@@ -4400,7 +4400,9 @@ impl App {
             Next::Check(done, timeout, again) => {
                 let ok = done(self);
                 let elapsed = step_ms();
-                if !ok && elapsed < timeout {
+                // A folder read still out gets the minute a load gets above: a mapped drive that doesn't answer holds
+                // This PC's read for 20 s or more each time Windows tries it again.
+                if !ok && (elapsed < timeout || (self.is_loading() && elapsed < 60000)) {
                     // The clipboard is shared with every program: the user's own copying may have taken it
                     // since. Copy again.
                     if let Some(act) = again {
