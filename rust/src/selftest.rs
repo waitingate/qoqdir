@@ -67,7 +67,7 @@ use windows::Win32::UI::Shell::{
     StrCmpLogicalW,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    BM_CLICK, CHILDID_SELF, EnumWindows, FindWindowExW, HTCLIENT, OBJID_CLIENT, GCLP_HBRBACKGROUND, GWLP_USERDATA, GetClassLongPtrW, GetWindowLongPtrW, GetWindowTextLengthW, IsWindowVisible,
+    BM_CLICK, CHILDID_SELF, FindWindowExW, HTCLIENT, OBJID_CLIENT, GCLP_HBRBACKGROUND, GWLP_USERDATA, GetClassLongPtrW, GetWindowLongPtrW, GetWindowTextLengthW, IsWindowVisible,
     CreateWindowExW, GetWindowRect, HWND_MESSAGE, WINDOW_EX_STYLE, WINDOW_STYLE,
     MSG, PM_NOREMOVE, PeekMessageW,
     KillTimer, PostMessageW, SW_SHOWMINNOACTIVE, SW_SHOWNOACTIVATE, SetTimer, ShowWindow, WM_APP, WM_CHAR, WM_CLOSE,
@@ -265,19 +265,6 @@ fn noted() -> String {
 
 fn text_of(h: HWND) -> String {
     window_text(h).to_string_lossy().into_owned()
-}
-
-/// The windows on the screen (any program's), to see that an action opened none.
-fn visible_windows() -> Vec<isize> {
-    unsafe extern "system" fn each(h: HWND, p: LPARAM) -> windows::core::BOOL {
-        if unsafe { IsWindowVisible(h) }.as_bool() {
-            unsafe { &mut *(p.0 as *mut Vec<isize>) }.push(h.0 as isize);
-        }
-        true.into()
-    }
-    let mut list = Vec::new();
-    let _ = unsafe { EnumWindows(Some(each), LPARAM(&mut list as *mut Vec<isize> as isize)) };
-    list
 }
 
 /// How long the current step has waited since its act.
@@ -2298,23 +2285,15 @@ impl App {
             },
             |_| KEY_MS.get() < 100,
         );
-        let windows_before = Rc::new(RefCell::new(Vec::new()));
-        let (before_act, before_done) = (windows_before.clone(), windows_before);
         s.add(
             "Alt+Enter in a tab that is not available opens nothing: there is no folder to show properties of",
-            move |a| {
-                *before_act.borrow_mut() = visible_windows();
+            |a| {
+                COUNT.set(a.properties_asked.get());
                 focus(a.list.hwnd());
                 a.press(VK_RETURN, ALT);
             },
-            move |_| {
-                // Still nothing new after a while (the empty list's "" would have opened This PC's System page).
-                if step_ms() < 1500 {
-                    return false;
-                }
-                let before = before_done.borrow();
-                visible_windows().iter().all(|h| before.contains(h))
-            },
+            // Windows is never asked (the empty list's "" would have opened This PC's System page).
+            |a| a.properties_asked.get() == COUNT.get(),
         );
         let reopen_home = move |a: &App| {
             a.with_tab(|t| t.location = Location::dir(dir()));

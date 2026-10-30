@@ -1481,28 +1481,15 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
             selfTest_->note = L"took " + std::to_wstring(int(keyMs)) + L" ms";
         },
         [=, this] { return keyMs < 100; });
-    // The windows on the screen (any program's), to see that an action opened none.
-    auto visibleWindows = [] {
-        std::set<HWND> set;
-        EnumWindows([](HWND h, LPARAM p) -> BOOL {
-            if (IsWindowVisible(h)) reinterpret_cast<std::set<HWND>*>(p)->insert(h);
-            return TRUE;
-        }, reinterpret_cast<LPARAM>(&set));
-        return set;
-    };
-    auto windowsBefore = std::make_shared<std::set<HWND>>();
+    auto propertiesBefore = std::make_shared<int>(0);
     add(L"Alt+Enter in a tab that is not available opens nothing: there is no folder to show properties of",
         [=, this] {
-            *windowsBefore = visibleWindows();
+            *propertiesBefore = propertiesAsked_;
             SetFocus(list_.hwnd());
             selfTestKey(VK_RETURN, false, false, true);
         },
-        [=, this] {
-            // Still nothing new after a while (the empty list's "" would have opened This PC's System page).
-            if (GetTickCount64() - selfTest_->startTick < 1500) return false;
-            std::set<HWND> now = visibleWindows();
-            return std::includes(windowsBefore->begin(), windowsBefore->end(), now.begin(), now.end());
-        });
+        // Windows is never asked (the empty list's "" would have opened This PC's System page).
+        [=, this] { return propertiesAsked_ == *propertiesBefore; });
     add(L"(back to the test folder)", reopenHome, [=, this] { return at(dir); });
     add(L"a shortcut to a folder that is gone says so here (no Windows dialog)",
         [=, this] {

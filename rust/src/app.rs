@@ -290,6 +290,7 @@ pub struct App {
     pub loads_wasted: Cell<u32>, // ...of which a newer load had replaced, yet they read the whole folder (self-test)
     pub uncounted_load: Cell<u32>, // a read the self-test leaves stuck on a network timeout: in neither count
     pub bookmark_notices: Cell<u32>, // changes the Bookmarks watch passed on (self-test)
+    pub properties_asked: Cell<u32>, // Alt+Enters that got as far as asking Windows for the properties (self-test)
     ini: Vec<u16>, // settings file
     ini_values: HashMap<String, String>, // its [Window] section, read once (create)
     pub st: RefCell<State>,
@@ -705,6 +706,7 @@ impl App {
                 loads_wasted: Cell::new(0),
                 uncounted_load: Cell::new(0),
                 bookmark_notices: Cell::new(0),
+                properties_asked: Cell::new(0),
                 ini,
                 ini_values,
                 st: RefCell::new(State {
@@ -1722,6 +1724,7 @@ impl App {
             }
             let (dir, items) = (self.list.location(), self.list.selected_items());
             let menu = if items.is_empty() { item_menu_at(self.wnd, &dir) } else { item_menu(self.wnd, &dir, &items) };
+            self.properties_asked.set(self.properties_asked.get() + 1);
             invoke_verb(self.wnd, menu, "properties");
             return true;
         }

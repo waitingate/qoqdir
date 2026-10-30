@@ -956,6 +956,7 @@ bool App::onKey(const Key& key) {
         if (!list_.shows(tab().path)) return true;
         std::vector<Item> items = list_.selectedItems();
         Com<IContextMenu> menu = items.empty() ? itemMenu(wnd_, list_.dir()) : itemMenu(wnd_, list_.dir(), items);
+        ++propertiesAsked_;
         invokeVerb(wnd_, menu.get(), "properties");
         return true;
     }

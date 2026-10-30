@@ -240,6 +240,7 @@ private:
     int loadsWasted_ = 0;   // ...of which a newer load had replaced, yet they read the whole folder (self-test)
     UINT uncountedLoad_ = 0;   // a read the self-test leaves stuck on a network timeout: in neither count
     int bookmarkNotices_ = 0;   // changes the Bookmarks watch passed on (self-test)
+    int propertiesAsked_ = 0;   // Alt+Enters that got as far as asking Windows for the properties (self-test)
 
     struct Rename {                 // done after the edit box has closed
         std::wstring path, name;
