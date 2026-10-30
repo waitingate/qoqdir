@@ -920,6 +920,22 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
         });
     add(L"(close the other tabs)", [=, this] { closeOtherTabs(1); },   // keeps the test folder's own tab
         oneTabHome);
+    // Other programs broadcast in the WM_APP range, where the window's own messages are: one of those numbers with
+    // nothing in it, as a broadcast has, must not crash it (4.10) or close, switch or move a tab.
+    add(L"(a second tab, the current one)", [=, this] { newTab(dir, true); },
+        [=, this] { return tabs_.size() == 2 && active_ == 1 && at(dir); });
+    add(L"the window's own message numbers, broadcast by another program with nothing in them, close, switch or "
+        L"move no tab",
+        [=, this] {
+            for (UINT msg = WM_APP; msg < WM_APP + 64; ++msg) PostMessageW(wnd_, msg, 0, 0);
+        },
+        [=, this] { return GetTickCount64() - selfTest_->startTick >= 300 && tabs_.size() == 2 && active_ == 1; });
+    add(L"(close it)",
+        [=, this] {
+            closeTab(active_);
+            setMessage(L"");
+        },
+        oneTabHome);
     add(L"a double-click on a tab opens no tab",
         [=, this] {
             RECT r = tabRect(0);

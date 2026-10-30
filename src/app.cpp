@@ -22,6 +22,9 @@ enum : UINT {
     WM_APP_BOOKMARKS, WM_APP_NEWWINDOW, WM_APP_BOOKMARKED, WM_APP_DELETED, WM_APP_COMMAND, WM_APP_TERMINAL,
     WM_APP_WANTICONS
 };
+// The tab bar's own press and close carry this in lParam: their numbers are in the WM_APP range, which other
+// programs broadcast in too. A drag along the bar comes only while the bar holds the mouse.
+constexpr LPARAM kFromTabBar = 0x716F71;
 
 struct CommandDone {   // a typed command's reply from its worker (goToTyped)
     UINT seq;
@@ -111,7 +114,7 @@ LRESULT CALLBACK tabBarProc(HWND h, UINT msg, WPARAM wp, LPARAM lp, UINT_PTR, DW
     case WM_LBUTTONDOWN:
     case WM_LBUTTONDBLCLK:
         if (int index = TabCtrl_HitTest(h, &hit); index >= 0) {
-            if (index != TabCtrl_GetCurSel(h)) SendMessageW(GetParent(h), WM_APP_PRESSTAB, WPARAM(index), 0);
+            if (index != TabCtrl_GetCurSel(h)) SendMessageW(GetParent(h), WM_APP_PRESSTAB, WPARAM(index), kFromTabBar);
             SetCapture(h);   // the drag lasts until the button comes up, even outside the bar
         } else if (msg == WM_LBUTTONDBLCLK) {
             PostMessageW(GetParent(h), WM_COMMAND, MAKEWPARAM(ID_PLUS, BN_CLICKED), 0);
@@ -126,7 +129,7 @@ LRESULT CALLBACK tabBarProc(HWND h, UINT msg, WPARAM wp, LPARAM lp, UINT_PTR, DW
         return 0;
     case WM_MBUTTONUP:
         if (int index = TabCtrl_HitTest(h, &hit); index >= 0)
-            PostMessageW(GetParent(h), WM_APP_CLOSETAB, WPARAM(index), 0);
+            PostMessageW(GetParent(h), WM_APP_CLOSETAB, WPARAM(index), kFromTabBar);
         return 0;
     }
     return DefSubclassProc(h, msg, wp, lp);
@@ -548,13 +551,13 @@ LRESULT App::onMessage(UINT msg, WPARAM wp, LPARAM lp) {
         return 0;
     }
     case WM_APP_CLOSETAB:
-        closeTab(int(wp));
+        if (lp == kFromTabBar) closeTab(int(wp));
         return 0;
     case WM_APP_PRESSTAB:
-        switchTab(int(wp));
+        if (lp == kFromTabBar) switchTab(int(wp));
         return 0;
     case WM_APP_DRAGTAB:
-        dragTab(int(wp), GET_X_LPARAM(lp));
+        if (GetCapture() == tabBar_) dragTab(int(wp), GET_X_LPARAM(lp));
         return 0;
     case WM_MOUSEWHEEL: {   // over the tab bar: switches tabs, up to the left (a touchpad's small steps add up)
         RECT bar{};

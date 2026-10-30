@@ -118,6 +118,9 @@ const WM_APP_DELETED: u32 = WM_APP + 16;
 const WM_APP_COMMAND: u32 = WM_APP + 17;
 const WM_APP_TERMINAL: u32 = WM_APP + 18;
 const WM_APP_WANTICONS: u32 = WM_APP + 19;
+/// The tab bar's own press and close carry this in lParam: their numbers are in the WM_APP range, which other
+/// programs broadcast in too. A drag along the bar comes only while the bar holds the mouse.
+const FROM_TAB_BAR: isize = 0x716F71;
 
 /// A typed command's reply from its worker (go_to_typed).
 struct CommandDone {
@@ -415,7 +418,7 @@ unsafe extern "system" fn tab_bar_proc(h: HWND, msg: u32, wp: WPARAM, lp: LPARAM
         WM_LBUTTONDOWN | WM_LBUTTONDBLCLK => {
             if let Some(index) = tab_at_point() {
                 if send(h, TCM_GETCURSEL, 0, 0) != index as isize {
-                    send(parent, WM_APP_PRESSTAB, index, 0);
+                    send(parent, WM_APP_PRESSTAB, index, FROM_TAB_BAR);
                 }
                 unsafe { SetCapture(h) }; // the drag lasts until the button comes up, even outside the bar
             } else if msg == WM_LBUTTONDBLCLK {
@@ -440,7 +443,7 @@ unsafe extern "system" fn tab_bar_proc(h: HWND, msg: u32, wp: WPARAM, lp: LPARAM
         WM_MBUTTONUP => {
             if let Some(index) = tab_at_point() {
                 unsafe {
-                    let _ = PostMessageW(Some(parent), WM_APP_CLOSETAB, WPARAM(index), LPARAM(0));
+                    let _ = PostMessageW(Some(parent), WM_APP_CLOSETAB, WPARAM(index), LPARAM(FROM_TAB_BAR));
                 }
             }
             return LRESULT(0);
@@ -1122,15 +1125,21 @@ impl App {
                     return LRESULT(0);
                 }
                 WM_APP_CLOSETAB => {
-                    self.close_tab(wp.0);
+                    if lp.0 == FROM_TAB_BAR {
+                        self.close_tab(wp.0);
+                    }
                     return LRESULT(0);
                 }
                 WM_APP_PRESSTAB => {
-                    self.switch_tab(wp.0);
+                    if lp.0 == FROM_TAB_BAR {
+                        self.switch_tab(wp.0);
+                    }
                     return LRESULT(0);
                 }
                 WM_APP_DRAGTAB => {
-                    self.drag_tab(wp.0, point_from(lp).x);
+                    if GetCapture() == self.tab_bar {
+                        self.drag_tab(wp.0, point_from(lp).x);
+                    }
                     return LRESULT(0);
                 }
                 WM_MOUSEWHEEL => {

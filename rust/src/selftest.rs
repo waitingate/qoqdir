@@ -67,7 +67,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
     BM_CLICK, CHILDID_SELF, EnumWindows, FindWindowExW, HTCLIENT, OBJID_CLIENT, GCLP_HBRBACKGROUND, GWLP_USERDATA, GetClassLongPtrW, GetWindowLongPtrW, GetWindowTextLengthW, IsWindowVisible,
     CreateWindowExW, GetWindowRect, HWND_MESSAGE, WINDOW_EX_STYLE, WINDOW_STYLE,
     MSG, PM_NOREMOVE, PeekMessageW,
-    KillTimer, PostMessageW, SW_SHOWMINNOACTIVE, SW_SHOWNOACTIVATE, SetTimer, ShowWindow, WM_CHAR, WM_CLOSE,
+    KillTimer, PostMessageW, SW_SHOWMINNOACTIVE, SW_SHOWNOACTIVATE, SetTimer, ShowWindow, WM_APP, WM_CHAR, WM_CLOSE,
     WM_DEVICECHANGE, WM_DPICHANGED, WM_KEYDOWN, WM_LBUTTONDBLCLK, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONUP, WM_MOUSEMOVE, WM_MOUSEWHEEL,
     WM_NCHITTEST, WM_SYSKEYDOWN, WM_TIMER, PRF_CLIENT, PRF_ERASEBKGND, WM_PRINTCLIENT,
     UIS_CLEAR, UIS_SET, UISF_HIDEFOCUS, WM_QUERYUISTATE, WM_UPDATEUISTATE,
@@ -1475,6 +1475,31 @@ impl App {
         });
         // Keeps the test folder's own tab.
         s.add("(close the other tabs)", |a| a.close_other_tabs(1), one_tab_home);
+        // Other programs broadcast in the WM_APP range, where the window's own messages are: one of those numbers with
+        // nothing in it, as a broadcast has, must not crash it (4.10) or close, switch or move a tab.
+        s.add("(a second tab, the current one)", move |a| a.new_tab(Location::dir(dir()), true), move |a| {
+            a.tabs() == 2 && a.active() == 1 && a.at(&dir())
+        });
+        s.add(
+            "the window's own message numbers, broadcast by another program with nothing in them, close, switch or \
+             move no tab",
+            |a| {
+                for msg in WM_APP..WM_APP + 64 {
+                    unsafe {
+                        let _ = PostMessageW(Some(a.wnd), msg, WPARAM(0), LPARAM(0));
+                    }
+                }
+            },
+            |a| step_ms() >= 300 && a.tabs() == 2 && a.active() == 1,
+        );
+        s.add(
+            "(close it)",
+            |a| {
+                a.close_tab(a.active());
+                a.set_message("");
+            },
+            one_tab_home,
+        );
         s.add(
             "a double-click on a tab opens no tab",
             |a| {
