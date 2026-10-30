@@ -55,8 +55,8 @@ use windows::Win32::UI::Shell::{
     SHCNRF_ShellLevel, SHChangeNotification_Lock, SHChangeNotification_Unlock, SHChangeNotifyDeregister,
     SHChangeNotifyEntry, SHChangeNotifyRegister, SHCreateItemFromParsingName, SHDoDragDrop, SHELLEXECUTEINFOW,
     SHFILEINFOW, SHGFI_DISPLAYNAME, SHGFI_PIDL, SHGFI_SMALLICON, SHGFI_SYSICONINDEX, SHGFI_TYPENAME, SHGFI_USEFILEATTRIBUTES,
-    SHGetDesktopFolder, SHGetFileInfoW, SHGetKnownFolderIDList, SHGetKnownFolderPath, SHParseDisplayName,
-    SHSetInstanceExplorer, ShellExecuteExW, ShellLink,
+    SHGetDesktopFolder, SHGetFileInfoW, SHGetInstanceExplorer, SHGetKnownFolderIDList, SHGetKnownFolderPath,
+    SHParseDisplayName, SHSetInstanceExplorer, ShellExecuteExW, ShellLink,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     AppendMenuW, CreatePopupMenu, DispatchMessageW, GetMenuItemCount, MF_GRAYED, MF_SEPARATOR, MF_STRING, MSG,
@@ -1209,6 +1209,24 @@ impl IDropTarget_Impl for DropTarget_Impl {
 }
 
 // ---------------------------------------------------------------- shell process
+
+/// A hold on the process for a worker that must finish what it writes (saved tabs, a recycle) even when the window
+/// closes: main waits until it is let go (wait_for_shell). None once the app is closing.
+pub fn hold_process() -> Option<ProcessHold> {
+    unsafe { SHGetInstanceExplorer() }.ok().map(|unknown| ProcessHold(unknown.into_raw()))
+}
+
+/// The ShellRef main made, as Windows' own copies take it; let go when dropped.
+pub struct ProcessHold(*mut c_void);
+
+// ShellRef is agile (IAgileObject): any thread may let go of it.
+unsafe impl Send for ProcessHold {}
+
+impl Drop for ProcessHold {
+    fn drop(&mut self) {
+        drop(unsafe { IUnknown::from_raw(self.0) });
+    }
+}
 
 /// Keeps the process alive while Windows finishes copies and Properties dialogs started here (`done`: all released).
 #[implement(windows::Win32::System::Com::IAgileObject)]

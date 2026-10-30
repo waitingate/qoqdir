@@ -150,6 +150,10 @@ Com<IDropTarget> newDropTarget(HWND owner, DropTargetFn target);
 
 // ---------------------------------------------------------------- shell process
 
+// A hold on the process for a worker that must finish what it writes (saved tabs, a recycle) even when the window
+// closes: main waits until it is let go (waitForShell). Empty once the app is closing.
+Com<IUnknown> holdProcess();
+
 // Keeps the process alive while Windows finishes background copies started from the app.
 class ShellProcessRef final : public IUnknown {
 public:

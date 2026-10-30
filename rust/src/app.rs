@@ -77,7 +77,7 @@ use crate::folder::{
 };
 use crate::shell::{
     FolderWatch, IconBatch, OwnItem, acknowledge_change, fill_types, background_menu, bookmark_folder, copy_to_clipboard, delete_items, drag_out, open_in_explorer,
-    shortcut_target, forward_menu_message, in_background, invoke_verb, item_menu, item_menu_at, known_folder, new_drop_target, open_file,
+    shortcut_target, forward_menu_message, hold_process, in_background, invoke_verb, item_menu, item_menu_at, known_folder, new_drop_target, open_file,
     can_paste, copy_text, paste_into, post, rename_item, run_command, save_folder_shortcuts, saved_folders, show_menu,
     start_terminal, terminal_program,
 };
@@ -2490,24 +2490,27 @@ impl App {
         let Some((folder, dir)) = folder.zip(self.tree.bookmarks().path().map(|p| p.to_path_buf())) else { return };
         // On a worker: the tab's folder, and so writing the shortcut for it, may wait on a server that is off, as
         // save_tabs does. The reply shows the tree and the message.
-        let wnd = self.wnd.0 as usize;
+        let (wnd, hold) = (self.wnd.0 as usize, hold_process());
         in_background(move || {
             let ok = bookmark_folder(&dir, &folder);
             let _ = unsafe { PostMessageW(Some(HWND(wnd as _)), WM_APP_BOOKMARKED, WPARAM(usize::from(ok)), LPARAM(0)) };
+            drop(hold);
         });
     }
 
     // ------------------------------------------------------------ saved tabs (Bookmarks\Tabs)
 
     /// Ctrl+S: a shortcut per tab in Bookmarks\Tabs. This and `open_saved_tabs` work on a worker thread: a tab's
-    /// folder may be on a server that is off, and so may Bookmarks.
+    /// folder may be on a server that is off, and so may Bookmarks. A save goes on to its end when the window closes
+    /// meanwhile (hold_process): cut short, it would leave only part of the set.
     fn save_tabs(&self) {
         let folders = self.tab_locations();
         let Some(dir) = self.tree.bookmarks().path().map(|p| p.join("Tabs")) else { return };
-        let wnd = self.wnd.0 as usize;
+        let (wnd, hold) = (self.wnd.0 as usize, hold_process());
         in_background(move || {
             let ok = save_folder_shortcuts(&dir, &folders);
             let _ = unsafe { PostMessageW(Some(HWND(wnd as _)), WM_APP_TABS_SAVED, WPARAM(usize::from(ok)), LPARAM(0)) };
+            drop(hold);
         });
     }
 
@@ -2554,12 +2557,14 @@ impl App {
         // Windows recycles on a worker, so the window stays responsive for a big delete (4.7) and the hang watch
         // stays quiet. The selection is cleared now, keeping the focus on the item that will follow the deleted ones:
         // a second Delete meanwhile acts on nothing (4.6). The reply selects that item once the folder is read again.
+        // Closing the window doesn't stop it (4.9, hold_process).
         self.list.select(&[], view.focus.as_deref());
-        let wnd = self.wnd.0 as usize;
+        let (wnd, hold) = (self.wnd.0 as usize, hold_process());
         in_background(move || {
             let ok = delete_items(HWND(wnd as _), &dir, &items, permanently);
             let view = if ok { Box::into_raw(Box::new((dir, view))) as isize } else { 0 };
             let _ = unsafe { PostMessageW(Some(HWND(wnd as _)), WM_APP_DELETED, WPARAM(usize::from(ok)), LPARAM(view)) };
+            drop(hold);
         });
     }
 

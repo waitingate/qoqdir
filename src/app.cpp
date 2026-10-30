@@ -1481,7 +1481,7 @@ void App::showTabs() {
 void App::bookmarkTab(int index) {
     // On a worker: the tab's folder, and so writing the shortcut for it, may wait on a server that is off, as
     // saveTabs does. The reply shows the tree and the message.
-    inBackground([wnd = wnd_, dir = tree_.bookmarks(), folder = tabs_[size_t(index)].path] {
+    inBackground([wnd = wnd_, dir = tree_.bookmarks(), folder = tabs_[size_t(index)].path, hold = holdProcess()] {
         PostMessageW(wnd, WM_APP_BOOKMARKED, bookmarkFolder(dir, folder), 0);
     });
 }
@@ -1494,9 +1494,11 @@ std::vector<std::wstring> App::tabFolders() const {
     return folders;
 }
 
-// Both work on a worker thread: a tab's folder may be on a server that is off, and so may Bookmarks.
+// Both work on a worker thread: a tab's folder may be on a server that is off, and so may Bookmarks. A save goes on
+// to its end when the window closes meanwhile (holdProcess): cut short, it would leave only part of the set.
 void App::saveTabs() {
-    inBackground([wnd = wnd_, dir = joinPath(tree_.bookmarks(), L"Tabs"), folders = tabFolders()] {
+    inBackground([wnd = wnd_, dir = joinPath(tree_.bookmarks(), L"Tabs"), folders = tabFolders(),
+                  hold = holdProcess()] {
         PostMessageW(wnd, WM_APP_TABS_SAVED, saveFolderShortcuts(dir, folders), 0);
     });
 }
@@ -1530,9 +1532,10 @@ void App::deleteSelection(bool permanently) {
     std::wstring dir = list_.dir();
     // Windows recycles on a worker, so the window stays responsive for a big delete (4.7) and the hang watch stays
     // quiet. The selection is cleared now, keeping the focus on the item that will follow the deleted ones: a second
-    // Delete meanwhile acts on nothing (4.6). The reply selects that item once the folder is read again.
+    // Delete meanwhile acts on nothing (4.6). The reply selects that item once the folder is read again. Closing the
+    // window doesn't stop it (4.9, holdProcess).
     list_.select({}, v.focus);
-    inBackground([wnd = wnd_, dir, items, permanently, v = std::move(v)]() mutable {
+    inBackground([wnd = wnd_, dir, items, permanently, v = std::move(v), hold = holdProcess()]() mutable {
         bool ok = deleteItems(wnd, dir, items, permanently);
         post(wnd, WM_APP_DELETED, ok, std::make_unique<Deleted>(Deleted{dir, std::move(v)}));
     });

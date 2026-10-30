@@ -872,6 +872,12 @@ Com<IDropTarget> newDropTarget(HWND owner, DropTargetFn target) {
 
 // ---------------------------------------------------------------- shell process
 
+Com<IUnknown> holdProcess() {
+    Com<IUnknown> hold;
+    SHGetInstanceExplorer(hold.put());   // the ShellProcessRef main made, as Windows' own copies take it
+    return hold;
+}
+
 ShellProcessRef::ShellProcessRef() : done_(CreateEventW(nullptr, TRUE, FALSE, nullptr)) {
     SHSetInstanceExplorer(this);
 }
