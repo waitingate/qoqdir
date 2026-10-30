@@ -212,6 +212,9 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
         ReleaseStgMedium(&med);
         return tip;
     };
+    // A drag step whose file an earlier failure took away says so and stops, as the Rust version does, rather than
+    // hand the drop target nothing: the run hung there.
+    auto noData = [this] { selfTest_->note = L"no data object"; };
     auto caption = [this](int index) {   // a tab's name as the tab bar shows it
         wchar_t text[128] = {};
         TCITEMW item{};
@@ -1382,6 +1385,7 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
             showUnavailable(tab().path, ERROR_BAD_NETPATH);
             POINTL cursor = tabPoint(active_);
             Com<IDataObject> data = dataObject(wnd_, path(L"file1.txt"));
+            if (!data) return noData();
             DWORD effect = DROPEFFECT_COPY;
             SetFocus(list_.hwnd());
             t0 = nowMs();
@@ -1628,6 +1632,7 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
             newTab(path(L"made"), false);   // a second tab, right of the current one, as from --tab= or a middle-click
             POINTL cursor = tabPoint(active_ + 1);
             Com<IDataObject> data = dataObject(wnd_, path(L"file1.txt"));
+            if (!data) return noData();
             dragEffect = DROPEFFECT_COPY;
             t0 = nowMs();
             tabDrop_->DragEnter(data.get(), MK_LBUTTON, cursor, &dragEffect);
@@ -1646,6 +1651,7 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
         [=, this] {
             POINTL cursor = tabPoint(active_ + 1);
             Com<IDataObject> data = dataObject(wnd_, path(L"file1.txt"));   // what a drag carries
+            if (!data) return noData();
             DWORD effect = DROPEFFECT_COPY;
             tabDrop_->DragEnter(data.get(), MK_LBUTTON, cursor, &effect);
             effect = DROPEFFECT_COPY;
@@ -1666,6 +1672,7 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
             writeFile(path(L"held.txt"));
             POINTL cursor = tabPoint(active_ + 1);
             Com<IDataObject> data = dataObject(wnd_, path(L"held.txt"));
+            if (!data) return noData();
             DWORD any = DROPEFFECT_COPY | DROPEFFECT_MOVE | DROPEFFECT_LINK, effect = any;
             tabDrop_->DragEnter(data.get(), MK_LBUTTON | MK_CONTROL, cursor, &effect);
             effect = any;
@@ -1687,6 +1694,7 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
             writeFile(path(L"into.txt"));
             POINTL cursor = rowPoint(L"sub");
             Com<IDataObject> data = dataObject(wnd_, path(L"into.txt"));
+            if (!data) return noData();
             DWORD effect = DROPEFFECT_COPY;
             listDrop_->DragEnter(data.get(), MK_LBUTTON, cursor, &effect);
             effect = DROPEFFECT_COPY;
@@ -1710,6 +1718,7 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
         L"sub's own, nor a file's row or the tab of the folder sub is in (4.8)",
         [=, this] {
             Com<IDataObject> data = dataObject(wnd_, path(L"sub"));
+            if (!data) return noData();
             DWORD any = DROPEFFECT_COPY | DROPEFFECT_MOVE | DROPEFFECT_LINK, effect = any;
             listDrop_->DragEnter(data.get(), MK_LBUTTON, rowPoint(L"sub"), &effect);
             std::wstring seen = effect == DROPEFFECT_NONE && !rowLit(L"sub") ? L"sub refused" : L"sub taken";
@@ -1736,6 +1745,7 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
         L"is Windows' own, and once the drag has left there is none (5.8)",
         [=, this] {
             Com<IDataObject> data = dataObject(wnd_, path(L"file1.txt"));
+            if (!data) return noData();
             DWORD any = DROPEFFECT_COPY | DROPEFFECT_MOVE | DROPEFFECT_LINK, effect = any;
             listDrop_->DragEnter(data.get(), MK_LBUTTON, rowPoint(L"sub"), &effect);
             std::wstring asking = dragTip(data.get());
@@ -1757,6 +1767,7 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
             POINTL header{r.left + 20, (r.top + r.bottom) / 2};   // over the Name column's title
             // From elsewhere: nothing here refuses it.
             Com<IDataObject> data = dataObject(wnd_, path(L"made\\file1.txt"));
+            if (!data) return noData();
             DWORD effect = DROPEFFECT_COPY | DROPEFFECT_MOVE | DROPEFFECT_LINK;
             listDrop_->DragEnter(data.get(), MK_LBUTTON, header, &effect);
             selfTest_->note = dragTip(data.get()) + (rowLit(list_.at(0).name) ? L", the first row lit" : L"");
@@ -1775,6 +1786,7 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
         L"shown (5.8)",
         [=, this] {
             Com<IDataObject> data = dataObject(wnd_, path(L"made\\file1.txt"));
+            if (!data) return noData();
             DWORD effect = DROPEFFECT_COPY;
             listDrop_->DragEnter(data.get(), MK_LBUTTON, rowPoint(L"vanished.lnk"), &effect);
             selfTest_->note = std::wstring(effect == DROPEFFECT_NONE ? L"refused" : L"taken") +
@@ -2054,6 +2066,7 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
         [=, this] {
             HTREEITEM pc = tree_.lastRoot();
             Com<IDataObject> data = dataObject(wnd_, path(L"file1.txt"));
+            if (!data) return noData();
             dragEffect = DROPEFFECT_COPY;
             treeDrop_->DragEnter(data.get(), MK_LBUTTON, nodePoint(pc), &dragEffect);
             treeDrop_->DragLeave();
@@ -2087,6 +2100,7 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
         [=, this] {
             POINTL shortcut = nodePoint(TreeView_GetNextSibling(tree_.hwnd(), two()));   // "sub", to the folder sub
             Com<IDataObject> data = dataObject(wnd_, path(L"renamed.txt"));   // not in sub yet: Windows would ask
+            if (!data) return noData();
             dragEffect = DROPEFFECT_COPY;
             treeDrop_->DragEnter(data.get(), MK_LBUTTON, shortcut, &dragEffect);
             DWORD effect = DROPEFFECT_COPY;
