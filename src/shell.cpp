@@ -786,9 +786,18 @@ std::vector<std::wstring> draggedPaths(IDataObject* data, DWORD allowed) {
     size_t size = GlobalSize(med.hGlobal);
     if (auto* drop = size > sizeof(DROPFILES) ? static_cast<const char*>(GlobalLock(med.hGlobal)) : nullptr) {
         auto* files = reinterpret_cast<const DROPFILES*>(drop);
-        if (files->fWide && files->pFiles < size) {
-            auto* p = reinterpret_cast<const wchar_t*>(drop + files->pFiles);
-            const wchar_t* end = p + (size - files->pFiles) / sizeof(wchar_t);
+        if (files->pFiles < size) {
+            const char* list = drop + files->pFiles;
+            size_t bytes = size - files->pFiles;
+            // An older program's drag has them in ANSI, in the code page: made UTF-16 in one go, nuls and all.
+            std::wstring ansi;
+            if (!files->fWide) {
+                int n = int(std::min(bytes, size_t(0x7FFFFFFF)));
+                ansi.resize(size_t(std::max(MultiByteToWideChar(CP_ACP, 0, list, n, nullptr, 0), 0)));
+                MultiByteToWideChar(CP_ACP, 0, list, n, ansi.data(), int(ansi.size()));
+            }
+            const wchar_t* p = files->fWide ? reinterpret_cast<const wchar_t*>(list) : ansi.data();
+            const wchar_t* end = p + (files->fWide ? bytes / sizeof(wchar_t) : ansi.size());
             for (const wchar_t* name = p; p < end; name = ++p) {
                 while (p < end && *p) ++p;
                 if (p == end || p == name) break;   // cut short, or the empty name that ends the list

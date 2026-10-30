@@ -14,6 +14,7 @@ use windows::Win32::Foundation::{
     CloseHandle, E_FAIL, E_INVALIDARG, ERROR_CANCELLED, FILETIME, GlobalFree, HANDLE, HWND, LPARAM, LRESULT, MAX_PATH,
     POINT, POINTL, WPARAM,
 };
+use windows::Win32::Globalization::{CP_ACP, MULTI_BYTE_TO_WIDE_CHAR_FLAGS, MultiByteToWideChar};
 use windows::Win32::Storage::FileSystem::{
     FILE_ATTRIBUTE_DIRECTORY, FILE_ATTRIBUTE_NORMAL, FILE_FLAGS_AND_ATTRIBUTES, GetDriveTypeW, SearchPathW,
     WIN32_FIND_DATAW,
@@ -1112,9 +1113,18 @@ fn dragged_paths(data: Option<&IDataObject>, allowed: DROPEFFECT) -> Vec<Locatio
         if !drop.is_null() {
             let files = std::ptr::read_unaligned(drop.cast::<DROPFILES>());
             let start = files.pFiles as usize;
-            if files.fWide.as_bool() && start < size {
+            if start < size {
                 let bytes = std::slice::from_raw_parts(drop.add(start), size - start);
-                let text: Vec<u16> = bytes.as_chunks::<2>().0.iter().map(|&b| u16::from_le_bytes(b)).collect();
+                // An older program's drag has them in ANSI, in the code page: made UTF-16 in one go, nuls and all.
+                let text: Vec<u16> = if files.fWide.as_bool() {
+                    bytes.as_chunks::<2>().0.iter().map(|&b| u16::from_le_bytes(b)).collect()
+                } else {
+                    let plain = MULTI_BYTE_TO_WIDE_CHAR_FLAGS(0);
+                    let n = MultiByteToWideChar(CP_ACP, plain, bytes, None);
+                    let mut wide = vec![0; usize::try_from(n).unwrap_or(0)];
+                    MultiByteToWideChar(CP_ACP, plain, bytes, Some(&mut wide));
+                    wide
+                };
                 let mut names = &text[..];
                 // Each ends in a nul; an empty one ends the list, and one cut short is left out.
                 while let Some(end) = names.iter().position(|&c| c == 0).filter(|&end| end > 0) {

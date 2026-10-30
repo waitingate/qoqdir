@@ -215,6 +215,27 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
     // A drag step whose file an earlier failure took away says so and stops, as the Rust version does, rather than
     // hand the drop target nothing: the run hung there.
     auto noData = [this] { selfTest_->note = L"no data object"; };
+    // What an older program's drag carries: its file list in ANSI (DROPFILES.fWide false), in the code page.
+    auto ansiDrag = [](const std::wstring& p) {
+        Com<IDataObject> data;
+        if (FAILED(SHCreateDataObject(nullptr, 0, nullptr, nullptr, IID_PPV_ARGS(data.put())))) return data;
+        int n = WideCharToMultiByte(CP_ACP, 0, p.c_str(), -1, nullptr, 0, nullptr, nullptr);   // with its zero
+        HGLOBAL h = GlobalAlloc(GHND, sizeof(DROPFILES) + size_t(n) + 1);                      // and the list's
+        if (auto* files = h ? static_cast<DROPFILES*>(GlobalLock(h)) : nullptr) {
+            files->pFiles = sizeof(DROPFILES);
+            WideCharToMultiByte(CP_ACP, 0, p.c_str(), -1, reinterpret_cast<char*>(files + 1), n, nullptr, nullptr);
+            GlobalUnlock(h);
+        }
+        FORMATETC fmt{CF_HDROP, nullptr, DVASPECT_CONTENT, -1, TYMED_HGLOBAL};
+        STGMEDIUM med{};
+        med.tymed = TYMED_HGLOBAL;
+        med.hGlobal = h;
+        if (!h || FAILED(data->SetData(&fmt, &med, TRUE))) {
+            if (h) GlobalFree(h);
+            data.reset();
+        }
+        return data;
+    };
     auto caption = [this](int index) {   // a tab's name as the tab bar shows it
         wchar_t text[128] = {};
         TCITEMW item{};
@@ -1772,6 +1793,16 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
         [=, this] {
             return selfTest_->note == L"sub refused, made taken, file refused, tab refused" && !rowLit(L"made");
         });
+    add(L"the same drag from an older program, whose file list is in ANSI, is refused on sub's own row too (4.8)",
+        [=, this] {
+            Com<IDataObject> data = ansiDrag(path(L"sub"));
+            if (!data) return noData();
+            DWORD effect = DROPEFFECT_COPY | DROPEFFECT_MOVE | DROPEFFECT_LINK;
+            listDrop_->DragEnter(data.get(), MK_LBUTTON, rowPoint(L"sub"), &effect);
+            selfTest_->note = effect == DROPEFFECT_NONE && !rowLit(L"sub") ? L"refused" : L"taken";
+            listDrop_->DragLeave();
+        },
+        [=, this] { return selfTest_->note == L"refused"; });
     // While a drop would ask, the drag's tip says so, with no icon, not Windows' "Move to" with its arrow. With Ctrl
     // held it is the folder's own, which it writes again as the drag moves. No drop here: it would ask (5.8).
     auto tipsRight = std::make_shared<bool>(false);

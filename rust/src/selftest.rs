@@ -15,7 +15,7 @@ use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
 
 use windows::Win32::Foundation::{
-    COLORREF, ERROR_BAD_NETPATH, ERROR_DIRECTORY, HGLOBAL, HWND, LPARAM, POINT, POINTL, RECT, WPARAM,
+    COLORREF, ERROR_BAD_NETPATH, ERROR_DIRECTORY, GlobalFree, HGLOBAL, HWND, LPARAM, POINT, POINTL, RECT, WPARAM,
 };
 use windows::Win32::Graphics::Gdi::{
     COLOR_WINDOW, ClientToScreen, GetMonitorInfoW, GetSysColor, GetSysColorBrush, MONITOR_DEFAULTTONEAREST, MONITORINFO,
@@ -27,13 +27,14 @@ use windows::Win32::Storage::FileSystem::{
     FILE_ATTRIBUTE_HIDDEN, FILE_FLAGS_AND_ATTRIBUTES, GetFileAttributesW, GetLogicalDrives, GetLongPathNameW,
     SetFileAttributesW,
 };
-use windows::Win32::System::Com::{DVASPECT_CONTENT, FORMATETC, IDataObject, TYMED_HGLOBAL};
+use windows::Win32::Globalization::{CP_ACP, WideCharToMultiByte};
+use windows::Win32::System::Com::{DVASPECT_CONTENT, FORMATETC, IDataObject, STGMEDIUM, STGMEDIUM_0, TYMED_HGLOBAL};
 use windows::Win32::System::DataExchange::{
     CloseClipboard, GetClipboardData, GetOpenClipboardWindow, IsClipboardFormatAvailable, OpenClipboard,
     RegisterClipboardFormatW,
 };
 use windows::Win32::System::Diagnostics::Debug::{GetErrorMode, SEM_FAILCRITICALERRORS};
-use windows::Win32::System::Memory::{GlobalLock, GlobalUnlock};
+use windows::Win32::System::Memory::{GHND, GlobalAlloc, GlobalLock, GlobalUnlock};
 use windows::Win32::System::Ole::{
     DROPEFFECT_COPY, DROPEFFECT_LINK, DROPEFFECT_MOVE, DROPEFFECT_NONE, OleSetClipboard, ReleaseStgMedium,
 };
@@ -60,7 +61,8 @@ use windows::Win32::System::Variant::VARIANT;
 use windows::Win32::UI::Accessibility::{AccessibleObjectFromWindow, IAccessible};
 use windows::Win32::UI::Shell::{
     CFSTR_DROPDESCRIPTION, DROPDESCRIPTION, DROPIMAGE_INVALID, DROPIMAGE_NOIMAGE,
-    DROPFILES, FOLDERID_Desktop, FOLDERID_Profile, SHGFI_DISPLAYNAME, SHGFI_SMALLICON, SHGFI_SYSICONINDEX,
+    DROPFILES, FOLDERID_Desktop, FOLDERID_Profile, SHCreateDataObject, SHGFI_DISPLAYNAME, SHGFI_SMALLICON,
+    SHGFI_SYSICONINDEX,
     StrCmpLogicalW,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
@@ -82,7 +84,7 @@ use crate::shell::{
     Terminal, can_paste, command_program, copy_to_clipboard, data_object_at, file_info, in_background, item_menu_at,
     known_folder, paste_into, pidl_from, save_folder_shortcuts, shortcut_target, terminal_program, type_name,
 };
-use windows::core::{Interface, w};
+use windows::core::{Interface, PCSTR, w};
 
 use crate::util::{
     client_rect, focus, from_wide, mul_div, packed, pcwstr, scale, send, set_text, unscale, wide, window_rect,
@@ -394,6 +396,42 @@ fn clipboard_text() -> String {
 fn holds_test_file() -> bool {
     let files = clipboard_files();
     files.len() == 1 && Location::dir(&files[0]).same(&Location::dir(p("file1.txt")))
+}
+
+/// What an older program's drag carries: its file list in ANSI (DROPFILES.fWide false), in the code page.
+fn ansi_drag(path: &Path) -> Option<IDataObject> {
+    const CF_HDROP: u16 = 15;
+    unsafe {
+        let data: IDataObject = SHCreateDataObject(None, None, None::<&IDataObject>).ok()?;
+        let wide: Vec<u16> = path.as_os_str().encode_wide().chain([0]).collect();
+        let size = WideCharToMultiByte(CP_ACP, 0, &wide, None, PCSTR::null(), None);
+        let n = usize::try_from(size).unwrap_or(0); // with its zero
+        let h = GlobalAlloc(GHND, size_of::<DROPFILES>() + n + 1).ok()?; // and the list's
+        let files = GlobalLock(h) as *mut DROPFILES;
+        if !files.is_null() {
+            (*files).pFiles = size_of::<DROPFILES>() as u32;
+            let names = std::slice::from_raw_parts_mut(files.add(1).cast::<u8>(), n);
+            WideCharToMultiByte(CP_ACP, 0, &wide, Some(names), PCSTR::null(), None);
+            let _ = GlobalUnlock(h);
+        }
+        let fmt = FORMATETC {
+            cfFormat: CF_HDROP,
+            ptd: std::ptr::null_mut(),
+            dwAspect: DVASPECT_CONTENT.0,
+            lindex: -1,
+            tymed: TYMED_HGLOBAL.0 as u32,
+        };
+        let med = STGMEDIUM {
+            tymed: TYMED_HGLOBAL.0 as u32,
+            u: STGMEDIUM_0 { hGlobal: h },
+            pUnkForRelease: std::mem::ManuallyDrop::new(None),
+        };
+        if files.is_null() || data.SetData(&fmt, &med, true).is_err() {
+            let _ = GlobalFree(Some(h));
+            return None;
+        }
+        Some(data)
+    }
 }
 
 /// Puts the test's file there again if another program has taken the clipboard since.
@@ -2655,6 +2693,22 @@ impl App {
                 note(seen.join(", "));
             },
             |a| noted() == "sub refused, made taken, file refused, tab refused" && !a.row_lit("made"),
+        );
+        s.add(
+            "the same drag from an older program, whose file list is in ANSI, is refused on sub's own row too (4.8)",
+            |a| {
+                let (Some(data), Some(list)) = (ansi_drag(&p("sub")), a.list_drop.borrow().clone()) else {
+                    return note("no data object or drop target".into());
+                };
+                let mut effect = DROPEFFECT_COPY | DROPEFFECT_MOVE | DROPEFFECT_LINK;
+                unsafe {
+                    let _ = list.DragEnter(&data, MK_LBUTTON, a.row_point("sub"), &mut effect);
+                    let refused = effect == DROPEFFECT_NONE && !a.row_lit("sub");
+                    note((if refused { "refused" } else { "taken" }).into());
+                    let _ = list.DragLeave();
+                }
+            },
+            |_| noted() == "refused",
         );
         // While a drop would ask, the drag's tip says so, with no icon, not Windows' "Move to" with its arrow. With
         // Ctrl held it is the folder's own, which it writes again as the drag moves. No drop here: it would ask (5.8).
