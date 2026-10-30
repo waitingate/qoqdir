@@ -482,7 +482,9 @@ buttons, and the filter box, has a tooltip that names it with its key ("Back
   bar says "N item(s) copied" or "N item(s) cut".
 - Delete goes to the Recycle Bin without a question; Shift+Delete deletes for
   good after Windows' question.
-- Rename: F2 (5.4).
+- Rename: F2 (5.4). On a name already taken Windows asks, as in Explorer, whether
+  to use "b (2).txt", and it asks about a changed extension too. The self-test
+  never shows a box that waits (7.2), so those are checked by hand.
 - New folder: Ctrl+Shift+N creates "New folder" (or "New folder (2)" and so on),
   selects it and starts renaming it.
 - Context menus: right-click on items gives Windows' full context menu for the

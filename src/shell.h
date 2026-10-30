@@ -63,8 +63,9 @@ void pasteInto(HWND owner, const std::wstring& dir, bool shortcuts = false);   /
 bool canPaste();   // the clipboard holds something Paste puts in a folder
 // False when nothing was deleted: the user said No to Windows' question, or it failed.
 bool deleteItems(HWND owner, const std::wstring& dir, const std::vector<Item>& items, bool permanently);
-// The name the item has now, which Windows can make other than newName: "b (2).txt" when b.txt is taken (it asks
-// first), and no trailing spaces. None when it failed or the user said No.
+// Windows' own rename, Explorer's: it asks before "b (2).txt" when b.txt is taken, where IFileOperation::RenameItem
+// fails with "The parameter is incorrect", and asks about a changed extension too. The name the item has now, which
+// can differ from newName (that one, or no trailing spaces). None when it failed or the user said No.
 std::optional<std::wstring> renameItem(HWND owner, const std::wstring& path, const std::wstring& newName);
 void openFile(HWND owner, const std::wstring& path);
 // Explorer on the folder, or Windows Search scoped to it: what Qoqdir leaves to Explorer (thumbnails, searching

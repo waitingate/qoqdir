@@ -386,53 +386,21 @@ bool deleteItems(HWND owner, const std::wstring& dir, const std::vector<Item>& i
     return SUCCEEDED(fileOperation(owner, flags, [&](IFileOperation* op) { return op->DeleteItems(obj.get()); }));
 }
 
-namespace {
-
-// Hears the name a rename gave its item (renameItem).
-class RenameSink final : public Unknown<IFileOperationProgressSink> {
-public:
-    std::wstring made;   // empty until Windows reports the rename done
-
-    HRESULT STDMETHODCALLTYPE PostRenameItem(DWORD, IShellItem*, LPCWSTR name, HRESULT hr, IShellItem*) override {
-        if (SUCCEEDED(hr) && name) made = name;   // the name itself: the new item's keeps any trailing spaces
-        return S_OK;
-    }
-    // Nothing else is of interest here.
-    HRESULT STDMETHODCALLTYPE StartOperations() override { return S_OK; }
-    HRESULT STDMETHODCALLTYPE FinishOperations(HRESULT) override { return S_OK; }
-    HRESULT STDMETHODCALLTYPE PreRenameItem(DWORD, IShellItem*, LPCWSTR) override { return S_OK; }
-    HRESULT STDMETHODCALLTYPE PreMoveItem(DWORD, IShellItem*, IShellItem*, LPCWSTR) override { return S_OK; }
-    HRESULT STDMETHODCALLTYPE PostMoveItem(DWORD, IShellItem*, IShellItem*, LPCWSTR, HRESULT, IShellItem*) override {
-        return S_OK;
-    }
-    HRESULT STDMETHODCALLTYPE PreCopyItem(DWORD, IShellItem*, IShellItem*, LPCWSTR) override { return S_OK; }
-    HRESULT STDMETHODCALLTYPE PostCopyItem(DWORD, IShellItem*, IShellItem*, LPCWSTR, HRESULT, IShellItem*) override {
-        return S_OK;
-    }
-    HRESULT STDMETHODCALLTYPE PreDeleteItem(DWORD, IShellItem*) override { return S_OK; }
-    HRESULT STDMETHODCALLTYPE PostDeleteItem(DWORD, IShellItem*, HRESULT, IShellItem*) override { return S_OK; }
-    HRESULT STDMETHODCALLTYPE PreNewItem(DWORD, IShellItem*, LPCWSTR) override { return S_OK; }
-    HRESULT STDMETHODCALLTYPE PostNewItem(DWORD, IShellItem*, LPCWSTR, LPCWSTR, DWORD, HRESULT, IShellItem*) override {
-        return S_OK;
-    }
-    HRESULT STDMETHODCALLTYPE UpdateProgress(UINT, UINT) override { return S_OK; }
-    HRESULT STDMETHODCALLTYPE ResetTimer() override { return S_OK; }
-    HRESULT STDMETHODCALLTYPE PauseTimer() override { return S_OK; }
-    HRESULT STDMETHODCALLTYPE ResumeTimer() override { return S_OK; }
-};
-
-}  // namespace
-
 std::optional<std::wstring> renameItem(HWND owner, const std::wstring& path, const std::wstring& newName) {
-    Com<IShellItem> item;
-    if (FAILED(SHCreateItemFromParsingName(path.c_str(), nullptr, IID_PPV_ARGS(item.put())))) return std::nullopt;
-    Com<RenameSink> sink;
-    *sink.put() = new RenameSink;
-    HRESULT hr = fileOperation(owner, FOF_ALLOWUNDO, [&](IFileOperation* op) {
-        return op->RenameItem(item.get(), newName.c_str(), sink.get());
-    });
-    if (FAILED(hr)) return std::nullopt;
-    return sink->made.empty() ? newName : sink->made;   // the name asked for if Windows said nothing
+    Pidl pidl = pidlFromPath(path);
+    Com<IShellFolder> parent;
+    PCUITEMID_CHILD child = nullptr;
+    if (!pidl || FAILED(SHBindToParent(pidl.get(), IID_PPV_ARGS(parent.put()), &child))) return std::nullopt;
+    constexpr SHGDNF literal = SHGDN_INFOLDER | SHGDN_FORPARSING;   // as typed, whether Explorer hides extensions or not
+    PITEMID_CHILD renamed = nullptr;
+    if (FAILED(parent->SetNameOf(owner, child, newName.c_str(), literal, &renamed))) return std::nullopt;
+    ChildPidl made(renamed);
+    STRRET name{};
+    wchar_t text[MAX_PATH];
+    if (!made || FAILED(parent->GetDisplayNameOf(made.get(), literal, &name)) ||
+        FAILED(StrRetToBufW(&name, made.get(), text, MAX_PATH)))
+        return newName;   // the name asked for if Windows said nothing
+    return text;
 }
 
 void openFile(HWND owner, const std::wstring& path) {

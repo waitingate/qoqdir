@@ -41,7 +41,7 @@ use windows::Win32::System::Threading::{
 use windows::Win32::System::WindowsProgramming::{DRIVE_NO_ROOT_DIR, DRIVE_REMOTE};
 use windows::Win32::UI::Controls::HIMAGELIST;
 use windows::Win32::UI::Input::KeyboardAndMouse::{VK_CONTROL, VK_SHIFT};
-use windows::Win32::UI::Shell::Common::ITEMIDLIST;
+use windows::Win32::UI::Shell::Common::{ITEMIDLIST, STRRET};
 use windows::Win32::UI::Shell::{
     CFSTR_DROPDESCRIPTION, DROPDESCRIPTION, DROPFILES, DROPIMAGE_INVALID, DROPIMAGE_NOIMAGE, DROPIMAGETYPE,
     ASSOCF_OPEN_BYEXENAME, ASSOCSTR_EXECUTABLE, AssocQueryStringW,
@@ -49,15 +49,15 @@ use windows::Win32::UI::Shell::{
     CMINVOKECOMMANDINFO, CMINVOKECOMMANDINFOEX, CLSID_DragDropHelper, FOF_ALLOWUNDO,
     FOF_NOCONFIRMATION, FOF_WANTNUKEWARNING, FOFX_RECYCLEONDELETE, FOLDERID_ComputerFolder, FileOperation,
     GCS_VERBW, IContextMenu, IContextMenu2, IContextMenu3, IDropTargetHelper, IFileOperation,
-    IFileOperationProgressSink, IFileOperationProgressSink_Impl, IFileSystemBindData, IFileSystemBindData_Impl,
+    IFileSystemBindData, IFileSystemBindData_Impl,
     ILFindLastID, ILIsEqual, IShellFolder,
-    IShellItem, IShellLinkW, KF_FLAG_DEFAULT, STR_FILE_SYS_BIND_DATA, SLR_NO_UI, SLR_NOLINKINFO, SLR_NOSEARCH,
+    IShellLinkW, KF_FLAG_DEFAULT, STR_FILE_SYS_BIND_DATA, SLR_NO_UI, SLR_NOLINKINFO, SLR_NOSEARCH,
     SLR_NOTRACK, SLR_NOUPDATE, SEE_MASK_FLAG_NO_UI, SEE_MASK_NOASYNC,
-    SHBindToParent, SHCNE_ATTRIBUTES, SHCNE_CREATE, SHCNE_DELETE, SHCNE_DRIVEADD,
+    SHBindToParent, SHGDN_FORPARSING, SHGDN_INFOLDER, SHGDNF, StrRetToBufW, SHCNE_ATTRIBUTES, SHCNE_CREATE, SHCNE_DELETE, SHCNE_DRIVEADD,
     SHCNE_DRIVEREMOVED, SHCNE_MEDIAINSERTED, SHCNE_MEDIAREMOVED, SHCNE_MKDIR, SHCNE_RENAMEFOLDER,
     SHCNE_RENAMEITEM, SHCNE_RMDIR, SHCNE_UPDATEDIR, SHCNE_UPDATEITEM, SHCNRF_InterruptLevel, SHCNRF_NewDelivery,
     SHCNRF_ShellLevel, SHChangeNotification_Lock, SHChangeNotification_Unlock, SHChangeNotifyDeregister,
-    SHChangeNotifyEntry, SHChangeNotifyRegister, SHCreateItemFromParsingName, SHDoDragDrop, SHELLEXECUTEINFOW,
+    SHChangeNotifyEntry, SHChangeNotifyRegister, SHDoDragDrop, SHELLEXECUTEINFOW,
     SHFILEINFOW, SHGFI_DISPLAYNAME, SHGFI_PIDL, SHGFI_SMALLICON, SHGFI_SYSICONINDEX, SHGFI_TYPENAME, SHGFI_USEFILEATTRIBUTES,
     SHGetDesktopFolder, SHGetFileInfoW, SHGetInstanceExplorer, SHGetKnownFolderIDList, SHGetKnownFolderPath,
     SHParseDisplayName, SHSetInstanceExplorer, ShellExecuteExW, ShellLink,
@@ -68,7 +68,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
     TPM_RIGHTBUTTON, TrackPopupMenuEx, TranslateMessage,
 };
 use windows::core::{
-    ComObject, GUID, HRESULT, IUnknown, Interface, PCSTR, PCWSTR, PSTR, PWSTR, Ref, Result, implement, s, w,
+    GUID, HRESULT, IUnknown, Interface, PCSTR, PCWSTR, PSTR, PWSTR, Ref, Result, implement, s, w,
 };
 
 use crate::folder::{
@@ -549,101 +549,24 @@ pub fn delete_items(owner: HWND, dir: &Location, items: &[Item], permanently: bo
     file_operation(owner, flags, |op| unsafe { op.DeleteItems(&obj) }).is_ok()
 }
 
-/// Hears the name a rename gave its item (rename_item).
-#[implement(IFileOperationProgressSink)]
-struct RenameSink(RefCell<Option<OsString>>); // None until Windows reports the rename done
-
-impl IFileOperationProgressSink_Impl for RenameSink_Impl {
-    fn PostRenameItem(&self, _: u32, _: Ref<IShellItem>, name: &PCWSTR, hr: HRESULT, _: Ref<IShellItem>) -> Result<()> {
-        if hr.is_ok() && !name.is_null() {
-            // The name itself: the new item's keeps any trailing spaces.
-            *self.0.borrow_mut() = Some(from_wide(unsafe { name.as_wide() }));
-        }
-        Ok(())
-    }
-    // Nothing else is of interest here.
-    fn StartOperations(&self) -> Result<()> {
-        Ok(())
-    }
-    fn FinishOperations(&self, _: HRESULT) -> Result<()> {
-        Ok(())
-    }
-    fn PreRenameItem(&self, _: u32, _: Ref<IShellItem>, _: &PCWSTR) -> Result<()> {
-        Ok(())
-    }
-    fn PreMoveItem(&self, _: u32, _: Ref<IShellItem>, _: Ref<IShellItem>, _: &PCWSTR) -> Result<()> {
-        Ok(())
-    }
-    fn PostMoveItem(
-        &self,
-        _: u32,
-        _: Ref<IShellItem>,
-        _: Ref<IShellItem>,
-        _: &PCWSTR,
-        _: HRESULT,
-        _: Ref<IShellItem>,
-    ) -> Result<()> {
-        Ok(())
-    }
-    fn PreCopyItem(&self, _: u32, _: Ref<IShellItem>, _: Ref<IShellItem>, _: &PCWSTR) -> Result<()> {
-        Ok(())
-    }
-    fn PostCopyItem(
-        &self,
-        _: u32,
-        _: Ref<IShellItem>,
-        _: Ref<IShellItem>,
-        _: &PCWSTR,
-        _: HRESULT,
-        _: Ref<IShellItem>,
-    ) -> Result<()> {
-        Ok(())
-    }
-    fn PreDeleteItem(&self, _: u32, _: Ref<IShellItem>) -> Result<()> {
-        Ok(())
-    }
-    fn PostDeleteItem(&self, _: u32, _: Ref<IShellItem>, _: HRESULT, _: Ref<IShellItem>) -> Result<()> {
-        Ok(())
-    }
-    fn PreNewItem(&self, _: u32, _: Ref<IShellItem>, _: &PCWSTR) -> Result<()> {
-        Ok(())
-    }
-    fn PostNewItem(
-        &self,
-        _: u32,
-        _: Ref<IShellItem>,
-        _: &PCWSTR,
-        _: &PCWSTR,
-        _: u32,
-        _: HRESULT,
-        _: Ref<IShellItem>,
-    ) -> Result<()> {
-        Ok(())
-    }
-    fn UpdateProgress(&self, _: u32, _: u32) -> Result<()> {
-        Ok(())
-    }
-    fn ResetTimer(&self) -> Result<()> {
-        Ok(())
-    }
-    fn PauseTimer(&self) -> Result<()> {
-        Ok(())
-    }
-    fn ResumeTimer(&self) -> Result<()> {
-        Ok(())
-    }
-}
-
-/// The name the item has now, which Windows can make other than new_name: "b (2).txt" when b.txt is taken (it
-/// asks first), and no trailing spaces. An error when it failed or the user said No.
+/// Windows' own rename, Explorer's: it asks before "b (2).txt" when b.txt is taken, where IFileOperation::RenameItem
+/// fails with "The parameter is incorrect", and asks about a changed extension too. The name the item has now, which
+/// can differ from new_name (that one, or no trailing spaces). An error when it failed or the user said No.
 pub fn rename_item(owner: HWND, path: &Path, new_name: &OsStr) -> Result<OsString> {
+    let pidl = pidl_from(&Location::dir(path)).ok_or(E_FAIL)?;
+    // As typed, whether Explorer hides extensions or not.
+    let literal = SHGDNF(SHGDN_INFOLDER.0 | SHGDN_FORPARSING.0);
     unsafe {
-        let item: IShellItem = SHCreateItemFromParsingName(pcwstr(&wide(path)), None::<&IBindCtx>)?;
-        let name = wide(new_name);
-        let sink = ComObject::new(RenameSink(RefCell::new(None)));
-        let heard: IFileOperationProgressSink = sink.to_interface();
-        file_operation(owner, FOF_ALLOWUNDO.0, |op| op.RenameItem(&item, pcwstr(&name), &heard))?;
-        Ok(sink.0.take().unwrap_or_else(|| new_name.to_os_string())) // the name asked for if Windows said nothing
+        let parent: IShellFolder = SHBindToParent(pidl.0, None)?;
+        let mut renamed: *mut ITEMIDLIST = std::ptr::null_mut();
+        parent.SetNameOf(Some(owner), ILFindLastID(pidl.0), pcwstr(&wide(new_name)), literal, Some(&mut renamed))?;
+        let made = Pidl(renamed);
+        let mut name = STRRET::default();
+        let mut text = [0u16; MAX_PATH as usize];
+        let told = !made.0.is_null()
+            && parent.GetDisplayNameOf(made.0, literal, &mut name).is_ok()
+            && StrRetToBufW(&mut name, Some(made.0), &mut text).is_ok();
+        Ok(if told { from_wide(&text) } else { new_name.to_os_string() }) // the name asked for if Windows said nothing
     }
 }
 
