@@ -1036,6 +1036,13 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
             TabCtrl_SetCurFocus(tabBar_, 1);   // on plain tabs this selects, and notifies the window as a click would
         },
         [=, this] { return active_ == 1 && at(path(L"sub")); });
+    add(L"a tab change that leaves no tab selected keeps the current tab, which shows as selected again",
+        [=, this] {
+            TabCtrl_SetCurSel(tabBar_, -1);   // none, as the control can be left
+            NMHDR nm{tabBar_, UINT_PTR(GetDlgCtrlID(tabBar_)), UINT(TCN_SELCHANGE)};
+            SendMessageW(wnd_, WM_NOTIFY, nm.idFrom, LPARAM(&nm));
+        },
+        [=, this] { return active_ == 1 && TabCtrl_GetCurSel(tabBar_) == 1 && at(path(L"sub")); });
     add(L"(close that tab)", [=, this] { closeTab(1); }, oneTabHome);
     // What Windows sends when the window reaches a monitor with another scaling: the dots per inch there, and where
     // the window goes.

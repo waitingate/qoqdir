@@ -47,7 +47,8 @@ use windows::Win32::UI::Controls::{
     EM_SETSEL, EM_GETSEL, EM_REPLACESEL, HTREEITEM, LVIF_IMAGE, LVIR_LABEL, LVITEMW, LVM_ENSUREVISIBLE, LVM_GETBKCOLOR, LVM_GETCOUNTPERPAGE,
     LVM_GETTEXTBKCOLOR, TVM_GETBKCOLOR,
     LVM_GETITEMRECT, LVM_GETITEMW, TCIF_TEXT, TCITEMW,
-    TCM_GETCURSEL, TCM_GETITEMCOUNT, TCM_GETITEMRECT, TCM_GETITEMW, TCM_SETCURFOCUS, UPDOWN_CLASSW,
+    NMHDR, TCM_GETCURSEL, TCM_GETITEMCOUNT, TCM_GETITEMRECT, TCM_GETITEMW, TCM_SETCURFOCUS, TCM_SETCURSEL,
+    TCN_SELCHANGE, UPDOWN_CLASSW,
     TVE_EXPAND, TVGN_CARET, TVHITTESTINFO, TVHT_ONITEMBUTTON, TVIF_CHILDREN,
     TVIF_IMAGE,
     TVIF_TEXT, TVIS_EXPANDED, TVITEMW, TVM_EXPAND, TVM_GETCOUNT, TVM_GETINDENT, TVM_GETITEMRECT, TVM_GETITEMSTATE,
@@ -71,7 +72,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
     MSG, PM_NOREMOVE, PeekMessageW,
     KillTimer, PostMessageW, SW_SHOWMINNOACTIVE, SW_SHOWNOACTIVATE, SetTimer, ShowWindow, WM_APP, WM_CHAR, WM_CLOSE,
     WM_DEVICECHANGE, WM_DPICHANGED, WM_KEYDOWN, WM_LBUTTONDBLCLK, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONUP, WM_MOUSEMOVE, WM_MOUSEWHEEL,
-    WM_NCHITTEST, WM_SYSKEYDOWN, WM_TIMER, PRF_CLIENT, PRF_ERASEBKGND, WM_PRINTCLIENT,
+    WM_NCHITTEST, WM_NOTIFY, WM_SYSKEYDOWN, WM_TIMER, PRF_CLIENT, PRF_ERASEBKGND, WM_PRINTCLIENT,
     UIS_CLEAR, UIS_SET, UISF_HIDEFOCUS, WM_QUERYUISTATE, WM_UPDATEUISTATE,
 };
 
@@ -1657,6 +1658,15 @@ impl App {
                 send(a.tab_bar, TCM_SETCURFOCUS, 1, 0); // on plain tabs this selects, and notifies the window as a click would
             },
             |a| a.active() == 1 && a.at(&p("sub")),
+        );
+        s.add(
+            "a tab change that leaves no tab selected keeps the current tab, which shows as selected again",
+            |a| {
+                send(a.tab_bar, TCM_SETCURSEL, usize::MAX, 0); // none (-1), as the control can be left
+                let nm = NMHDR { hwndFrom: a.tab_bar, idFrom: 0, code: TCN_SELCHANGE };
+                send(a.wnd, WM_NOTIFY, 0, &nm as *const _ as isize);
+            },
+            |a| a.active() == 1 && send(a.tab_bar, TCM_GETCURSEL, 0, 0) == 1 && a.at(&p("sub")),
         );
         s.add("(close that tab)", |a| a.close_tab(1), one_tab_home);
         // What Windows sends when the window reaches a monitor with another scaling: the dots per inch there, and where

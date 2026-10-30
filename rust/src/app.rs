@@ -1388,7 +1388,8 @@ impl App {
         }
         if from == self.tab_bar {
             if code == TCN_SELCHANGE {
-                self.switch_tab(send(self.tab_bar, TCM_GETCURSEL, 0, 0).max(0) as usize);
+                // None selected (-1) is out of range, as in the C++ version: the current tab shows as selected again.
+                self.switch_tab(usize::try_from(send(self.tab_bar, TCM_GETCURSEL, 0, 0)).unwrap_or(usize::MAX));
             }
             if code == NM_RCLICK {
                 self.on_tab_menu();
@@ -1404,9 +1405,10 @@ impl App {
                 return;
             }
             if keyboard {
+                // Under the focused row's name; with none, at the list's corner, as in the C++ version.
                 let mut r = RECT { left: LVIR_LABEL as i32, ..Default::default() };
-                let row = self.list.focused().unwrap_or(0);
-                pt = if send(self.list.hwnd(), LVM_GETITEMRECT, row, &mut r as *mut _ as isize) != 0 {
+                let label = |row| send(self.list.hwnd(), LVM_GETITEMRECT, row, &mut r as *mut _ as isize) != 0;
+                pt = if self.list.focused().is_some_and(label) {
                     POINT { x: r.left, y: r.bottom }
                 } else {
                     POINT::default()
