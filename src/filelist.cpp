@@ -162,6 +162,14 @@ int FileList::iconOf(const Item& it) const {
 
 std::vector<int> FileList::selection() const {
     std::vector<int> rows;
+    // None or all need no walk over the rows, a message for each: all is common (Ctrl+A).
+    int selected = int(ListView_GetSelectedCount(lv_)), items = ListView_GetItemCount(lv_);
+    if (selected == 0) return rows;
+    if (selected == items && items <= count()) {
+        rows.reserve(size_t(items));
+        for (int i = 0; i < items; ++i) rows.push_back(i);
+        return rows;
+    }
     for (int i = ListView_GetNextItem(lv_, -1, LVNI_SELECTED); i >= 0; i = ListView_GetNextItem(lv_, i, LVNI_SELECTED))
         if (i < count()) rows.push_back(i);
     return rows;

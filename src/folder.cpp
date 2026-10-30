@@ -19,9 +19,15 @@ bool equalNoCase(const wchar_t* a, int an, const wchar_t* b, int bn) {
 
 // Relative to the current folder, with "." and ".." resolved; the path itself if Windows cannot.
 std::wstring fullPath(const std::wstring& p) {
-    std::wstring buf(32768, L'\0');
-    DWORD n = GetFullPathNameW(p.c_str(), DWORD(buf.size()), buf.data(), nullptr);
-    return n > 0 && n < buf.size() ? buf.substr(0, n) : p;
+    // Most paths fit on the stack; a longer one gets the size Windows asks for (with its terminating zero), not 64 KB
+    // for every path, which a drag of 10,000 files had to fill one by one.
+    wchar_t small[MAX_PATH];
+    DWORD n = GetFullPathNameW(p.c_str(), MAX_PATH, small, nullptr);
+    if (n > 0 && n < MAX_PATH) return std::wstring(small, n);
+    if (n == 0) return p;
+    std::wstring buf(n, L'\0');
+    DWORD m = GetFullPathNameW(p.c_str(), n, buf.data(), nullptr);
+    return m > 0 && m < n ? buf.substr(0, m) : p;
 }
 
 // Pointer to the extension inside name (".txt"), or to the terminating zero.
@@ -289,11 +295,18 @@ namespace {
 // comparisons a 10,000-file sort makes.
 std::string sortKey(const std::wstring& s) {
     constexpr DWORD flags = LCMAP_SORTKEY | NORM_IGNORECASE | SORT_DIGITSASNUMBERS;
-    int n = LCMapStringEx(LOCALE_NAME_USER_DEFAULT, flags, s.c_str(), int(s.size()), nullptr, 0, nullptr, nullptr, 0);
-    std::string key(size_t(std::max(n, 0)), '\0');
-    if (n > 0)
-        LCMapStringEx(LOCALE_NAME_USER_DEFAULT, flags, s.c_str(), int(s.size()), reinterpret_cast<LPWSTR>(key.data()), n,
-                      nullptr, nullptr, 0);
+    auto map = [&](void* to, int bytes) {   // with LCMAP_SORTKEY the sizes count bytes
+        return LCMapStringEx(LOCALE_NAME_USER_DEFAULT, flags, s.c_str(), int(s.size()), static_cast<LPWSTR>(to), bytes,
+                             nullptr, nullptr, 0);
+    };
+    // First into a buffer on the stack, which holds most names' keys: asking Windows for the size first costs as much
+    // as the key itself.
+    wchar_t small[256];
+    if (int n = map(small, int(sizeof small)); n > 0)
+        return std::string(reinterpret_cast<const char*>(small), size_t(n));
+    int n = std::max(map(nullptr, 0), 0);
+    std::string key(size_t(n), '\0');
+    if (n > 0) map(key.data(), n);
     return key;
 }
 }  // namespace

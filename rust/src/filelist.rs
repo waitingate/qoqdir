@@ -17,7 +17,8 @@ use windows::Win32::UI::Controls::{
     HDI_FORMAT, HDITEMW, HDS_FLAT, HDF_SORTDOWN, HDF_SORTUP, HDM_GETITEMW, HDM_SETITEMW, LIST_VIEW_ITEM_STATE_FLAGS,
     LVCF_FMT, LVCF_TEXT, LVCF_WIDTH, LVCFMT_LEFT, LVCFMT_RIGHT, LVCOLUMNW, LVIF_IMAGE, LVIF_TEXT, LVIR_BOUNDS,
     LVIS_FOCUSED, LVIS_SELECTED, LVITEMW, LVM_CANCELEDITLABEL, LVM_EDITLABELW, LVM_ENSUREVISIBLE, LVM_GETCOLUMNWIDTH,
-    LVM_GETEDITCONTROL, LVM_GETHEADER, LVM_GETITEMRECT, LVM_GETNEXTITEM, LVM_GETTOPINDEX, LVM_INSERTCOLUMNW,
+    LVM_GETEDITCONTROL, LVM_GETHEADER, LVM_GETITEMCOUNT, LVM_GETITEMRECT, LVM_GETNEXTITEM, LVM_GETSELECTEDCOUNT,
+    LVM_GETTOPINDEX, LVM_INSERTCOLUMNW,
     LVM_SCROLL, LVM_SETCOLUMNWIDTH, LVM_SETEXTENDEDLISTVIEWSTYLE, LVM_SETIMAGELIST, LVM_SETITEMCOUNT,
     LVM_SETITEMSTATE, LVM_SETSELECTIONMARK, LVN_BEGINLABELEDITW, LVN_COLUMNCLICK, LVN_GETDISPINFOW,
     LVN_ODFINDITEMW, LVNI_FOCUSED, LVNI_SELECTED, LVS_EDITLABELS, LVS_EX_DOUBLEBUFFER, LVS_EX_FULLROWSELECT,
@@ -371,6 +372,15 @@ impl FileList {
 
     pub fn selection(&self) -> Vec<usize> {
         let count = self.count();
+        // None or all need no walk over the rows, a message for each: all is common (Ctrl+A).
+        let selected = send(self.hwnd, LVM_GETSELECTEDCOUNT, 0, 0) as usize;
+        let items = send(self.hwnd, LVM_GETITEMCOUNT, 0, 0) as usize;
+        if selected == 0 {
+            return Vec::new();
+        }
+        if selected == items && items <= count {
+            return (0..items).collect();
+        }
         let mut rows = Vec::new();
         let mut i = send(self.hwnd, LVM_GETNEXTITEM, usize::MAX, LVNI_SELECTED as isize);
         while i >= 0 {

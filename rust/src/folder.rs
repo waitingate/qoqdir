@@ -226,12 +226,23 @@ pub fn normalize(text: &OsStr) -> Location {
         w.push(b'\\' as u16);
     }
     if is_absolute_path(&OsString::from_wide(&w)) {
+        // Resolves "." and "..". Most paths fit on the stack; a longer one gets the size Windows asks for (with its
+        // terminating zero), not 64 KB for every path, which a drag of 10,000 files had to fill one by one.
         let src: Vec<u16> = w.iter().copied().chain(Some(0)).collect();
-        let mut buf = vec![0u16; 32768];
-        let n = unsafe { windows::Win32::Storage::FileSystem::GetFullPathNameW(pcwstr(&src), Some(&mut buf), None) }
-            as usize;
-        if n > 0 && n < buf.len() {
-            w = buf[..n].to_vec(); // resolves "." and ".."
+        let full = |buf: &mut [u16]| {
+            let n = unsafe { windows::Win32::Storage::FileSystem::GetFullPathNameW(pcwstr(&src), Some(buf), None) };
+            n as usize
+        };
+        let mut small = [0u16; 260];
+        let n = full(&mut small);
+        if n > 0 && n < small.len() {
+            w = small[..n].to_vec();
+        } else if n > 0 {
+            let mut buf = vec![0u16; n];
+            let m = full(&mut buf);
+            if m > 0 && m < buf.len() {
+                w = buf[..m].to_vec();
+            }
         }
     }
     if w.len() >= 2 && w[1] == b':' as u16 && (b'a' as u16..=b'z' as u16).contains(&w[0]) {
@@ -536,13 +547,21 @@ impl SortKey {
 fn sort_key(text: &OsStr) -> Vec<u8> {
     let text: Vec<u16> = text.encode_wide().collect();
     let flags = LCMAP_SORTKEY | NORM_IGNORECASE.0 | SORT_DIGITSASNUMBERS.0;
-    // With LCMAP_SORTKEY the sizes count bytes: a buffer of n u16s holds the n-byte key.
+    // With LCMAP_SORTKEY the sizes count bytes: a buffer of n u16s holds the n-byte key, at its start.
+    let key = |buf: &[u16], n: usize| unsafe { std::slice::from_raw_parts(buf.as_ptr().cast::<u8>(), n) }.to_vec();
+    // First into a buffer on the stack, which holds most names' keys: asking Windows for the size first costs as much
+    // as the key itself.
+    let mut small = [0u16; 512];
+    let n = unsafe { LCMapStringEx(PCWSTR::null(), flags, &text, Some(&mut small), None, None, LPARAM(0)) };
+    if n > 0 {
+        return key(&small, n as usize);
+    }
     let n = unsafe { LCMapStringEx(PCWSTR::null(), flags, &text, None, None, None, LPARAM(0)) }.max(0) as usize;
     let mut buf = vec![0u16; n];
     if n > 0 {
         unsafe { LCMapStringEx(PCWSTR::null(), flags, &text, Some(&mut buf), None, None, LPARAM(0)) };
     }
-    buf.iter().flat_map(|w| w.to_le_bytes()).take(n).collect()
+    key(&buf, n)
 }
 
 /// Folders always first; names compare the way Explorer does ("file2" < "file10").
@@ -683,11 +702,19 @@ fn ext(name: &[u16]) -> &[u16] {
 
 /// Lower-case extension with the dot (".txt"), empty if none.
 pub fn extension_of(name: &OsStr) -> String {
-    let mut w: Vec<u16> = name.encode_wide().collect();
-    let Some(dot) = w.iter().rposition(|&c| c == b'.' as u16) else { return String::new() };
-    let ext = &mut w[dot..];
-    unsafe { CharLowerBuffW(ext) };
-    String::from_utf16_lossy(ext)
+    // Looked for in the name's own bytes, as a '.' is never part of a longer character there: no UTF-16 copy of the
+    // whole name, which a folder's read made twice for each item. An ASCII one, as nearly all are, is lowered here.
+    let bytes = name.as_encoded_bytes();
+    let Some(dot) = bytes.iter().rposition(|&b| b == b'.') else { return String::new() };
+    if let Ok(ext) = std::str::from_utf8(&bytes[dot..])
+        && ext.is_ascii()
+    {
+        return ext.to_ascii_lowercase();
+    }
+    let ext = unsafe { OsStr::from_encoded_bytes_unchecked(&bytes[dot..]) }; // split just before an ASCII '.'
+    let mut w: Vec<u16> = ext.encode_wide().collect();
+    unsafe { CharLowerBuffW(&mut w) };
+    String::from_utf16_lossy(&w)
 }
 
 /// A .lnk or .url file.
