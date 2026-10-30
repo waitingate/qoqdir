@@ -334,19 +334,26 @@ void invokeVerb(HWND owner, IContextMenu* cm, const char* verb) {
 
 namespace {
 
+// A copy of the bytes, as a data object or the clipboard takes them; null if there is no room.
+HGLOBAL globalCopy(const void* bytes, size_t size) {
+    HGLOBAL h = GlobalAlloc(GMEM_MOVEABLE, size);
+    void* p = h ? GlobalLock(h) : nullptr;
+    if (!p) {
+        if (h) GlobalFree(h);
+        return nullptr;
+    }
+    CopyMemory(p, bytes, size);
+    GlobalUnlock(h);
+    return h;
+}
+
 // Puts the bytes into a data object as 'format', which then owns them; false if it took nothing.
 bool setData(IDataObject* data, UINT format, const void* bytes, size_t size) {
     FORMATETC fmt{CLIPFORMAT(format), nullptr, DVASPECT_CONTENT, -1, TYMED_HGLOBAL};
     STGMEDIUM med{};
     med.tymed = TYMED_HGLOBAL;
-    med.hGlobal = GlobalAlloc(GMEM_MOVEABLE, size);
-    void* p = med.hGlobal ? GlobalLock(med.hGlobal) : nullptr;
-    if (!p) {
-        if (med.hGlobal) GlobalFree(med.hGlobal);
-        return false;
-    }
-    CopyMemory(p, bytes, size);
-    GlobalUnlock(med.hGlobal);
+    med.hGlobal = globalCopy(bytes, size);
+    if (!med.hGlobal) return false;
     if (SUCCEEDED(data->SetData(&fmt, &med, TRUE))) return true;
     ReleaseStgMedium(&med);
     return false;
@@ -403,15 +410,28 @@ std::optional<std::wstring> renameItem(HWND owner, const std::wstring& path, con
     return text;
 }
 
-void openFile(HWND owner, const std::wstring& path) {
+namespace {
+// What a worker asks of Windows: no box, and NOASYNC, as it ends right after.
+constexpr ULONG kFromWorker = SEE_MASK_FLAG_NO_UI | SEE_MASK_NOASYNC;
+
+bool shellExecute(HWND owner, ULONG mask, const wchar_t* verb, const wchar_t* file, const wchar_t* args,
+                  const wchar_t* dir) {
     SHELLEXECUTEINFOW sei{};
     sei.cbSize = sizeof sei;
+    sei.fMask = mask;
     sei.hwnd = owner;
-    sei.lpFile = path.c_str();
-    std::wstring dir = parentPath(path);
-    sei.lpDirectory = dir.c_str();
+    sei.lpVerb = verb;
+    sei.lpFile = file;
+    sei.lpParameters = args;
+    sei.lpDirectory = dir;
     sei.nShow = SW_SHOWNORMAL;
-    ShellExecuteExW(&sei);   // Windows shows its own "open with" / error dialog
+    return ShellExecuteExW(&sei) != FALSE;
+}
+}  // namespace
+
+void openFile(HWND owner, const std::wstring& path) {
+    // Windows shows its own "open with" / error dialog.
+    shellExecute(owner, 0, nullptr, path.c_str(), nullptr, parentPath(path).c_str());
 }
 
 namespace {
@@ -430,13 +450,7 @@ std::wstring urlPart(const std::wstring& text) {
 
 void openInExplorer(HWND owner, const std::wstring& dir, bool search) {
     std::wstring file = search ? L"search-ms:crumb=location:" + urlPart(dir) : dir;
-    SHELLEXECUTEINFOW sei{};
-    sei.cbSize = sizeof sei;
-    sei.hwnd = owner;
-    sei.lpVerb = search ? nullptr : L"explore";
-    sei.lpFile = file.c_str();
-    sei.nShow = SW_SHOWNORMAL;
-    ShellExecuteExW(&sei);
+    shellExecute(owner, 0, search ? nullptr : L"explore", file.c_str(), nullptr, nullptr);
 }
 
 namespace {
@@ -485,17 +499,10 @@ std::optional<std::wstring> commandProgram(const std::wstring& name) {
 }
 
 bool runCommand(HWND owner, const std::wstring& command, const std::wstring& workDir) {
-    SHELLEXECUTEINFOW sei{};
-    sei.cbSize = sizeof sei;
-    sei.fMask = SEE_MASK_FLAG_NO_UI | SEE_MASK_NOASYNC;   // NOASYNC: it runs on a worker that ends right after
-    sei.hwnd = owner;
-    sei.lpDirectory = workDir.empty() ? nullptr : workDir.c_str();
-    sei.nShow = SW_SHOWNORMAL;
+    const wchar_t* dir = workDir.empty() ? nullptr : workDir.c_str();
     auto run = [&](std::optional<std::wstring> file, const wchar_t* args) {
         if (!file) return false;   // a program name on neither PATH nor App Paths: never run from the folder (5.3)
-        sei.lpFile = file->c_str();
-        sei.lpParameters = args;
-        return ShellExecuteExW(&sei) != FALSE;
+        return shellExecute(owner, kFromWorker, nullptr, file->c_str(), args, dir);
     };
     if (run(commandProgram(command), nullptr)) return true;
     // "notepad file.txt": program first, the rest as arguments.
@@ -512,26 +519,13 @@ std::optional<Terminal> terminalProgram() {
 }
 
 bool startTerminal(HWND owner, const Terminal& terminal, const std::wstring& dir) {
-    SHELLEXECUTEINFOW sei{};
-    sei.cbSize = sizeof sei;
-    sei.fMask = SEE_MASK_FLAG_NO_UI | SEE_MASK_NOASYNC;   // NOASYNC: it runs on a worker that ends right after
-    sei.hwnd = owner;
-    sei.lpFile = terminal.program.c_str();
-    sei.lpParameters = terminal.args.empty() ? nullptr : terminal.args.c_str();
-    sei.lpDirectory = dir.c_str();
-    sei.nShow = SW_SHOWNORMAL;
-    return ShellExecuteExW(&sei) != FALSE;
+    const wchar_t* args = terminal.args.empty() ? nullptr : terminal.args.c_str();
+    return shellExecute(owner, kFromWorker, nullptr, terminal.program.c_str(), args, dir.c_str());
 }
 
 bool copyText(HWND owner, const std::wstring& text) {
-    HGLOBAL h = GlobalAlloc(GMEM_MOVEABLE, (text.size() + 1) * sizeof(wchar_t));
-    auto* p = h ? static_cast<wchar_t*>(GlobalLock(h)) : nullptr;
-    if (!p) {
-        if (h) GlobalFree(h);
-        return false;
-    }
-    std::copy(text.c_str(), text.c_str() + text.size() + 1, p);
-    GlobalUnlock(h);
+    HGLOBAL h = globalCopy(text.c_str(), (text.size() + 1) * sizeof(wchar_t));
+    if (!h) return false;
     bool ok = OpenClipboard(owner);   // another program can hold it for a moment: then it fails, as Ctrl+C would
     if (ok) {
         ok = EmptyClipboard() && SetClipboardData(CF_UNICODETEXT, h);

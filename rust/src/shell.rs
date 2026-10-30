@@ -11,8 +11,8 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 use windows::Win32::Foundation::{
-    CloseHandle, E_FAIL, E_INVALIDARG, ERROR_CANCELLED, FILETIME, GlobalFree, HANDLE, HWND, LPARAM, LRESULT, MAX_PATH,
-    POINT, POINTL, WPARAM,
+    CloseHandle, E_FAIL, E_INVALIDARG, ERROR_CANCELLED, FILETIME, GlobalFree, HANDLE, HGLOBAL, HWND, LPARAM, LRESULT,
+    MAX_PATH, POINT, POINTL, WPARAM,
 };
 use windows::Win32::Globalization::{CP_ACP, MULTI_BYTE_TO_WIDE_CHAR_FLAGS, MultiByteToWideChar};
 use windows::Win32::Storage::FileSystem::{
@@ -485,6 +485,21 @@ pub fn copy_to_clipboard(owner: HWND, dir: &Location, items: &[Item], cut: bool)
     unsafe { OleSetClipboard(&obj).is_ok() }
 }
 
+/// A copy of the bytes, as a data object or the clipboard takes them; none if there is no room.
+fn global_copy(bytes: &[u8]) -> Option<HGLOBAL> {
+    unsafe {
+        let h = GlobalAlloc(GMEM_MOVEABLE, bytes.len()).ok()?;
+        let p = GlobalLock(h) as *mut u8;
+        if p.is_null() {
+            let _ = GlobalFree(Some(h));
+            return None;
+        }
+        std::ptr::copy_nonoverlapping(bytes.as_ptr(), p, bytes.len());
+        let _ = GlobalUnlock(h);
+        Some(h)
+    }
+}
+
 /// Puts the bytes into a data object as `format`, which then owns them; false if it took nothing.
 fn set_data(data: &IDataObject, format: u32, bytes: &[u8]) -> bool {
     let fmt = FORMATETC {
@@ -494,15 +509,8 @@ fn set_data(data: &IDataObject, format: u32, bytes: &[u8]) -> bool {
         lindex: -1,
         tymed: TYMED_HGLOBAL.0 as u32,
     };
+    let Some(h) = global_copy(bytes) else { return false };
     unsafe {
-        let Ok(h) = GlobalAlloc(GMEM_MOVEABLE, bytes.len()) else { return false };
-        let p = GlobalLock(h) as *mut u8;
-        if p.is_null() {
-            let _ = GlobalFree(Some(h));
-            return false;
-        }
-        std::ptr::copy_nonoverlapping(bytes.as_ptr(), p, bytes.len());
-        let _ = GlobalUnlock(h);
         let mut med = STGMEDIUM {
             tymed: TYMED_HGLOBAL.0 as u32,
             u: STGMEDIUM_0 { hGlobal: h },
@@ -570,20 +578,28 @@ pub fn rename_item(owner: HWND, path: &Path, new_name: &OsStr) -> Result<OsStrin
     }
 }
 
-pub fn open_file(owner: HWND, path: &Path) {
-    let file = wide(path);
-    let dir = wide(path.parent().unwrap_or(Path::new("")));
+/// What a worker asks of Windows: no box, and NOASYNC, as it ends right after.
+const FROM_WORKER: u32 = SEE_MASK_FLAG_NO_UI | SEE_MASK_NOASYNC;
+
+fn shell_execute(owner: HWND, mask: u32, verb: PCWSTR, file: PCWSTR, args: PCWSTR, dir: PCWSTR) -> bool {
     let mut sei = SHELLEXECUTEINFOW {
         cbSize: size_of::<SHELLEXECUTEINFOW>() as u32,
+        fMask: mask,
         hwnd: owner,
-        lpFile: pcwstr(&file),
-        lpDirectory: pcwstr(&dir),
+        lpVerb: verb,
+        lpFile: file,
+        lpParameters: args,
+        lpDirectory: dir,
         nShow: SW_SHOWNORMAL.0,
         ..Default::default()
     };
-    unsafe {
-        let _ = ShellExecuteExW(&mut sei); // Windows shows its own "open with" / error dialog
-    }
+    unsafe { ShellExecuteExW(&mut sei).is_ok() }
+}
+
+pub fn open_file(owner: HWND, path: &Path) {
+    let (file, dir) = (wide(path), wide(path.parent().unwrap_or(Path::new(""))));
+    // Windows shows its own "open with" / error dialog.
+    shell_execute(owner, 0, PCWSTR::null(), pcwstr(&file), PCWSTR::null(), pcwstr(&dir));
 }
 
 /// Explorer on the folder, or Windows Search scoped to it: what Qoqdir leaves to Explorer (thumbnails, searching
@@ -600,17 +616,8 @@ pub fn open_in_explorer(owner: HWND, dir: &Path, search: bool) {
         wide(dir)
     };
     let verb = wide("explore");
-    let mut sei = SHELLEXECUTEINFOW {
-        cbSize: size_of::<SHELLEXECUTEINFOW>() as u32,
-        hwnd: owner,
-        lpVerb: if search { PCWSTR::null() } else { pcwstr(&verb) },
-        lpFile: pcwstr(&file),
-        nShow: SW_SHOWNORMAL.0,
-        ..Default::default()
-    };
-    unsafe {
-        let _ = ShellExecuteExW(&mut sei);
-    }
+    let verb = if search { PCWSTR::null() } else { pcwstr(&verb) };
+    shell_execute(owner, 0, verb, pcwstr(&file), PCWSTR::null(), PCWSTR::null());
 }
 
 /// The full path App Paths gives for a program name ("chrome", "winword"), as the Run box finds one there, or
@@ -675,17 +682,8 @@ pub fn run_command(owner: HWND, command: &OsStr, work_dir: Option<&Path>) -> boo
     let dir = work_dir.map(wide);
     let run = |file: Option<Vec<u16>>, args: Option<&[u16]>| {
         let Some(file) = file else { return false }; // on neither PATH nor App Paths: not run from the folder (5.3)
-        let mut sei = SHELLEXECUTEINFOW {
-            cbSize: size_of::<SHELLEXECUTEINFOW>() as u32,
-            fMask: SEE_MASK_FLAG_NO_UI | SEE_MASK_NOASYNC, // NOASYNC: it runs on a worker that ends right after
-            hwnd: owner,
-            lpFile: pcwstr(&file),
-            lpParameters: args.map_or(PCWSTR::null(), pcwstr),
-            lpDirectory: dir.as_deref().map_or(PCWSTR::null(), pcwstr),
-            nShow: SW_SHOWNORMAL.0,
-            ..Default::default()
-        };
-        unsafe { ShellExecuteExW(&mut sei).is_ok() }
+        let (args, dir) = (args.map_or(PCWSTR::null(), pcwstr), dir.as_deref().map_or(PCWSTR::null(), pcwstr));
+        shell_execute(owner, FROM_WORKER, PCWSTR::null(), pcwstr(&file), args, dir)
     };
     let text = command.to_string_lossy();
     if run(command_program(command), None) {
@@ -713,31 +711,16 @@ pub fn terminal_program() -> Option<Terminal> {
 
 pub fn start_terminal(owner: HWND, terminal: &Terminal, dir: &Path) -> bool {
     let (args, dir) = (wide(terminal.args), wide(dir));
-    let mut sei = SHELLEXECUTEINFOW {
-        cbSize: size_of::<SHELLEXECUTEINFOW>() as u32,
-        fMask: SEE_MASK_FLAG_NO_UI | SEE_MASK_NOASYNC, // NOASYNC: it runs on a worker that ends right after
-        hwnd: owner,
-        lpFile: pcwstr(&terminal.program),
-        lpParameters: if terminal.args.is_empty() { PCWSTR::null() } else { pcwstr(&args) },
-        lpDirectory: pcwstr(&dir),
-        nShow: SW_SHOWNORMAL.0,
-        ..Default::default()
-    };
-    unsafe { ShellExecuteExW(&mut sei).is_ok() }
+    let args = if terminal.args.is_empty() { PCWSTR::null() } else { pcwstr(&args) };
+    shell_execute(owner, FROM_WORKER, PCWSTR::null(), pcwstr(&terminal.program), args, pcwstr(&dir))
 }
 
 /// The clipboard then holds just this text, as it is: a name can hold a lone surrogate, which no str can.
 pub fn copy_text(owner: HWND, text: &OsStr) -> bool {
     let text: Vec<u16> = text.encode_wide().chain(std::iter::once(0)).collect();
+    let bytes = unsafe { std::slice::from_raw_parts(text.as_ptr().cast::<u8>(), text.len() * size_of::<u16>()) };
+    let Some(h) = global_copy(bytes) else { return false };
     unsafe {
-        let Ok(h) = GlobalAlloc(GMEM_MOVEABLE, text.len() * size_of::<u16>()) else { return false };
-        let p = GlobalLock(h) as *mut u16;
-        if p.is_null() {
-            let _ = GlobalFree(Some(h));
-            return false;
-        }
-        std::ptr::copy_nonoverlapping(text.as_ptr(), p, text.len());
-        let _ = GlobalUnlock(h);
         // Another program can hold it for a moment: then it fails, as Ctrl+C would.
         let mut ok = OpenClipboard(Some(owner)).is_ok();
         if ok {
