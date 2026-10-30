@@ -190,7 +190,7 @@ impl FolderTree {
             self.add(TVI_ROOT, self.bookmarks.clone(), OsStr::new("Bookmarks"), folder_icon(), false, TVI_LAST);
         self.start_worker(0, read_user_folders); // the user folders arrive later, like the drives
         let (_, icon) = describe(&Location::ThisPc);
-        let this_pc = self.add(TVI_ROOT, Location::ThisPc, OsStr::new("This PC"), icon, false, TVI_LAST);
+        let this_pc = self.add(TVI_ROOT, Location::ThisPc, &Location::ThisPc.display_name(), icon, false, TVI_LAST);
         send(self.hwnd, TVM_EXPAND, TVE_EXPAND.0 as usize, bookmarks.0);
         send(self.hwnd, TVM_EXPAND, TVE_EXPAND.0 as usize, this_pc.0);
     }

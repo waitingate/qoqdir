@@ -85,7 +85,7 @@ void FolderTree::fill() {
     if (Pidl pidl = pidlFromPath(L""))
         SHGetFileInfoW(reinterpret_cast<LPCWSTR>(pidl.get()), 0, &pc, sizeof pc,
                        SHGFI_PIDL | SHGFI_SYSICONINDEX | SHGFI_SMALLICON);
-    HTREEITEM thisPc = add(TVI_ROOT, L"", L"This PC", pc.iIcon);
+    HTREEITEM thisPc = add(TVI_ROOT, L"", displayName(L""), pc.iIcon);
     TreeView_Expand(tv_, bookmarksNode, TVE_EXPAND);
     TreeView_Expand(tv_, thisPc, TVE_EXPAND);
 }

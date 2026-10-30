@@ -1607,7 +1607,7 @@ void App::newFolder() {
 // them; with nothing selected, the folder's own (none for This PC or a folder that isn't available).
 void App::copyPaths() {
     std::vector<std::wstring> paths;
-    for (const std::wstring& name : list_.selectedNames()) paths.push_back(joinPath(list_.dir(), name));
+    for (int row : list_.selection()) paths.push_back(list_.pathAt(row));
     if (paths.empty() && !list_.dir().empty()) paths.push_back(list_.dir());
     if (paths.empty()) return;
     std::wstring text;
