@@ -189,7 +189,7 @@ MinGW-w64 GCC. Instead of the two `cmake` lines:
 ```powershell
 $mingw = (Split-Path (Split-Path (Get-Command g++).Source)) -replace '\\', '/'
 windres res\qoqdir.rc -O coff -o qoqdir-res.o
-g++ -std=c++20 -O2 -DNDEBUG -DUNICODE -D_UNICODE -DNOMINMAX -D_WIN32_WINNT=0x0A00 -DWINVER=0x0A00 -D_GLIBCXX_ASSERTIONS -fsanitize=signed-integer-overflow -fsanitize-undefined-trap-on-error "-ffile-prefix-map=$mingw=mingw64" -ffunction-sections -fdata-sections -mwindows -municode -static '-Wl,--gc-sections' -s src\main.cpp src\app.cpp src\filelist.cpp src\tree.cpp src\shell.cpp src\folder.cpp src\crashlog.cpp qoqdir-res.o -o qoqdir.exe -lole32 -loleaut32 -lshell32 -lshlwapi -lcomctl32 -luuid
+g++ -std=c++20 -O2 -DNDEBUG -DUNICODE -D_UNICODE -DNOMINMAX -D_WIN32_WINNT=0x0A00 -DWINVER=0x0A00 -D_GLIBCXX_ASSERTIONS -fsanitize=signed-integer-overflow -fsanitize-undefined-trap-on-error "-ffile-prefix-map=$mingw=mingw64" -ffunction-sections -fdata-sections -mwindows -municode -static '-Wl,--gc-sections' -s src\main.cpp src\app.cpp src\filelist.cpp src\tree.cpp src\shell.cpp src\folder.cpp src\crashlog.cpp src\guids.cpp qoqdir-res.o -o qoqdir.exe -lole32 -loleaut32 -lshell32 -lshlwapi -lcomctl32
 ```
 
 This leaves `qoqdir.exe` in this folder, the same program the CMake build

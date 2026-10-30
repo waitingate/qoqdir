@@ -28,8 +28,7 @@ get_filename_component(MINGW_ROOT "${CMAKE_CXX_COMPILER}" DIRECTORY)   # .../min
 get_filename_component(MINGW_ROOT "${MINGW_ROOT}" DIRECTORY)            # .../mingw64
 add_compile_options("-ffile-prefix-map=${MINGW_ROOT}=mingw64")
 # One self-contained exe: no MinGW DLLs to ship alongside it. The linker drops the code and data
-# nothing uses. Not libuuid: its GUIDs come a whole member at a time, so the app defines its own
-# (src/guids.cpp).
+# nothing uses. The app defines its few GUIDs itself (src/guids.cpp), so libuuid is not linked.
 add_compile_options(-ffunction-sections -fdata-sections)
 add_link_options(-static -Wl,--gc-sections $<$<CONFIG:Release>:-s>)
 

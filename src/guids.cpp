@@ -1,6 +1,6 @@
-// The GUIDs the app names (FOLDERID_Profile, CLSID_ShellLink, IID_IDropTarget and the like), defined here rather than
-// taken from libuuid: each of its members holds thousands of them, and the two the app pulled in made 53 KB of the exe.
-// initguid.h makes each DEFINE_GUID in the headers below a definition, and the link keeps only the ones used.
+// The GUIDs the app names (FOLDERID_Profile, CLSID_ShellLink, IID_IDropTarget and the like), defined here so the link
+// needs no libuuid; the exe is the same size either way, as the link keeps only the GUIDs used. initguid.h makes each
+// DEFINE_GUID in the headers below a definition.
 #include <initguid.h>
 
 #include <oleidl.h>

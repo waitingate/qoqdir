@@ -44,6 +44,9 @@ Notes for working on the code. `SPEC.md` decides what is right: section 4
 - `crashlog.cpp`: writes `%TEMP%\qoqdir-crash.log` on a crash, a failed library
   check, an exception nothing caught or `abort()`, and a line saying where the
   window's thread is when it stops answering.
+- `guids.cpp`: the GUIDs the app names (`CLSID_ShellLink`, `IID_IDropTarget`
+  and the like), so the build needs no libuuid. The Rust version gets them
+  from the `windows` crate.
 - `res/qoqdir.rc`, `res/qoqdir.manifest`, `res/qoqdir.ico` (next to `src/`): the
   manifest (modern controls, high DPI, long paths), the version block and the
   icon, which `scripts/make-icon.ps1` draws (`BUILDING.md`, section 4). The Rust
