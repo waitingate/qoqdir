@@ -126,7 +126,7 @@ cmake -S . -B build -G Ninja      # once; Release unless told otherwise
 cmake --build build
 ```
 
-`qoqdir.exe` is statically linked: one file of about 570 KB, with no DLLs beside
+`qoqdir.exe` is statically linked: one file of about 600 KB, with no DLLs beside
 it. GCC's runtime checks are on, so a bad index or a signed integer overflow
 stops the program and writes the reason to `%TEMP%\qoqdir-crash.log` instead of
 running on with wrong data. A build to step through with `gdb` (it comes with
@@ -143,7 +143,7 @@ the compiler's `bin` on the PATH (section 1):
 ```powershell
 $mingw = (Split-Path (Split-Path (Get-Command g++).Source)) -replace '\\', '/'
 windres res\qoqdir.rc -O coff -o qoqdir-res.o
-g++ -std=c++20 -O2 -DNDEBUG -DUNICODE -D_UNICODE -DNOMINMAX -D_WIN32_WINNT=0x0A00 -DWINVER=0x0A00 -D_GLIBCXX_ASSERTIONS -fsanitize=signed-integer-overflow -fsanitize-undefined-trap-on-error "-ffile-prefix-map=$mingw=mingw64" -ffunction-sections -fdata-sections -mwindows -municode -static '-Wl,--gc-sections' -s src\main.cpp src\app.cpp src\filelist.cpp src\tree.cpp src\shell.cpp src\folder.cpp src\crashlog.cpp src\guids.cpp qoqdir-res.o -o qoqdir.exe -lole32 -loleaut32 -lshell32 -lshlwapi -lcomctl32
+g++ -std=c++20 -O2 -DNDEBUG -DUNICODE -D_UNICODE -DNOMINMAX -D_WIN32_WINNT=0x0A00 -DWINVER=0x0A00 -D_GLIBCXX_ASSERTIONS -fsanitize=signed-integer-overflow -fsanitize-undefined-trap-on-error "-ffile-prefix-map=$mingw=mingw64" -ffunction-sections -fdata-sections -mwindows -municode -static '-Wl,--gc-sections' -s src\main.cpp src\app.cpp src\filelist.cpp src\tree.cpp src\shell.cpp src\folder.cpp src\crashlog.cpp qoqdir-res.o -o qoqdir.exe -lole32 -loleaut32 -lshell32 -lshlwapi -lcomctl32 -luuid
 ```
 
 That makes `qoqdir.exe` in the repository folder, in under a minute. It is the

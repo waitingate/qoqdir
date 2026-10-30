@@ -2,8 +2,8 @@ cmake_minimum_required(VERSION 3.20)
 # The app's name. (In the code it is kAppName in src/util.h.)
 project(qoqdir LANGUAGES CXX RC)
 
-# README.md and docs/BUILDING.md have a g++ command that builds qoqdir.exe without CMake, from the same flags, files
-# and libraries as below: change it with them.
+# docs/BUILDING.md has a g++ command that builds qoqdir.exe without CMake, from the same flags, files and libraries
+# as below: change it with them.
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
@@ -28,11 +28,11 @@ get_filename_component(MINGW_ROOT "${CMAKE_CXX_COMPILER}" DIRECTORY)   # .../min
 get_filename_component(MINGW_ROOT "${MINGW_ROOT}" DIRECTORY)            # .../mingw64
 add_compile_options("-ffile-prefix-map=${MINGW_ROOT}=mingw64")
 # One self-contained exe: no MinGW DLLs to ship alongside it. The linker drops the code and data
-# nothing uses. The app defines its few GUIDs itself (src/guids.cpp), so libuuid is not linked.
+# nothing uses (most of libuuid's GUIDs, for one).
 add_compile_options(-ffunction-sections -fdata-sections)
 add_link_options(-static -Wl,--gc-sections $<$<CONFIG:Release>:-s>)
 
-set(WIN_LIBS ole32 oleaut32 shell32 shlwapi comctl32)
+set(WIN_LIBS ole32 oleaut32 shell32 shlwapi comctl32 uuid)
 
 # Path and folder logic, shared by the app and the tests.
 add_library(core STATIC src/folder.cpp)
@@ -40,7 +40,7 @@ target_link_libraries(core PUBLIC ${WIN_LIBS})
 
 # The app, compiled once and linked twice: into qoqdir.exe, what users get, and into qoqdir-test.exe, the
 # same plus the self-test. So the self-test checks the very code that ships.
-add_library(app OBJECT src/crashlog.cpp src/app.cpp src/filelist.cpp src/tree.cpp src/shell.cpp src/guids.cpp)
+add_library(app OBJECT src/crashlog.cpp src/app.cpp src/filelist.cpp src/tree.cpp src/shell.cpp)
 target_link_libraries(app PUBLIC core)
 
 # windres reports no dependencies, so name what qoqdir.rc pulls in: a new version, manifest or icon then rebuilds it.
