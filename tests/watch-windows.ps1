@@ -33,6 +33,12 @@ public class QoqdirWindows {
 }
 '@
 
+# A run empties its log as it starts, which fails while something else has the file open: the last run's lines would
+# stay in it and spoil the comparison of the two logs. So the old log goes first, with time for that to let go.
+for ($i = 0; $i -lt 50 -and (Test-Path -LiteralPath $Log); $i++) {
+  Remove-Item -LiteralPath $Log -Force -ErrorAction SilentlyContinue
+  if (Test-Path -LiteralPath $Log) { Start-Sleep -Milliseconds 100 }
+}
 $before = [QoqdirWindows]::Visible()
 $p = Start-Process $Exe -ArgumentList '--selftest' -PassThru
 if (-not $p) { "could not start $Exe"; exit 1 }   # a bad path or a quarantined exe: fail, don't spin on a null
