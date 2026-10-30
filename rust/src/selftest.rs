@@ -2941,7 +2941,12 @@ impl App {
                 let _ = std::fs::create_dir(p("Bookmarks\\one\\new\\inside"));
                 send(a.refresh, BM_CLICK, 0, 0);
             },
-            move |a| a.node_texts(a.tree.child(new_node(a))) == "inside",
+            // With its arrow back: without it Windows won't open or close the folder.
+            move |a| {
+                a.node_texts(a.tree.child(new_node(a))) == "inside"
+                    && a.tree_item(new_node(a), TVIF_CHILDREN).cChildren.0 == 1
+                    && a.expanded(new_node(a))
+            },
         );
         s.add(
             "(open Bookmarks\\one in the list)",

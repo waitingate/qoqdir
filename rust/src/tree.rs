@@ -410,12 +410,15 @@ impl FolderTree {
             }
             send(self.hwnd, TVM_EXPAND, (TVE_COLLAPSE.0 | TVE_COLLAPSERESET.0) as usize, node.0);
         }
-        if batch.children.is_empty() {
-            // Keep the arrow on Bookmarks (filled later, 5.6); others have no subfolders.
-            if batch.node != self.root() {
-                let item = TVITEMW { mask: TVIF_CHILDREN, hItem: node, cChildren: TVITEMEXW_CHILDREN(0), ..Default::default() };
-                send(self.hwnd, TVM_SETITEMW, 0, &item as *const _ as isize);
-            }
+        // The arrow goes with the last subfolder, but Bookmarks keeps it (filled later, 5.6). It comes back with the
+        // first new one: Windows won't open a node whose arrow is gone.
+        let any = !batch.children.is_empty();
+        if any || batch.node != self.root() {
+            let arrow = TVITEMEXW_CHILDREN(i32::from(any));
+            let item = TVITEMW { mask: TVIF_CHILDREN, hItem: node, cChildren: arrow, ..Default::default() };
+            send(self.hwnd, TVM_SETITEMW, 0, &item as *const _ as isize);
+        }
+        if !any {
             return;
         }
         self.fills.borrow_mut().push(Fill { node: node.0, children: batch.children });

@@ -1994,7 +1994,10 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
             CreateDirectoryW(path(L"Bookmarks\\one\\new\\inside").c_str(), nullptr);
             SendMessageW(refresh_, BM_CLICK, 0, 0);
         },
-        [=, this] { return nodeTexts(TreeView_GetChild(tree_.hwnd(), newNode())) == L"inside"; });
+        [=, this] {   // with its arrow back: without it Windows won't open or close the folder
+            return nodeTexts(TreeView_GetChild(tree_.hwnd(), newNode())) == L"inside" &&
+                   treeItem(newNode(), TVIF_CHILDREN).cChildren == 1 && expanded(newNode());
+        });
     add(L"(open Bookmarks\\one in the list)", [=, this] { open(path(L"Bookmarks\\one"), Nav::New); },
         [=, this] { return at(path(L"Bookmarks\\one")); });
     add(L"a subfolder made in the folder shown shows up in the tree by itself: its open node is read again (5.5)",

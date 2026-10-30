@@ -214,16 +214,17 @@ void FolderTree::showChildren(TreeBatch& batch) {
         if (!c && next == batch.children.end()) return;
         TreeView_Expand(tv_, batch.node, TVE_COLLAPSE | TVE_COLLAPSERESET);
     }
-    if (batch.children.empty()) {
-        // Keep the arrow on Bookmarks (filled later, 5.6); others have no subfolders.
-        if (batch.node == TreeView_GetRoot(tv_)) return;
+    // The arrow goes with the last subfolder, but Bookmarks keeps it (filled later, 5.6). It comes back with the first
+    // new one: Windows won't open a node whose arrow is gone.
+    bool any = !batch.children.empty();
+    if (any || batch.node != TreeView_GetRoot(tv_)) {
         TVITEMW item{};
         item.mask = TVIF_CHILDREN;
         item.hItem = batch.node;
-        item.cChildren = 0;
+        item.cChildren = any ? 1 : 0;
         TreeView_SetItem(tv_, &item);
-        return;
     }
+    if (!any) return;
     fills_.push_back({batch.node, std::move(batch.children)});
     fillMore();
 }
