@@ -1,11 +1,81 @@
 # Qoqdir
 
 A small, fast file explorer for Windows 10/11 with tabs, a folder tree and a
-detail list. It is meant to be started from Windows Terminal. One portable exe,
-written in C++ and plain Win32 (there is a Rust version too): no runtime, no
+detail list, made so that a slow disk or a dead server can't hold up the window.
+It is meant to be started from Windows Terminal. One portable exe of about 650
+KB, written in C++ and plain Win32 (there is a Rust version too): no runtime, no
 installer, and no network code (no updates, no telemetry).
 
 ![The Qoqdir window: tabs, a folder tree with bookmarks, and the file list](docs/screenshot.png)
+
+## Why it exists
+
+Explorer is on every Windows PC, and it makes you wait. A network folder on a
+server that is off can hold it up for 20 to 60 seconds, and a sleeping disk for
+as long as it takes to wake. An icon handler that some other program installed
+can hang it. Typing in its list only jumps to a name, so finding something in a
+big folder means a search.
+
+Qoqdir keeps what Windows does well and replaces the window around it. Copy,
+move, delete, rename, right-click menus, Properties, icons and undo all come
+from Windows itself, so they work as they do in Explorer, with the same keys.
+Everything that can wait happens away from the window, so a key press or a click
+reacts at once, whatever a disk or a server is doing. The idea of tabs, a folder
+tree and a fast detail list comes from CubicExplorer; Qoqdir is a new and much
+smaller program.
+
+## What it does that you may not have seen
+
+- The window doesn't wait. Folders, tree nodes, icons and file types are read on
+  other threads. Enter on a dead network path comes back in milliseconds, the
+  next folder you pick takes over from the read still running, and holding F5 on
+  a slow share starts one read, not a pile of them. (`docs/SPEC.md` 4.1 names
+  the one narrow case where it can still wait.)
+- Tabs keep their folder. When a drive is pulled or a server goes off, the tab
+  stays on that folder, empty, says why, and F5 tries again. Each tab brings
+  back its own selection, focus and scroll position when you return to it.
+- The mouse wheel flips through the tabs: turn it over the tab bar (a touchpad's
+  small steps add up to one). Middle-click a folder for a tab in the background,
+  double-click the empty part of the bar for a new one, drag a tab to move it.
+- Typing filters. Start typing in the list and it narrows to the names that
+  match, at about 10 ms a key in a folder of 10,000 files, with patterns too,
+  several at once (`*.jpg; *.png`). A word from an input method goes in whole.
+  Esc shows all again.
+- Files drop where you point. A tab shows as the current one while files are
+  over it and takes the drop. So does a folder row in the list, which lights up,
+  and any folder or bookmark in the tree, where a closed folder opens if you
+  hold the drag over it.
+- Nothing moves by accident. A plain drop that could move files asks first, with
+  Windows' own menu. Files dropped back on the folder they are in do nothing,
+  wherever the drag comes from.
+- Bookmarks and saved tabs are plain shortcuts in a folder next to the exe, with
+  no database to lose. Rename them, group them in subfolders, copy them. Ctrl+S
+  saves the tabs, Ctrl+O opens them, and renaming the folder keeps a set. On a
+  flash drive they keep working when the drive gets another letter.
+- It lives beside the terminal. `qoqdir .` opens the folder you are in,
+  `qoqdir report.pdf` opens its folder with the file selected, and Ctrl+` opens
+  a terminal in the folder shown. The address bar runs commands too, and a
+  program named without a folder is never a stranger's file of that name in the
+  folder shown.
+- It stays out of the way. What other programs change shows up by itself within
+  about half a second, keeping your selection and scroll position. Folders
+  always open in Qoqdir, even through shortcuts, never in an Explorer window.
+  Errors go to the status bar, not to a box you have to click.
+- A hang names its cause. A window that answers nothing for 5 seconds logs where
+  it is stuck, often inside another program's shell extension, and then goes on.
+- It leaves nothing behind. All it writes is next to the exe (a crash log
+  aside), so it runs from a flash drive, with nothing in the registry or
+  AppData.
+
+On the PC it is built on, a folder of 10,000 files loads in about 50 ms and
+sorts in about 5 ms. System32's 5,000 items are on screen 0.1 to 0.2 s after the
+start, with about 30 MB of memory in use. Every change has to pass a self-test
+of about 370 steps that drives the real program from inside, with speed limits
+among them, and the C++ and Rust versions must pass the same steps.
+
+Thumbnails, previews, search across subfolders, dark mode, archive browsing,
+dual panes and plugins are left out on purpose, to keep it small. For thumbnails
+and search, the right-click menu has Open in Explorer and Search in Explorer.
 
 ## Download
 
