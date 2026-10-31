@@ -6,7 +6,9 @@ It is meant to be started from Windows Terminal. One portable exe of about 650
 KB, written in C++ and plain Win32 (there is a Rust version too): no runtime, no
 installer, and no network code (no updates, no telemetry).
 
-![The Qoqdir window: tabs, a folder tree with bookmarks, and the file list](docs/screenshot.png)
+![The Qoqdir window: tabs, a folder tree with bookmarks, and the file list with two files selected](docs/screenshot.png)
+
+[Download](#download) | [Why it exists](#why-it-exists) | [See it work](#see-it-work) | [Keys](#keys) | [Build](#build)
 
 ## Why it exists
 
@@ -24,34 +26,66 @@ reacts at once, whatever a disk or a server is doing. The idea of tabs, a folder
 tree and a fast detail list comes from CubicExplorer; Qoqdir is a new and much
 smaller program.
 
-## What it does that you may not have seen
+## See it work
+
+The pictures show a demo folder. The pointer and the drag's tip are drawn in,
+since a picture of a window doesn't show them.
+
+### The mouse wheel flips through the tabs
+
+Turn the wheel over the tab bar. A touchpad's small steps add up to one. Each
+tab comes back with its own selection, focus and scroll position.
+
+![The mouse wheel turned over the tab bar: each step shows the next tab and its folder, then back again](docs/wheel-tabs.gif)
+
+Middle-click a folder for a tab in the background, double-click the empty part
+of the bar for a new one, and drag a tab to move it.
+
+### Typing filters the list
+
+Start typing and the list narrows to the names that match, at about 10 ms a key
+in a folder of 10,000 files. Patterns work too, several at once
+(`*.png; *.mp4`). A word from an input method goes in whole. Esc shows all
+again.
+
+![Typing tom narrows 30 files to 7, Esc shows all again, and the patterns for png and mp4 files leave 3](docs/filter.gif)
+
+### Files drop where you point
+
+A folder's row lights up and takes the drop. A tab shows as the current one
+while files are over it, and takes them too. So does any folder or bookmark in
+the tree, where a closed folder opens if you hold the drag over it.
+
+![Files dragged over the folder plans, the tab photos and the bookmark invoices: each lights up, and the tip names it](docs/drop.gif)
+
+Nothing moves by accident: a plain drop that could move files asks first, with
+Windows' own menu, and files dropped back on the folder they are in do nothing,
+wherever the drag comes from.
+
+### A tab keeps its folder
+
+When a drive is pulled or a server goes off, the tab stays on that folder,
+empty, and says why. F5 tries again. Your tabs don't jump somewhere else, and
+nothing pops up.
+
+![A tab on a drive that was pulled: the list is empty, and the status bar says the folder is not available and that F5 tries again](docs/not-available.png)
+
+### Bookmarks and saved tabs are plain shortcuts
+
+Both are shortcuts in a folder next to the exe, with no database to lose. Rename
+them, group them in subfolders, copy them. Ctrl+S saves the tabs and Ctrl+O
+opens them again, and renaming the folder keeps a set. On a flash drive they
+keep working when the drive gets another letter.
+
+![After Ctrl+S, the tree shows Bookmarks, then Tabs, with the shortcuts 1 garden, 2 photos, 3 invoices and 4 Bach, cello suites](docs/saved-tabs.png)
+
+## More that you may not have seen
 
 - The window doesn't wait. Folders, tree nodes, icons and file types are read on
   other threads. Enter on a dead network path comes back in milliseconds, the
   next folder you pick takes over from the read still running, and holding F5 on
   a slow share starts one read, not a pile of them. (`docs/SPEC.md` 4.1 names
   the one narrow case where it can still wait.)
-- Tabs keep their folder. When a drive is pulled or a server goes off, the tab
-  stays on that folder, empty, says why, and F5 tries again. Each tab brings
-  back its own selection, focus and scroll position when you return to it.
-- The mouse wheel flips through the tabs: turn it over the tab bar (a touchpad's
-  small steps add up to one). Middle-click a folder for a tab in the background,
-  double-click the empty part of the bar for a new one, drag a tab to move it.
-- Typing filters. Start typing in the list and it narrows to the names that
-  match, at about 10 ms a key in a folder of 10,000 files, with patterns too,
-  several at once (`*.jpg; *.png`). A word from an input method goes in whole.
-  Esc shows all again.
-- Files drop where you point. A tab shows as the current one while files are
-  over it and takes the drop. So does a folder row in the list, which lights up,
-  and any folder or bookmark in the tree, where a closed folder opens if you
-  hold the drag over it.
-- Nothing moves by accident. A plain drop that could move files asks first, with
-  Windows' own menu. Files dropped back on the folder they are in do nothing,
-  wherever the drag comes from.
-- Bookmarks and saved tabs are plain shortcuts in a folder next to the exe, with
-  no database to lose. Rename them, group them in subfolders, copy them. Ctrl+S
-  saves the tabs, Ctrl+O opens them, and renaming the folder keeps a set. On a
-  flash drive they keep working when the drive gets another letter.
 - It lives beside the terminal. `qoqdir .` opens the folder you are in,
   `qoqdir report.pdf` opens its folder with the file selected, and Ctrl+` opens
   a terminal in the folder shown. The address bar runs commands too, and a
