@@ -16,7 +16,9 @@ Notes for working on the code. `SPEC.md` decides what is right: section 4
 - Tests never touch the desktop: no global keys or mouse, no taking the focus, no
   dialogs, no beeps. The self-test calls `App::onKey` directly, works in its own
   folder in `%TEMP%` (never the real `qoqdir.ini` or Bookmarks), and uses
-  `\\192.0.2.1\share` as a network path that never answers.
+  `\\192.0.2.1\share` as a network path that never answers. What Windows must
+  really start is a copy of the test exe under another name, which shows no
+  window, says how it was started and ends (`launchProbe`).
 
 ## Layout
 

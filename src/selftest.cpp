@@ -39,6 +39,8 @@ struct App::SelfTest {
 
 namespace {
 
+constexpr wchar_t kProbe[] = L"qoqdir-probe.exe";   // this exe under another name is what a step starts (launchProbe)
+
 std::wstring testRoot() {
     wchar_t temp[MAX_PATH] = {};
     GetTempPathW(MAX_PATH, temp);
@@ -56,6 +58,16 @@ void writeFile(const std::wstring& p, const std::string& text = "x") {
     DWORD written = 0;
     WriteFile(f, text.data(), DWORD(text.size()), &written, nullptr);
     CloseHandle(f);
+}
+
+std::string fileText(const std::wstring& p) {
+    std::string text;
+    if (FILE* f = _wfopen(p.c_str(), L"rb")) {
+        char part[4096];
+        while (size_t n = fread(part, 1, sizeof part, f)) text.append(part, n);
+        fclose(f);
+    }
+    return text;
 }
 
 void deleteTree(const std::wstring& dir) {
@@ -140,6 +152,17 @@ std::wstring App::prepareSelfTest() {
     for (const wchar_t* name : {L"file1.txt", L"file2.txt", L"file10.txt", L"\u5831\u544A.pdf"})
         writeFile(joinPath(root, name));
     return root;
+}
+
+// What a step starts through Windows, in place of a program with a window: this exe under another name. It says how it
+// was started, in a file beside it, and ends.
+bool App::launchProbe() {
+    std::wstring exe = exePath();
+    if (leafName(exe) != kProbe) return false;
+    wchar_t folder[MAX_PATH] = {};
+    GetCurrentDirectoryW(MAX_PATH, folder);
+    writeFile(exe + L".said", toUtf8(folder + (L"\n" + std::wstring(GetCommandLineW()))));
+    return true;
 }
 
 void App::selfTestKey(WPARAM vk, bool ctrl, bool shift, bool alt) {
@@ -3152,6 +3175,32 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
     add(L"(on This PC, in the home folder)", [=, this] { open(L"", Nav::New); },
         [=, this] { return at(L"") && samePath(terminalFolder(), knownFolder(FOLDERID_Profile)); });
     backHome(L"(back to the test folder)");
+    // What Windows really starts, with no window to show: this exe under another name (launchProbe).
+    std::wstring said = path(kProbe) + L".said";
+    add(L"(a program to start)",
+        [=, this] {
+            CopyFileW(exePath().c_str(), path(kProbe).c_str(), FALSE);
+            refresh();
+        },
+        [=, this] { return idle() && listed(kProbe); });
+    add(L"Enter on a program starts it, in its own folder (5.4)",
+        [=, this] {
+            SetFocus(list_.hwnd());
+            list_.select({kProbe}, kProbe);
+            selfTestKey(VK_RETURN);
+        },
+        [=, this] { return fileText(said).starts_with(toUtf8(dir) + "\n"); }, 20000);
+    add(L"a terminal starts with its arguments, in the folder asked for (5.3)",
+        [=, this] {
+            DeleteFileW(said.c_str());
+            startTerminal(wnd_, Terminal{path(kProbe), L"-d ."}, path(L"sub"));
+        },
+        [=, this] {
+            std::string text = fileText(said);
+            return text.starts_with(toUtf8(path(L"sub")) + "\n") && text.ends_with(" -d .");
+        }, 20000);
+    removeListed(L"(remove what it said)", std::wstring(kProbe) + L".said");
+    removeListed(L"(remove the program)", kProbe);
     // Long use leaves nothing behind (4.10): opening folders and tabs again and again doesn't pile up handles, GDI or
     // USER objects. A first round fills what is meant to stay (the system image list, the type names).
     auto usage = [] {
@@ -3196,15 +3245,7 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
     // hung window gets a ghost window from Windows meanwhile, which can take the focus from the steps after it.
     // The test's own long steps (making and removing 10,000 files) leave such lines too: a new one must appear.
     static std::string crashLog;   // as it was before the stall
-    auto readCrashLog = [=] {
-        std::string text;
-        if (FILE* f = _wfopen(joinPath(dir, L"qoqdir-crash.log").c_str(), L"rb")) {
-            char buf[4096];
-            for (size_t n; (n = fread(buf, 1, sizeof buf, f)) > 0;) text.append(buf, n);
-            fclose(f);
-        }
-        return text;
-    };
+    auto readCrashLog = [=] { return fileText(joinPath(dir, L"qoqdir-crash.log")); };
     add(L"a window thread stuck for 7 s leaves a line in the crash log naming where it is",
         [=] { crashLog = readCrashLog(); Sleep(7000); },
         [=] {

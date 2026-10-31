@@ -200,6 +200,10 @@ fn main() {
     unsafe {
         let _ = SetDefaultDllDirectories(LOAD_LIBRARY_SEARCH_SYSTEM32);
     }
+    #[cfg(feature = "selftest")]
+    if selftest::launch_probe() {
+        return;
+    }
     crashlog::install();
     unsafe {
         SetErrorMode(SEM_FAILCRITICALERRORS); // a drive without a disk fails quietly, not with Windows' "No Disk" box

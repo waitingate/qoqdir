@@ -55,6 +55,7 @@ public:
 
     // Self-test (in qoqdir-test.exe only): drives the app from inside (no global keyboard input) and logs results.
     static std::wstring prepareSelfTest();   // makes a fresh test folder, returns its path
+    static bool launchProbe();               // this exe is what a step starts (under another name): true, and it's done
     void startSelfTest(const std::wstring& dir, const std::wstring& logPath);
     int exitCode() const { return exitCode_; }
 

@@ -954,7 +954,12 @@ result:
     and right of this window, the same size and not maximized. The self-test
     checks what it would start, without starting it: that would show a window.
     The same for Ctrl+`: Windows Terminal (or cmd) in the folder shown, and in
-    the home folder on This PC; the key itself is checked by hand.
+    the home folder on This PC; the key itself is checked by hand. Windows really
+    starts a copy of this exe under another name, which shows no window and says
+    how it was started: Enter on it runs it in its own folder, and the call
+    behind Ctrl+` passes on the arguments and the folder asked for. Open in
+    Explorer and Search in Explorer, whose windows are Windows' own, are checked
+    by hand.
 68. After one round to fill the caches, 25 rounds of opening `sub`, going back
     to the test folder, and opening and closing a tab on `made` leave the
     process's handles within 15, and its GDI and USER objects within 4, of

@@ -83,7 +83,7 @@ use crate::folder::{
 };
 use crate::shell::{
     Terminal, can_paste, command_program, copy_to_clipboard, data_object_at, file_info, in_background, item_menu_at,
-    known_folder, paste_into, pidl_from, save_folder_shortcuts, shortcut_target, terminal_program,
+    known_folder, paste_into, pidl_from, save_folder_shortcuts, shortcut_target, start_terminal, terminal_program,
 };
 use windows::core::{Interface, PCSTR, w};
 
@@ -247,6 +247,8 @@ thread_local! {
 }
 
 const TIMER_SELFTEST: usize = 50;
+const PROBE: &str = "qoqdir-probe.exe"; // this exe under another name is what a step starts (launch_probe)
+const PROBE_SAID: &str = "qoqdir-probe.exe.said";
 
 /// The process's exit code: 0 only if every step passed.
 pub fn exit_code() -> i32 {
@@ -340,6 +342,23 @@ pub fn prepare() -> Location {
 
 fn write_file(path: &Path) {
     let _ = std::fs::write(path, "x");
+}
+
+/// What a step starts through Windows, in place of a program with a window: this exe under another name. It says how it
+/// was started, in a file beside it, and ends.
+pub fn launch_probe() -> bool {
+    let Ok(exe) = std::env::current_exe() else { return false };
+    if exe.file_name() != Some(OsStr::new(PROBE)) {
+        return false;
+    }
+    let mut said = std::env::current_dir().unwrap_or_default().into_os_string();
+    said.push("\n");
+    for arg in std::env::args_os() {
+        said.push(" ");
+        said.push(arg);
+    }
+    let _ = std::fs::write(exe.with_file_name(PROBE_SAID), said.as_encoded_bytes());
+    true
 }
 
 /// A file just made can be open in another program for a moment (the shell reading a new shortcut, a virus scanner),
@@ -4532,6 +4551,42 @@ impl App {
             },
         );
         s.home("(back to the test folder)");
+        // What Windows really starts, with no window to show: this exe under another name (launch_probe).
+        s.add(
+            "(a program to start)",
+            |a| {
+                let _ = std::env::current_exe().and_then(|exe| std::fs::copy(exe, p(PROBE)));
+                a.refresh(ViewState::default());
+            },
+            |a| a.idle() && a.listed(PROBE),
+        );
+        // What the program said starts with the folder it runs in.
+        let said_folder = |folder: PathBuf| {
+            let mut first = folder.into_os_string();
+            first.push("\n");
+            std::fs::read(p(PROBE_SAID)).is_ok_and(|said| said.starts_with(first.as_encoded_bytes()))
+        };
+        s.add(
+            "Enter on a program starts it, in its own folder (5.4)",
+            |a| {
+                focus(a.list.hwnd());
+                a.select_one(PROBE);
+                a.press(VK_RETURN, 0);
+            },
+            move |_| said_folder(dir()),
+        )
+        .wait(20000);
+        s.add(
+            "a terminal starts with its arguments, in the folder asked for (5.3)",
+            |a| {
+                let _ = std::fs::remove_file(p(PROBE_SAID));
+                start_terminal(a.wnd, &Terminal { program: wide(p(PROBE)), args: "-d ." }, &p("sub"));
+            },
+            move |_| said_folder(p("sub")) && std::fs::read(p(PROBE_SAID)).is_ok_and(|said| said.ends_with(b" -d .")),
+        )
+        .wait(20000);
+        s.remove_listed("(remove what it said)", PROBE_SAID);
+        s.remove_listed("(remove the program)", PROBE);
         // Long use leaves nothing behind (4.10): opening folders and tabs again and again doesn't pile up handles, GDI
         // or USER objects. A first round fills what is meant to stay (the system image list, the type names).
         let usage = || unsafe {
