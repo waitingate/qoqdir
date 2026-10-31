@@ -173,7 +173,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int) {
 #endif
 
         App app;
-        if (app.create(instance, cmd, !cmd.selfTest)) {
+        if (app.create(instance, cmd)) {
 #ifdef QOQDIR_SELFTEST
             if (cmd.selfTest) app.startSelfTest(cmd.folders[0], cmd.folders[0] + L".log");
 #endif

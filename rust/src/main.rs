@@ -239,9 +239,10 @@ fn main() {
         if cmd.self_test {
             cmd.folders = vec![selftest::prepare()];
         }
+        #[cfg(feature = "selftest")]
         let self_test = cmd.self_test;
         let instance = GetModuleHandleW(None).unwrap_or_default().into();
-        let code = match app::App::create(instance, cmd, !self_test) {
+        let code = match app::App::create(instance, cmd) {
             Some(app) => {
                 #[cfg(feature = "selftest")]
                 if self_test {

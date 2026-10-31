@@ -50,7 +50,7 @@ inline std::wstring windowText(HWND h) {
 class App {
 public:
     // Opens the command line's folders as tabs (or the home folder).
-    bool create(HINSTANCE instance, const CommandLine& cmd, bool useSettings = true);
+    bool create(HINSTANCE instance, const CommandLine& cmd);
     bool handleKey(const MSG& msg);   // called for every message before dispatch
 
     // Self-test (in qoqdir-test.exe only): drives the app from inside (no global keyboard input) and logs results.

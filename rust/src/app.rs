@@ -548,7 +548,7 @@ impl App {
     // ------------------------------------------------------------ setup
 
     /// Opens the command line's folders as tabs (or the home folder).
-    pub fn create(instance: HINSTANCE, cmd: CommandLine, use_settings: bool) -> Option<Rc<App>> {
+    pub fn create(instance: HINSTANCE, cmd: CommandLine) -> Option<Rc<App>> {
         let name = wide(APP_NAME);
         unsafe {
             let class = WNDCLASSEXW {
@@ -565,8 +565,8 @@ impl App {
             let ask = Self::start_ask();
             let sys_dpi = GetDpiForSystem();
             let exe = std::env::current_exe().unwrap_or_default();
-            // Without settings (self-test), read from a file that cannot exist: every value is then a default.
-            let ini_name = if use_settings { format!("{}.ini", APP_NAME.to_lowercase()) } else { "none?.ini".into() };
+            // A self-test has no settings: it reads from a file that cannot exist, so every value is a default.
+            let ini_name = if cmd.self_test { "none?.ini".into() } else { format!("{}.ini", APP_NAME.to_lowercase()) };
             let ini = wide(exe.with_file_name(ini_name));
             let ini_values = read_ini_section(&ini);
             // Where to make the window: the asked place (Open in new window, 5.8), else the saved place when it is on
@@ -666,8 +666,8 @@ impl App {
                 }
             }
             // Bookmarks are shortcuts in a folder next to the exe (in a self-test: in the test folder).
-            let bookmarks = match (use_settings, cmd.folders.first().and_then(|f| f.path())) {
-                (false, Some(test_dir)) => test_dir.join("Bookmarks"),
+            let bookmarks = match (cmd.self_test, cmd.folders.first().and_then(|f| f.path())) {
+                (true, Some(test_dir)) => test_dir.join("Bookmarks"),
                 _ => exe.with_file_name("Bookmarks"),
             };
             let _ = std::fs::create_dir(&bookmarks); // fails harmlessly if it exists
@@ -797,7 +797,7 @@ impl App {
             app.apply_colors(high_contrast_on());
             app.apply_font();
             app.tree.fill();
-            app.load_settings(&cmd, &ask, !use_settings || ask.quiet); // a self-test never steals the focus
+            app.load_settings(&cmd, &ask, cmd.self_test || ask.quiet); // a self-test never steals the focus
             app.layout();
             app.show_tab();
             // Only now, with the first folder's read out: these took 80 ms (the Bookmarks watch 57 of them), which the

@@ -224,10 +224,10 @@ App::StartAsk App::startAsk() {
     return ask;
 }
 
-bool App::create(HINSTANCE instance, const CommandLine& cmd, bool useSettings) {
+bool App::create(HINSTANCE instance, const CommandLine& cmd) {
     std::wstring exe = exePath();
-    // Without settings (self-test), read from a file that does not exist: every value is then a default.
-    ini_ = useSettings ? joinPath(parentPath(exe), toLower(kAppName) + L".ini") : L"?";
+    // A self-test has no settings: it reads from a file that does not exist, so every value is a default.
+    ini_ = cmd.selfTest ? L"?" : joinPath(parentPath(exe), toLower(kAppName) + L".ini");
     iniValues_ = readIniSection(ini_);
     WNDCLASSEXW wc{};
     wc.cbSize = sizeof wc;
@@ -270,7 +270,7 @@ bool App::create(HINSTANCE instance, const CommandLine& cmd, bool useSettings) {
     tabBar_ = make(WC_TABCONTROLW, L"", TCS_FOCUSNEVER, 0, ID_TABS);
     plus_ = make(L"BUTTON", L"+", BS_PUSHBUTTON, 0, ID_PLUS);
     // Bookmarks are shortcuts in a folder next to the exe (in a self-test: in the test folder).
-    std::wstring bookmarks = joinPath(useSettings ? parentPath(exe) : cmd.folders.at(0), L"Bookmarks");
+    std::wstring bookmarks = joinPath(cmd.selfTest ? cmd.folders.at(0) : parentPath(exe), L"Bookmarks");
     CreateDirectoryW(bookmarks.c_str(), nullptr);   // fails harmlessly if it exists
     tree_.create(wnd_, ID_TREE, WM_APP_TREE, WM_APP_TREE_ICONS, kTreeTimer, bookmarks);
     list_.create(wnd_, ID_LIST, WM_APP_WANTICONS, WM_APP_ICONS);
@@ -335,7 +335,7 @@ bool App::create(HINSTANCE instance, const CommandLine& cmd, bool useSettings) {
     applyFont();
     tree_.fill();
 
-    loadSettings(cmd, ask, !useSettings || ask.quiet);   // a self-test never steals the focus
+    loadSettings(cmd, ask, cmd.selfTest || ask.quiet);   // a self-test never steals the focus
     layout();
     showTab();
     // Only now, with the first folder's read out: these took 80 ms (the Bookmarks watch 57 of them), which the read
