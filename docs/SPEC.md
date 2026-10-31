@@ -728,9 +728,11 @@ and exits with code 0 only if every step passed. It must:
   paste step first puts its file back if another program took the clipboard.
   Windows reads the clipboard a moment after a paste starts, so a copy at that
   moment can still fail a paste step, as it would make Explorer's paste do
-  nothing. A cut at that moment would bring someone's files in instead: the step
-  fails, and at the end those files go to a folder next to the test folder (its
-  name plus " kept") instead of being deleted with it;
+  nothing. A cut at that moment would bring someone's files in instead, slowly
+  perhaps. So unless the step sees the test's own file arrive and nothing else,
+  it fails and nothing in the test folder is deleted: the next run first moves
+  the folder aside, whole (its name plus " kept"), and doesn't start while it
+  can't;
 - leave nothing behind but the test folder and log in `%TEMP%` (two small files in
   the Recycle Bin from the delete tests are fine). It may replace the clipboard.
 

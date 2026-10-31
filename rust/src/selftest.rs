@@ -241,10 +241,7 @@ thread_local! {
     static NEXT: RefCell<OsString> = const { RefCell::new(OsString::new()) }; // the item after the one Delete removes
     static KEPT: RefCell<OsString> = const { RefCell::new(OsString::new()) }; // selected there while a delete is out
     static MENU: RefCell<Option<MenuItems>> = const { RefCell::new(None) }; // what an item menu was opened on
-    // What `sub` held before the paste step, and anything the paste brought in that isn't the test's file (a cut made
-    // elsewhere just as it started): then the test folder is kept, not deleted (7.2).
-    static SUB_BEFORE: RefCell<BTreeSet<OsString>> = const { RefCell::new(BTreeSet::new()) };
-    static FOREIGN: RefCell<BTreeSet<OsString>> = const { RefCell::new(BTreeSet::new()) };
+    static SUB_BEFORE: RefCell<BTreeSet<OsString>> = const { RefCell::new(BTreeSet::new()) }; // before the paste step
     static RUN: RefCell<Option<SelfTest>> = const { RefCell::new(None) }; // the steps, and how far the run is
     static EXIT_CODE: Cell<i32> = const { Cell::new(1) }; // a run that never finishes (closed by hand) has not passed
 }
@@ -304,9 +301,35 @@ fn log(line: &str) {
     }
 }
 
+/// There while the paste step hasn't seen that its paste brought the test's own file and nothing else. It may have
+/// brought someone's files instead (7.2), so the test folder is not deleted, by this run or the next.
+fn paste_mark() -> PathBuf {
+    let mut path = test_dir().into_os_string();
+    path.push(".pasting");
+    path.into()
+}
+
 /// Makes a fresh test folder and returns it.
 pub fn prepare() -> Location {
     let root = test_dir();
+    if exists(&paste_mark()) {
+        // The last run's paste may have brought in someone's files: its folder moves aside, whole. While that fails
+        // (a copy may still be writing there) it stays, and this run doesn't start.
+        let kept = |n: u32| {
+            let mut name = root.clone().into_os_string();
+            name.push(if n == 1 { " kept".into() } else { format!(" kept {n}") });
+            name
+        };
+        if exists(&root) && !(1..=99).any(|n| std::fs::rename(&root, kept(n)).is_ok()) {
+            let _ = std::fs::write(
+                log_path(),
+                "the last run's paste may have brought in files that aren't the test's, and its folder can't be moved \
+                 aside yet: this run doesn't start\n",
+            );
+            std::process::exit(1);
+        }
+        let _ = std::fs::remove_file(paste_mark());
+    }
     let _ = std::fs::remove_dir_all(&root);
     let _ = std::fs::create_dir_all(root.join("sub"));
     for name in ["file1.txt", "file2.txt", "file10.txt", "\u{5831}\u{544A}.pdf"] {
@@ -1044,27 +1067,38 @@ impl App {
             "Ctrl+V pastes with the Windows copy engine",
             |a| {
                 SUB_BEFORE.with(|b| *b.borrow_mut() = names_in(&p("sub")));
-                if test_file_on_clipboard(a) {
+                if !test_file_on_clipboard(a) {
+                    note("the clipboard was not the test's: no paste".into());
+                    return;
+                }
+                write_file(&paste_mark());
+                if exists(&paste_mark()) {
                     a.press(letter(b'V'), CTRL);
                 } else {
-                    note("the clipboard was not the test's: no paste".into());
+                    note("no mark beside the test folder: no paste".into());
                 }
             },
             |_| {
                 // Only the test's file comes in. A cut made elsewhere just as the paste starts would bring someone's
-                // files instead: they are named here, and the test folder is kept at the end (7.2).
+                // files instead, slowly perhaps: until the test's own file is here and nothing else, the mark stays
+                // (7.2).
                 let before = SUB_BEFORE.with(|b| b.borrow().clone());
-                let came = names_in(&p("sub"))
-                    .into_iter()
-                    .filter(|n| n != OsStr::new("file1.txt") && !before.contains(n));
-                FOREIGN.with(|f| f.borrow_mut().extend(came));
-                let foreign = FOREIGN.with(|f| f.borrow().clone());
-                if !foreign.is_empty() {
-                    let names: Vec<_> = foreign.iter().map(|n| n.to_string_lossy()).collect();
-                    note(format!("not the test's: {}", names.join(", ")));
+                let names = names_in(&p("sub"));
+                let others: Vec<_> = names
+                    .iter()
+                    .filter(|n| *n != OsStr::new("file1.txt") && !before.contains(*n))
+                    .map(|n| n.to_string_lossy())
+                    .collect();
+                if !others.is_empty() {
+                    note(format!("not the test's: {}", others.join(", ")));
+                }
+                // A byte, as write_file made it.
+                let pasted = std::fs::metadata(p("sub\\file1.txt")).is_ok_and(|m| m.len() == 1);
+                if !pasted || !others.is_empty() {
                     return false;
                 }
-                exists(&p("sub\\file1.txt"))
+                let _ = std::fs::remove_file(paste_mark());
+                true
             },
         )
         .wait(10000);
@@ -4656,41 +4690,11 @@ impl App {
                 }
                 let failures = with_test(|t| t.failures);
                 log(&if failures > 0 { format!("{failures} step(s) FAILED\n") } else { "all steps passed\n".into() });
-                // Files that aren't the test's came in with its paste (a cut made elsewhere just then): they go to a
-                // folder of their own next to the test folder before it is deleted, so they can be put back. The test
-                // folder itself can't be moved aside: the window still watches folders in it.
-                let dir = test_dir();
-                let foreign = FOREIGN.with(|f| f.borrow().clone());
-                let mut moved = 0;
-                if !foreign.is_empty() {
-                    let mut kept = None;
-                    for n in 1..=99 {
-                        let mut name = dir.clone().into_os_string();
-                        name.push(if n == 1 { " kept".into() } else { format!(" kept ({n})") });
-                        if std::fs::create_dir(&name).is_ok() {
-                            kept = Some(PathBuf::from(name));
-                            break;
-                        }
-                    }
-                    if let Some(k) = &kept {
-                        for name in &foreign {
-                            if std::fs::rename(dir.join("sub").join(name), k.join(name)).is_ok() {
-                                moved += 1;
-                            }
-                        }
-                    }
-                    log(&match kept {
-                        Some(k) if moved == foreign.len() => {
-                            let k = k.display();
-                            format!("files that aren't the test's came in with its paste: they are in {k}\n")
-                        }
-                        _ => "files that aren't the test's came in with its paste and could not all be moved out: the \
-                              test folder is left in place, and the next run deletes it\n"
-                            .into(),
-                    });
-                }
-                if moved == foreign.len() {
-                    let _ = std::fs::remove_dir_all(&dir);
+                if exists(&paste_mark()) {
+                    log("its paste may have brought in files that aren't the test's: the test folder stays, and the \
+                         next run moves it aside, to a folder of its name plus \" kept\"\n");
+                } else {
+                    let _ = std::fs::remove_dir_all(test_dir());
                 }
                 EXIT_CODE.set(if failures > 0 { 1 } else { 0 });
                 unsafe {

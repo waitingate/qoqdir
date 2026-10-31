@@ -34,9 +34,7 @@ struct App::SelfTest {
     ULONGLONG heldTick = 0;   // since when only a folder load still out has held the next step back
     std::wstring dir, logPath, note;
     int failures = 0;
-    // What `sub` held before the paste step, and anything the paste brought in that isn't the test's file (a cut made
-    // elsewhere just as it started): then the test folder is kept, not deleted (7.2).
-    std::set<std::wstring> subBefore, foreign;
+    std::set<std::wstring> subBefore;   // what `sub` held before the paste step, so anything else can be named
 };
 
 namespace {
@@ -48,11 +46,15 @@ std::wstring testRoot() {
     return joinPath(temp, toLower(kAppName) + L"-selftest");
 }
 
-void writeFile(const std::wstring& p) {
+// There while the paste step hasn't seen that its paste brought the test's own file and nothing else. It may have
+// brought someone's files instead (7.2), so the test folder is not deleted, by this run or the next.
+std::wstring pasteMark(const std::wstring& root) { return root + L".pasting"; }
+
+void writeFile(const std::wstring& p, const std::string& text = "x") {
     HANDLE f = CreateFileW(p.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
     if (f == INVALID_HANDLE_VALUE) return;
     DWORD written = 0;
-    WriteFile(f, "x", 1, &written, nullptr);
+    WriteFile(f, text.data(), DWORD(text.size()), &written, nullptr);
     CloseHandle(f);
 }
 
@@ -118,7 +120,20 @@ double nowMs() {
 }  // namespace
 
 std::wstring App::prepareSelfTest() {
-    std::wstring root = testRoot();
+    std::wstring root = testRoot(), mark = pasteMark(root);
+    if (exists(mark)) {
+        // The last run's paste may have brought in someone's files: its folder moves aside, whole. While that fails
+        // (a copy may still be writing there) it stays, and this run doesn't start.
+        bool moved = !exists(root);
+        for (int n = 1; n <= 99 && !moved; ++n)
+            moved = MoveFileW(root.c_str(), (root + L" kept" + (n == 1 ? L"" : L" " + std::to_wstring(n))).c_str());
+        if (!moved) {
+            writeFile(root + L".log", "the last run's paste may have brought in files that aren't the test's, and its "
+                                      "folder can't be moved aside yet: this run doesn't start\n");
+            ExitProcess(1);
+        }
+        DeleteFileW(mark.c_str());
+    }
     deleteTree(root);
     CreateDirectoryW(root.c_str(), nullptr);
     CreateDirectoryW(joinPath(root, L"sub").c_str(), nullptr);
@@ -605,21 +620,27 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
     add(L"Ctrl+V pastes with the Windows copy engine",
         [=, this] {
             for (const Item& it : listFolder(path(L"sub"), true).items) selfTest_->subBefore.insert(it.name);
-            if (testFileOnClipboard()) selfTestKey('V', true);
-            else selfTest_->note = L"the clipboard was not the test's: no paste";
+            if (!testFileOnClipboard()) {
+                selfTest_->note = L"the clipboard was not the test's: no paste";
+                return;
+            }
+            writeFile(pasteMark(dir));
+            if (exists(pasteMark(dir))) selfTestKey('V', true);
+            else selfTest_->note = L"no mark beside the test folder: no paste";
         },
         [=, this] {
             // Only the test's file comes in. A cut made elsewhere just as the paste starts would bring someone's files
-            // instead: they are named here, and the test folder is kept at the end (7.2).
-            for (const Item& it : listFolder(path(L"sub"), true).items)
-                if (it.name != L"file1.txt" && !selfTest_->subBefore.count(it.name)) selfTest_->foreign.insert(it.name);
-            if (!selfTest_->foreign.empty()) {
-                std::wstring names;
-                for (const std::wstring& n : selfTest_->foreign) names += (names.empty() ? L"" : L", ") + n;
-                selfTest_->note = L"not the test's: " + names;
-                return false;
+            // instead, slowly perhaps: until the test's own file is here and nothing else, the mark stays (7.2).
+            bool pasted = false;
+            std::wstring others;
+            for (const Item& it : listFolder(path(L"sub"), true).items) {
+                if (it.name == L"file1.txt") pasted = it.size == 1;   // a byte, as writeFile made it
+                else if (!selfTest_->subBefore.count(it.name)) others += (others.empty() ? L"" : L", ") + it.name;
             }
-            return exists(path(L"sub\\file1.txt"));
+            if (!others.empty()) selfTest_->note = L"not the test's: " + others;
+            if (!pasted || !others.empty()) return false;
+            DeleteFileW(pasteMark(dir).c_str());
+            return true;
         }, 10000);
     add(L"pasted file appears in the list by itself", nullptr, [=, this] { return idle() && listed(L"file1.txt"); });
     add(L"Paste shortcut makes a shortcut to the copied file",
@@ -3252,25 +3273,11 @@ void App::selfTestTick() {
 
     KillTimer(wnd_, kSelfTestTimer);
     selfTestLog(t.failures ? std::to_wstring(t.failures) + L" step(s) FAILED\n" : L"all steps passed\n");
-    // Files that aren't the test's came in with its paste (a cut made elsewhere just then): they go to a folder of
-    // their own next to the test folder before it is deleted, so they can be put back. The test folder itself can't
-    // be moved aside: the window still watches folders in it.
-    size_t moved = 0;
-    if (!t.foreign.empty()) {
-        std::wstring kept;
-        for (int n = 1; n <= 99 && kept.empty(); ++n) {
-            std::wstring name = t.dir + L" kept" + (n == 1 ? L"" : L" (" + std::to_wstring(n) + L")");
-            if (CreateDirectoryW(name.c_str(), nullptr)) kept = name;
-        }
-        for (const std::wstring& name : t.foreign)
-            if (!kept.empty() && MoveFileW(joinPath(t.dir, L"sub\\" + name).c_str(), joinPath(kept, name).c_str()))
-                ++moved;
-        selfTestLog(moved == t.foreign.size()
-                        ? L"files that aren't the test's came in with its paste: they are in " + kept + L"\n"
-                        : L"files that aren't the test's came in with its paste and could not all be moved out: the "
-                          L"test folder is left in place, and the next run deletes it\n");
-    }
-    if (moved == t.foreign.size()) deleteTree(t.dir);
+    if (exists(pasteMark(t.dir)))
+        selfTestLog(L"its paste may have brought in files that aren't the test's: the test folder stays, and the next "
+                    L"run moves it aside, to a folder of its name plus \" kept\"\n");
+    else
+        deleteTree(t.dir);
     exitCode_ = t.failures ? 1 : 0;
     PostMessageW(wnd_, WM_CLOSE, 0, 0);
 }
