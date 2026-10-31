@@ -103,7 +103,9 @@ These describe what the user sees. Each must hold in every situation.
   the tree, a shortcut to a network folder, icons of files on a slow disk,
   refreshes.
 - If a load takes more than about a quarter second, the status bar says
-  "Loading…" until the folder arrives or the load is replaced.
+  "Loading…" until the folder arrives or the load is replaced. Then it says what
+  it said before ("Refreshed" after F5), unless the tab moved: a move clears the
+  message.
 - The shell is asked about the file types in a folder (their names and icons) on
   the loader thread too: a file type's icon handler, a DLL some program
   installed, can hang, and then it hangs the load, not the window. (Explorer
@@ -786,7 +788,8 @@ result:
 22. Holding F5 (20 repeats) while a folder loads starts only one load.
 23. A change notification while a folder is being opened doesn't cancel the
     open, and the new folder is shown.
-24. A slow refresh shows "Loading…", which goes away afterwards.
+24. A slow refresh shows "Loading…", which goes away afterwards, and what the
+    status bar said before comes back: F5 still says "Refreshed".
 25. In a folder with a program in it, the program's own icon arrives later. In
     a folder of 300 shortcuts, own icons are read for a screenful of rows, a few
     more at most; scrolled to the end, the last rows get theirs too, and about

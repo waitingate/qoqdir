@@ -292,8 +292,8 @@ pub struct App {
     pub watch: RefCell<Option<FolderWatch>>,
     watch_number: Cell<u32>, // which of its message numbers the watch has (on_loaded)
     bookmarks_watch: RefCell<Option<FolderWatch>>, // Bookmarks' node follows its folder whatever the list shows (5.5)
-    kept_said: RefCell<String>, // what "Loading..." covered while the tab waited for State::kept: back with the folder
-    load_message_shown: Cell<bool>, // the status bar says "Loading..." or "not available" (set_message clears it)
+    said: RefCell<String>,          // what set_message last said
+    load_message_shown: Cell<bool>, // the status bar says a load's own message instead (show_load_message)
     pub generation: Cell<u32>,
     pub commands: Cell<u32>,      // commands typed in the address bar: an older one's reply leaves the box alone
     pub commands_done: Cell<u32>, // ...whose replies came back (self-test)
@@ -708,7 +708,7 @@ impl App {
                 watch: RefCell::new(None),
                 watch_number: Cell::new(0),
                 bookmarks_watch: RefCell::new(None),
-                kept_said: RefCell::new(String::new()),
+                said: RefCell::new(String::new()),
                 load_message_shown: Cell::new(false),
                 generation: Cell::new(0),
                 commands: Cell::new(0),
@@ -1395,14 +1395,7 @@ impl App {
                 TIMER_LOADING => {
                     let _ = KillTimer(Some(self.wnd), TIMER_LOADING);
                     if self.is_loading() {
-                        // A tab waiting for its switch's read after a failed move gets back what this takes the
-                        // place of (on_loaded, 4.2): the move's error, or a message shown since.
-                        if self.st.borrow().pending.is_none() {
-                            let said = self.status_message();
-                            *self.kept_said.borrow_mut() = said;
-                        }
-                        self.set_message("Loading\u{2026}"); // only when it is slow
-                        self.load_message_shown.set(true);
+                        self.show_load_message("Loading\u{2026}"); // only when it is slow
                     }
                 }
                 _ => {}
@@ -1966,14 +1959,14 @@ impl App {
         if counted {
             self.loads_done.set(self.loads_done.get() + 1);
         }
-        let (pending, kept_back, moving) = {
+        let (pending, moving) = {
             let mut st = self.st.borrow_mut();
             match st.kept.take_if(|k| k.generation == generation) {
                 Some(kept) => {
                     KEPT_LOAD.store(0, Ordering::SeqCst);
-                    (Some(kept), true, st.pending.is_some())
+                    (Some(kept), st.pending.is_some())
                 }
-                None => (st.pending.take_if(|p| p.generation == generation), false, false),
+                None => (st.pending.take_if(|p| p.generation == generation), false),
             }
         };
         let Some(pending) = pending else {
@@ -1989,10 +1982,10 @@ impl App {
             unsafe {
                 let _ = KillTimer(Some(self.wnd), TIMER_LOADING);
             }
-            // Any load, not only navigation, may have said "Loading...". What it took the place of comes back for a
-            // tab that waited for its switch's read after a failed move (4.2); otherwise it goes.
+            // Any load, not only navigation, may have said "Loading...": what it took the place of comes back
+            // (4.1, 4.2).
             if self.load_message_shown.get() {
-                let said = if kept_back { self.kept_said.borrow().clone() } else { String::new() };
+                let said = self.said.borrow().clone();
                 self.set_message(&said);
             }
         }
@@ -2221,8 +2214,8 @@ impl App {
         self.with_tab(|t| t.unavailable = true);
         drop(self.watch.take());
         let path = location.text();
-        self.set_message(&format!("\"{}\" is not available: {error}   (F5 tries again)", path.to_string_lossy()));
-        self.load_message_shown.set(true);
+        self.said.borrow_mut().clear(); // this says it all, and when a folder lands nothing takes its place
+        self.show_load_message(&format!("\"{}\" is not available: {error}   (F5 tries again)", path.to_string_lossy()));
         self.show_status();
     }
 
@@ -2266,7 +2259,7 @@ impl App {
     }
 
     /// F5 and the Refresh button: the list (unless it is loading already) and the tree (5.5); the status bar says so.
-    fn refresh_all(&self) {
+    pub fn refresh_all(&self) {
         let list = self.refresh(ViewState::default());
         self.tree.refresh();
         if list {
@@ -2764,12 +2757,20 @@ impl App {
     }
 
     pub fn set_message(&self, text: &str) {
+        *self.said.borrow_mut() = text.to_string();
         let w = wide(text);
         send(self.status, SB_SETTEXTW, 1, w.as_ptr() as isize);
-        self.load_message_shown.set(false); // a "Loading..." or "not available" there is gone (their callers set it again)
+        self.load_message_shown.set(false);
     }
 
-    /// What the status bar says (set_message).
+    /// "Loading..." or "not available", on top of what set_message said: a load that lands puts that back (on_loaded).
+    fn show_load_message(&self, text: &str) {
+        let w = wide(text);
+        send(self.status, SB_SETTEXTW, 1, w.as_ptr() as isize);
+        self.load_message_shown.set(true);
+    }
+
+    /// What the status bar says now.
     pub fn status_message(&self) -> String {
         let len = (send(self.status, SB_GETTEXTLENGTHW, 1, 0) & 0xFFFF) as usize;
         let mut buf = vec![0u16; len + 1];

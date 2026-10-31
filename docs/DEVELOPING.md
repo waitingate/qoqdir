@@ -88,6 +88,9 @@ instead of corrupting data, and the crash log says where.
   the folder (`FileList::visit`).
 - A tab remembers its selection, focus and scroll (`rememberView()`) when it
   leaves the screen, but only if the list shows that tab's own folder.
+- The status bar's message (`setMessage`) is kept in `said_`. "Loading..." and
+  "not available" go on top of it (`showLoadMessage`), and a load that lands puts
+  it back, so a slow load ends as a fast one does.
 - A failed Refresh or tab switch leaves the tab "not available": empty list,
   `unavailable` set, a status message, no folder watch. Background tabs start
   with that flag until they have loaded once. Paste, new folder, the empty-space

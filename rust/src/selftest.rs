@@ -2516,6 +2516,17 @@ impl App {
             },
             |a| a.idle() && a.status_message() != "Loading\u{2026}",
         );
+        let said_loading = Rc::new(Cell::new(false));
+        let said = said_loading.clone();
+        s.add(
+            "...and what it took the place of comes back: a slow F5 still says Refreshed (4.1)",
+            move |a| {
+                a.refresh_all();
+                send(a.wnd, WM_TIMER, TIMER_LOADING, 0); // as if the refresh took over 250 ms
+                said.set(a.status_message() == "Loading\u{2026}");
+            },
+            move |a| said_loading.get() && a.idle() && a.status_message() == "Refreshed",
+        );
         s.add(
             "back up to the test folder",
             |a| {

@@ -737,13 +737,7 @@ void App::onTimer(UINT_PTR id) {
         showStatus();
     } else if (id == kLoadingTimer) {
         KillTimer(wnd_, kLoadingTimer);
-        if (loading()) {   // say "Loading..." only if it is slow
-            // A tab waiting for its switch's read after a failed move gets back what this takes the place of
-            // (onLoaded, 4.2): the move's error, or a message shown since.
-            if (!pending_.generation) keptSaid_ = message();
-            setMessage(L"Loading…");
-            loadMessageShown_ = true;
-        }
+        if (loading()) showLoadMessage(L"Loading…");   // say "Loading..." only if it is slow
     }
 }
 
@@ -1098,9 +1092,8 @@ void App::onLoaded(Listing&& listing, UINT generation) {
     bool moving = keptBack && pending_.generation;   // the move is still out: "Loading..." and its hint are its own
     if (!moving) {
         KillTimer(wnd_, kLoadingTimer);
-        // Any load, not only navigation, may have said "Loading...". What it took the place of comes back for a tab
-        // that waited for its switch's read after a failed move (4.2); otherwise it goes.
-        if (loadMessageShown_) setMessage(keptBack ? keptSaid_ : L"");
+        // Any load, not only navigation, may have said "Loading...": what it took the place of comes back (4.1, 4.2).
+        if (loadMessageShown_) setMessage(said_);
     }
     Pending p = std::exchange(keptBack ? kept_ : pending_, {});
     if (keptBack) g_keptLoad = 0;
@@ -1266,8 +1259,8 @@ void App::showUnavailable(const std::wstring& path, DWORD error) {
     list_.clear();
     tab().unavailable = true;
     watch_ = {};
-    setMessage(L"\"" + locationText(path) + L"\" is not available: " + errorText(error) + L"   (F5 tries again)");
-    loadMessageShown_ = true;
+    said_.clear();   // this says it all, and when a folder lands nothing takes its place
+    showLoadMessage(L"\"" + locationText(path) + L"\" is not available: " + errorText(error) + L"   (F5 tries again)");
     showStatus();
 }
 
@@ -1670,8 +1663,14 @@ void App::warn(const std::wstring& text) {
 }
 
 void App::setMessage(const std::wstring& text) {
+    said_ = text;
+    SendMessageW(status_, SB_SETTEXTW, 1, reinterpret_cast<LPARAM>(said_.c_str()));
+    loadMessageShown_ = false;
+}
+
+void App::showLoadMessage(const std::wstring& text) {
     SendMessageW(status_, SB_SETTEXTW, 1, reinterpret_cast<LPARAM>(text.c_str()));
-    loadMessageShown_ = false;   // a "Loading..." or "not available" there is gone (their callers set it again)
+    loadMessageShown_ = true;
 }
 
 std::wstring App::message() const {

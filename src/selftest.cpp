@@ -1656,6 +1656,14 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
             SendMessageW(wnd_, WM_TIMER, kLoadingTimer, 0);   // as if the refresh took over 250 ms
         },
         [=, this] { return idle() && statusMessage() != L"Loading…"; });
+    auto saidLoading = std::make_shared<bool>(false);
+    add(L"...and what it took the place of comes back: a slow F5 still says Refreshed (4.1)",
+        [=, this] {
+            refreshAll();
+            SendMessageW(wnd_, WM_TIMER, kLoadingTimer, 0);   // as if the refresh took over 250 ms
+            *saidLoading = statusMessage() == L"Loading…";
+        },
+        [=, this] { return *saidLoading && idle() && statusMessage() == L"Refreshed"; });
     add(L"back up to the test folder", [=, this] { SetFocus(list_.hwnd()); selfTestKey(VK_BACK); }, [=, this] { return at(dir); });
     add(L"(open a folder two levels down)",
         [=, this] { CreateDirectoryW(path(L"sub\\deep").c_str(), nullptr); open(path(L"sub\\deep"), Nav::New); },

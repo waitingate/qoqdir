@@ -161,7 +161,9 @@ private:
     // Status and settings
     void showStatus();
     void setMessage(const std::wstring& text);
-    std::wstring message() const;   // what the status bar says (setMessage)
+    // "Loading..." or "not available", on top of what setMessage said: a load that lands puts that back (onLoaded).
+    void showLoadMessage(const std::wstring& text);
+    std::wstring message() const;   // what the status bar says now
     // A status message once per run (5.3); with 'afterLoad', once the folder being loaded has landed.
     void hint(bool& said, const wchar_t* text, bool afterLoad = false);
     void warn(const std::wstring& text);   // an error: in the status bar, with a beep
@@ -217,7 +219,8 @@ private:
         UINT visit = 0;             // the list's visit that `view` belongs to (FileList::visit)
         ViewState view;
     } queued_;
-    bool loadMessageShown_ = false; // the status bar says "Loading..." or "not available" (setMessage clears it)
+    std::wstring said_;             // what setMessage last said
+    bool loadMessageShown_ = false; // the status bar says a load's own message instead (showLoadMessage)
     const wchar_t* lateHint_ = nullptr;   // a hint for when the folder being loaded lands (a navigation clears messages)
     bool firstFolder_ = true;   // no folder shown yet: the first says "F1 shows the keys" (5.10)
 
@@ -236,7 +239,6 @@ private:
     // A tab switch a move took over: its read goes on, and the tab shows what it finds as soon as it is back, as the
     // switch would have (4.2). Until then it counts as loading.
     Pending kept_;
-    std::wstring keptSaid_;   // what "Loading..." covered while the tab waited for that read: back with the folder
     UINT generation_ = 0;
     UINT commands_ = 0;       // commands typed in the address bar: an older one's reply leaves the box alone
     UINT commandsDone_ = 0;   // ...whose replies came back (self-test)
