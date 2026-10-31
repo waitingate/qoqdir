@@ -681,10 +681,10 @@ At least these, with concrete examples:
 - Sorting: folders first, natural number order, each column both ways, ties by
   name, Type by the shown type text.
 - Filtering: substring, ignoring case, wildcards (`*.pdf` must not match
-  `x.pdf.txt`; `a?c` needs one character in the middle), an empty filter, letters
-  beyond English (`資*` finds `資料.txt`, `äbc*` finds `ÄBC.txt`), several patterns
-  (`*.jpg; *.png`), and many stars without a slow-down (`*a*a*a*a*a*a*a*b` on a
-  name of 40 a's).
+  `x.pdf.txt`; `a?c` needs one character in the middle, and an emoji, two UTF-16
+  units, is one), an empty filter, letters beyond English (`資*` finds `資料.txt`,
+  `äbc*` finds `ÄBC.txt`), several patterns (`*.jpg; *.png`), and many stars
+  without a slow-down (`*a*a*a*a*a*a*a*b` on a name of 40 a's).
 - Listing a real folder: no `.` or `..`, a missing folder gives an error, This PC
   lists at least one drive, and a path that is a file is reported as one.
 - Spotting shortcuts by extension (`.lnk`, `.url`, any letter case).

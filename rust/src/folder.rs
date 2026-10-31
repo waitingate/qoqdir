@@ -685,7 +685,10 @@ fn wildcard_match(name: &[u16], pattern: &[u16]) -> bool {
     let (mut n, mut p, mut back) = (0, 0, None);
     while n < name.len() {
         if p < pattern.len() && (pattern[p] == any || pattern[p] == name[n]) {
-            (n, p) = (n + 1, p + 1);
+            // '?' takes a whole character, which an emoji's two UTF-16 units are.
+            let high = (0xD800..0xDC00).contains(&name[n]);
+            let pair = pattern[p] == any && high && name.get(n + 1).is_some_and(|c| (0xDC00..0xE000).contains(c));
+            (n, p) = (n + if pair { 2 } else { 1 }, p + 1);
         } else if p < pattern.len() && pattern[p] == star {
             back = Some((p, n));
             p += 1;
@@ -1146,6 +1149,15 @@ mod tests {
         assert!(matches_filter(&item("a.png", 0, false), &wide("*.jpg; *.png")));
         assert!(!matches_filter(&item("a.gif", 0, false), &wide("*.jpg;*.png")));
         assert!(matches_filter(&item("abc", 0, false), &wide("a?c")) && !matches_filter(&item("ac", 0, false), &wide("a?c")));
+        // '?' is one character, and one like an emoji is two UTF-16 units. Half of one, in a broken name, is one.
+        let emoji = item("\u{1F600}.txt", 0, false);
+        assert!(matches_filter(&emoji, &wide("?.txt")) && !matches_filter(&emoji, &wide("??.txt")));
+        assert!(matches_filter(&item("a\u{1F600}z", 0, false), &wide("a?z")));
+        assert!(matches_filter(&item("\u{1F600}\u{1F601}", 0, false), &wide("??")));
+        assert!(matches_filter(&item("a\u{1F600}z", 0, false), &wide("*?z")));
+        assert!(!matches_filter(&item("\u{1F600}", 0, false), &wide("*??")));
+        let broken = Item { name: OsString::from_wide(&[b'a' as u16, 0xD83D, b'z' as u16]), ..item("", 0, false) };
+        assert!(matches_filter(&broken, &wide("a?z")));
         // One filter, made once, for many items: what one item left behind doesn't count for the next.
         let text = wide("*.PDF; b*");
         let mut wild = ItemFilter::new(&text);

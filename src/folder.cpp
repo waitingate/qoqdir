@@ -372,7 +372,12 @@ namespace {
 bool wildcardMatch(std::wstring_view name, std::wstring_view pattern) {
     size_t n = 0, p = 0, star = pattern.npos, mark = 0;
     while (n < name.size()) {
-        if (p < pattern.size() && (pattern[p] == L'?' || pattern[p] == name[n])) { ++n; ++p; }
+        if (p < pattern.size() && (pattern[p] == L'?' || pattern[p] == name[n])) {
+            // '?' takes a whole character, which an emoji's two UTF-16 units are.
+            bool pair = pattern[p] == L'?' && n + 1 < name.size() && IS_SURROGATE_PAIR(name[n], name[n + 1]);
+            n += pair ? 2 : 1;
+            ++p;
+        }
         else if (p < pattern.size() && pattern[p] == L'*') { star = p++; mark = n; }
         else if (star != pattern.npos) { p = star + 1; n = ++mark; }
         else return false;

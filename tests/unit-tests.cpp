@@ -372,6 +372,11 @@ int main(int argc, char** argv) {
     CHECK(matchesFilter(file(L"ÄBC.txt"), L"äbc*"));
     CHECK(matchesFilter(file(L"a.png"), L"*.jpg; *.png") && !matchesFilter(file(L"a.gif"), L"*.jpg;*.png"));
     CHECK(matchesFilter(file(L"abc"), L"a?c") && !matchesFilter(file(L"ac"), L"a?c"));
+    // '?' is one character, and one like an emoji is two UTF-16 units. Half of one, in a broken name, is one.
+    CHECK(matchesFilter(file(L"\U0001F600.txt"), L"?.txt") && !matchesFilter(file(L"\U0001F600.txt"), L"??.txt"));
+    CHECK(matchesFilter(file(L"a\U0001F600z"), L"a?z") && matchesFilter(file(L"\U0001F600\U0001F601"), L"??"));
+    CHECK(matchesFilter(file(L"a\U0001F600z"), L"*?z") && !matchesFilter(file(L"\U0001F600"), L"*??"));
+    CHECK(matchesFilter(file(L"a\xD83Dz"), L"a?z"));
     {
         // One filter, made once, for many items: what one item left behind doesn't count for the next.
         ItemFilter wild(L"*.PDF; b*");
