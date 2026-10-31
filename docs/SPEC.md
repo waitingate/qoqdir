@@ -299,6 +299,8 @@ buttons, and the filter box, has a tooltip that names it with its key ("Back
     folder: opened in this tab;
   - a path from the root without a drive (`\Windows`): on the current folder's
     own drive or share, as in Explorer;
+  - a path with `\\?\` or `\\.\` in front (`\\?\UNC\server\share` for
+    `\\server\share`): the same folder, shown the plain way;
   - anything else runs as a command, the way the Windows Run box (Win+R) would:
     `cmd`, `notepad file.txt`, a web address. It runs in the current folder,
     with its `%VARIABLES%` expanded as the Run box does. If Windows can't run
@@ -666,9 +668,9 @@ auto-update, telemetry.
 At least these, with concrete examples:
 - Paths: the parent of a path (including `C:\` to This PC, and UNC share roots),
   joining, leaf names, cleaning up typed input (quotes, spaces, forward slashes,
-  `%VAR%`, `D:`, `..`, trailing backslash, "This PC"), telling a path from a
-  command, comparing paths ignoring case, and which child of A leads to B (used to
-  select the folder you came from).
+  `%VAR%`, `D:`, `..`, trailing backslash, "This PC", `\\?\` in front), telling a
+  path from a command, comparing paths ignoring case, and which child of A leads
+  to B (used to select the folder you came from).
 - Command line: plain folders, `--tab=` and `-t=` (a name that starts with `-`
   too), duplicates removed (letter case, trailing backslash), `.`, `-h`, `-?`,
   `--selftest`; unknown options (`-t` without `=` among them) are errors. The
@@ -764,7 +766,8 @@ result:
 12. Ctrl+T opens a second tab; Ctrl+W goes back to one tab on the same folder.
 13. Typing a missing path and Enter gives an error in the status bar, and the tab
     stays where it was.
-14. Typing a folder path and Enter opens it.
+14. Typing a folder path and Enter opens it, and so does that path with `\\?\` in
+    front, which the address bar then shows the plain way.
 15. Typing `\\192.0.2.1\share` and Enter returns within 100 ms. Opening another
     folder right away cancels it, and that folder is shown.
 16. Typing `sub` and Enter opens `sub` in this tab; `..` and Enter goes back up.

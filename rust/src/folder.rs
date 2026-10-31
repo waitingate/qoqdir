@@ -205,6 +205,21 @@ pub fn is_relative_path(text: &OsStr) -> bool {
     w[..end].contains(&(b'\\' as u16)) && !w[..end].contains(&(b':' as u16))
 }
 
+/// "\\?\C:\x" and "\\?\UNC\server\share" (or with "\\.\") the plain way, which is what the rest of the program takes
+/// apart and all the shell's commands understand. What has no plain way stays ("\\?\Volume{...}").
+fn plain_path(w: &[u16]) -> Option<Vec<u16>> {
+    let sep = u16::from(b'\\');
+    let front = w.len() > 4 && w[0] == sep && w[1] == sep && w[3] == sep;
+    if !front || !(w[2] == u16::from(b'?') || w[2] == u16::from(b'.')) {
+        return None;
+    }
+    let rest = &w[4..];
+    let unc = rest.len() > 4 && equal_no_case(&OsString::from_wide(&rest[..4]), OsStr::new("UNC\\"));
+    let plain = if unc { [&[sep, sep], &rest[4..]].concat() } else { rest.to_vec() };
+    let plain_way = is_absolute_path(&OsString::from_wide(&plain)) || (plain.len() == 2 && plain[1] == u16::from(b':'));
+    plain_way.then_some(plain)
+}
+
 /// Cleans up a path (typed, or from a shortcut). Leaves %VARS% alone: a folder may really be named "%TEMP%".
 pub fn normalize(text: &OsStr) -> Location {
     let junk = |c: &u16| *c == b' ' as u16 || *c == b'\t' as u16 || *c == b'"' as u16;
@@ -221,6 +236,9 @@ pub fn normalize(text: &OsStr) -> Location {
         if *c == b'/' as u16 {
             *c = b'\\' as u16;
         }
+    }
+    if let Some(plain) = plain_path(&w) {
+        w = plain;
     }
     if w.len() == 2 && w[1] == b':' as u16 {
         w.push(b'\\' as u16);
@@ -910,6 +928,17 @@ mod tests {
         assert_eq!(text(&resolve_argument(OsStr::new("C:"))), "C:\\"); // a drive alone is its root, as in Explorer
         assert_eq!(text(&resolve_argument(OsStr::new("C:\""))), "C:\\"); // cmd's quoted "C:\" arrives as C:": the root
         assert_eq!(text(&normalize(OsStr::new("\\\\server\\share\\"))), "\\\\server\\share");
+        // "\\?\" and "\\.\" are other ways to write a path, and the rest of the program takes the plain way apart.
+        assert_eq!(text(&normalize(OsStr::new("\\\\?\\c:\\Windows\\"))), "C:\\Windows");
+        assert_eq!(text(&normalize(OsStr::new("\\\\?\\C:"))), "C:\\");
+        assert_eq!(text(&normalize(OsStr::new("\\\\.\\C:\\a\\..\\b"))), "C:\\b");
+        assert_eq!(text(&normalize(OsStr::new("\\\\?\\UNC\\server\\share\\dir"))), "\\\\server\\share\\dir");
+        assert_eq!(text(&normalize(OsStr::new("//?/unc/server/share/"))), "\\\\server\\share");
+        // No plain way to write this one.
+        assert_eq!(text(&normalize(OsStr::new("\\\\?\\Volume{0}\\dir"))), "\\\\?\\Volume{0}\\dir");
+        // A long path too: with its front it could be listed, but no command of the shell's would work on it.
+        let deep = format!("C:\\{}", "a".repeat(300));
+        assert_eq!(text(&normalize(OsStr::new(&format!("\\\\?\\{deep}")))), deep);
         let windir = std::env::var_os("SystemRoot").unwrap();
         assert!(normalize(&expand_vars(OsStr::new("%SystemRoot%"))).same(&Location::dir(windir)));
         // A folder may really be named "%TEMP%": only typed text has its variables expanded.

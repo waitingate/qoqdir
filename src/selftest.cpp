@@ -1388,6 +1388,10 @@ void App::startSelfTest(const std::wstring& dir, const std::wstring& logPath) {
             goTo(dir.substr(root.size() - (root.back() == L'\\' ? 1 : 0)));
         },
         [=, this] { return at(dir); });
+    add(L"typing a path with \\\\?\\ in front opens that folder, and shows it the plain way (5.3)",
+        [=, this] { goTo(L"\\\\?\\" + path(L"sub")); },
+        [=, this] { return at(path(L"sub")) && windowText(address_) == path(L"sub"); });
+    backHome(L"(back to the test folder)");
     add(L"a long folder name of emojis is cut to fit its tab, ending in an ellipsis, with no broken character",
         [=, this] {
             std::wstring name;

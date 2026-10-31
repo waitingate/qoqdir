@@ -30,6 +30,15 @@ std::wstring fullPath(const std::wstring& p) {
     return m > 0 && m < n ? buf.substr(0, m) : p;
 }
 
+// "\\?\C:\x" and "\\?\UNC\server\share" (or with "\\.\") the plain way, which is what the rest of the program takes
+// apart and all the shell's commands understand. What has no plain way stays ("\\?\Volume{...}").
+std::wstring plainPath(const std::wstring& p) {
+    if (p.size() <= 4 || !isUnc(p) || (p[2] != L'?' && p[2] != L'.') || p[3] != L'\\') return p;
+    bool unc = p.size() > 8 && equalNoCase(p.c_str() + 4, 4, L"UNC\\", 4);
+    std::wstring plain = unc ? L"\\\\" + p.substr(8) : p.substr(4);
+    return isAbsolutePath(plain) || (plain.size() == 2 && plain[1] == L':') ? plain : p;
+}
+
 // Pointer to the extension inside name (".txt"), or to the terminating zero.
 const wchar_t* extPtr(const std::wstring& name) {
     size_t dot = name.find_last_of(L'.');
@@ -128,6 +137,7 @@ std::wstring normalizePath(std::wstring p) {
     p.erase(0, start);
     if (p.empty() || equalNoCase(p.c_str(), -1, L"This PC", -1)) return L"";
     std::replace(p.begin(), p.end(), L'/', L'\\');
+    p = plainPath(p);
     if (p.size() == 2 && p[1] == L':') p += L'\\';
     if (isAbsolutePath(p)) p = fullPath(p);   // resolves "." and ".."
     while (p.size() > 3 && p.back() == L'\\') p.pop_back();

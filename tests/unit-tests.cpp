@@ -141,6 +141,17 @@ int main(int argc, char** argv) {
         CHECK_EQ(resolveArgument(L"C:"), L"C:\\");   // a drive alone is its root, as in Explorer
     }
     CHECK_EQ(normalizePath(L"\\\\server\\share\\"), L"\\\\server\\share");
+    // "\\?\" and "\\.\" are other ways to write a path, and the rest of the program takes the plain way apart.
+    CHECK_EQ(normalizePath(L"\\\\?\\c:\\Windows\\"), L"C:\\Windows");
+    CHECK_EQ(normalizePath(L"\\\\?\\C:"), L"C:\\");
+    CHECK_EQ(normalizePath(L"\\\\.\\C:\\a\\..\\b"), L"C:\\b");
+    CHECK_EQ(normalizePath(L"\\\\?\\UNC\\server\\share\\dir"), L"\\\\server\\share\\dir");
+    CHECK_EQ(normalizePath(L"//?/unc/server/share/"), L"\\\\server\\share");
+    CHECK_EQ(normalizePath(L"\\\\?\\Volume{0}\\dir"), L"\\\\?\\Volume{0}\\dir");   // no plain way to write it
+    {   // A long path too: with its front it could be listed, but no command of the shell's would work on it.
+        std::wstring deep = L"C:\\" + std::wstring(300, L'a');
+        CHECK_EQ(normalizePath(L"\\\\?\\" + deep), deep);
+    }
     {
         wchar_t windir[MAX_PATH];
         GetEnvironmentVariableW(L"SystemRoot", windir, MAX_PATH);

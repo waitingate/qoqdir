@@ -2103,6 +2103,16 @@ impl App {
             move |a| a.at(&dir()),
         );
         s.add(
+            "typing a path with \\\\?\\ in front opens that folder, and shows it the plain way (5.3)",
+            |a| {
+                let mut typed = OsString::from("\\\\?\\");
+                typed.push(p("sub"));
+                a.go_to(typed);
+            },
+            |a| a.at(&p("sub")) && window_text(a.address) == p("sub").as_os_str(),
+        );
+        s.home("(back to the test folder)");
+        s.add(
             "a long folder name of emojis is cut to fit its tab, ending in an ellipsis, with no broken character",
             |a| {
                 let name = "\u{1F600}".repeat(40); // each is two UTF-16 units; the cut lands among them
