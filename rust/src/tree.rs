@@ -1,7 +1,7 @@
 //! The folder tree. Subfolders are read on a worker thread when a node expands: a dead drive never freezes it.
 
 use std::cell::{Cell, RefCell};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::ffi::{OsStr, OsString};
 use std::path::Path;
 
@@ -13,7 +13,7 @@ use windows::Win32::UI::Controls::{
     TVGN_CHILD, TVGN_DROPHILITE, TVGN_NEXT, TVGN_NEXTVISIBLE, TVGN_PARENT, TVGN_ROOT, TVHITTESTINFO, TVHT_ONITEM, TVHT_ONITEMRIGHT,
     TVI_FIRST, TVI_LAST, TVI_ROOT,
     TVIF_CHILDREN, TVIF_IMAGE, TVIF_SELECTEDIMAGE, TVIF_TEXT, TVINSERTSTRUCTW, TVINSERTSTRUCTW_0, TVITEMEXW,
-    TVITEMEXW_CHILDREN, TVITEMW, TVM_DELETEITEM, TVM_EXPAND, TVM_GETITEMW, TVM_GETNEXTITEM, TVM_HITTEST,
+    TVITEMEXW_CHILDREN, TVITEMW, TVM_DELETEITEM, TVM_EXPAND, TVM_GETNEXTITEM, TVM_HITTEST,
     TVM_INSERTITEMW, TVM_SELECTITEM, TVM_SETEXTENDEDSTYLE, TVM_SETIMAGELIST, TVM_SETITEMW, TVN_DELETEITEMW, TVN_ITEMEXPANDEDW,
     TVN_ITEMEXPANDINGW, TVN_SELCHANGEDW, TVS_EX_DOUBLEBUFFER, TVS_EX_FADEINOUTEXPANDOS, TVS_FULLROWSELECT,
     TVS_HASBUTTONS, TVS_LINESATROOT, TVS_NOHSCROLL, TVS_SHOWSELALWAYS, TVS_TRACKSELECT, TVSIL_NORMAL, TVC_BYKEYBOARD,
@@ -57,6 +57,14 @@ struct Fill {
     children: Vec<Child>,
 }
 
+struct Node {
+    location: Location, // its folder, or its shortcut
+    shortcut: bool,     // a bookmark shortcut, not a folder
+    read: u32,          // the read of its subfolders that is out, by number (0: none)
+    stale: bool,        // ...and it changed meanwhile: read once more after (5.5)
+    none: bool,         // its last read found no subfolders
+}
+
 pub struct FolderTree {
     hwnd: HWND,
     parent: HWND,
@@ -66,10 +74,8 @@ pub struct FolderTree {
     fill_timer: usize,
     fills: RefCell<Vec<Fill>>,
     reads: Cell<u32>,                         // numbers every read started
-    paths: RefCell<HashMap<isize, (Location, bool)>>, // each node's folder or shortcut (bool: a bookmark shortcut)
-    reading: RefCell<HashMap<isize, u32>>,    // nodes whose subfolders are being read, by read number
-    stale: RefCell<HashSet<isize>>,           // ...that changed meanwhile: read once more after (5.5)
-    bookmarks_empty: Cell<bool>,              // Bookmarks was read and found empty (it keeps its arrow)
+    user_folders_read: Cell<u32>,             // the read of the user folders that is wanted
+    nodes: RefCell<HashMap<isize, Node>>,     // a node leaves when deleted, and what is known of its reads with it
     open_at: Cell<u64>,                       // when the node a drag lights up opens (0: done)
     drop_folder: RefCell<Option<Location>>,   // and where a drop on that node goes
 }
@@ -165,10 +171,8 @@ impl FolderTree {
             fill_timer,
             fills: RefCell::new(Vec::new()),
             reads: Cell::new(0),
-            paths: RefCell::new(HashMap::new()),
-            reading: RefCell::new(HashMap::new()),
-            stale: RefCell::new(HashSet::new()),
-            bookmarks_empty: Cell::new(false),
+            user_folders_read: Cell::new(0),
+            nodes: RefCell::new(HashMap::new()),
             open_at: Cell::new(0),
             drop_folder: RefCell::new(None),
         }
@@ -209,7 +213,7 @@ impl FolderTree {
         if self.child(pc) == 0 {
             // No drives shown yet: their first read is still in flight or waits to go in (read again, so the drive
             // that came or went is in the list), or This PC is closed and unread (its next expand reads them).
-            if self.reading.borrow().contains_key(&pc) || self.filling(pc) {
+            if self.with_node(pc, |n| n.read != 0) || self.filling(pc) {
                 self.forget_reads(pc);
                 self.start_reading(HTREEITEM(pc));
             }
@@ -234,7 +238,7 @@ impl FolderTree {
     /// node whose own menu was used (the node's folder may be gone).
     pub fn refresh_folder(&self, dir: &Location) {
         let nodes: Vec<isize> =
-            self.paths.borrow().iter().filter(|(_, (l, _))| l.same(dir)).map(|(&n, _)| n).collect();
+            self.nodes.borrow().iter().filter(|(_, n)| n.location.same(dir)).map(|(&node, _)| node).collect();
         for node in nodes {
             self.reread(node);
         }
@@ -242,22 +246,17 @@ impl FolderTree {
 
     /// The folder is in the tree (shown, or read to be).
     pub fn has_node(&self, dir: &Location) -> bool {
-        self.paths.borrow().values().any(|(l, _)| l.same(dir))
+        self.nodes.borrow().values().any(|n| n.location.same(dir))
     }
 
     fn reread(&self, node: isize) {
         // A read already out may have listed the folder before the change this is for: one more follows it.
-        if self.reading.borrow().contains_key(&node) {
-            self.stale.borrow_mut().insert(node);
-            return;
-        }
-        let mut item = TVITEMW { mask: TVIF_CHILDREN, hItem: HTREEITEM(node), ..Default::default() };
-        send(self.hwnd, TVM_GETITEMW, 0, &mut item as *mut _ as isize);
-        let none = item.cChildren.0 == 0 && !self.shortcut_of(HTREEITEM(node));
-        // An empty Bookmarks keeps its arrow (add_children), so the arrow can't tell: its last read does.
-        let empty_root = self.bookmarks_empty.get() && node == self.root();
+        let (out, none) = self.with_node(node, |n| {
+            n.stale = n.read != 0;
+            (n.stale, n.none)
+        });
         // Children still waiting to go in were read before the change too.
-        if self.child(node) != 0 || self.filling(node) || none || empty_root {
+        if !out && (self.child(node) != 0 || self.filling(node) || none) {
             self.start_reading(HTREEITEM(node));
         }
     }
@@ -282,7 +281,7 @@ impl FolderTree {
         };
         let node = send(self.hwnd, TVM_INSERTITEMW, 0, &ins as *const _ as isize);
         if node != 0 {
-            self.paths.borrow_mut().insert(node, (location, shortcut));
+            self.nodes.borrow_mut().insert(node, Node { location, shortcut, read: 0, stale: false, none: false });
         }
         HTREEITEM(node)
     }
@@ -312,17 +311,22 @@ impl FolderTree {
         send(self.hwnd, TVM_GETNEXTITEM, TVGN_DROPHILITE as usize, 0)
     }
 
+    /// What is known of a node, under a short borrow. A node that is not there is a dead handle: stop loudly (4.10).
+    fn with_node<R>(&self, node: isize, f: impl FnOnce(&mut Node) -> R) -> R {
+        f(self.nodes.borrow_mut().get_mut(&node).expect("a node that is there"))
+    }
+
     fn location_of(&self, node: HTREEITEM) -> Location {
-        self.paths.borrow()[&node.0].0.clone() // a node that is not there is a dead handle: stop loudly (4.10)
+        self.with_node(node.0, |n| n.location.clone())
     }
 
     // A bookmark shortcut, not a folder (so a folder named "x.lnk" is not treated as one, 5.6).
     fn shortcut_of(&self, node: HTREEITEM) -> bool {
-        self.paths.borrow()[&node.0].1
+        self.with_node(node.0, |n| n.shortcut)
     }
 
     fn start_reading(&self, node: HTREEITEM) {
-        if self.reading.borrow().contains_key(&node.0) {
+        if self.with_node(node.0, |n| n.read != 0) {
             return; // being read
         }
         let location = self.location_of(node);
@@ -341,7 +345,11 @@ impl FolderTree {
     fn start_worker(&self, node: isize, reader: impl FnOnce(&mut TreeBatch) + Send + 'static) {
         let read = self.reads.get() + 1;
         self.reads.set(read);
-        self.reading.borrow_mut().insert(node, read);
+        if node == 0 {
+            self.user_folders_read.set(read);
+        } else {
+            self.with_node(node, |n| n.read = read);
+        }
         let (parent, msg, icon_msg) = (self.parent.0 as usize, self.batch_msg, self.icon_msg);
         in_background(move || {
             let mut batch = Box::new(TreeBatch { read, node, failed: false, children: Vec::new() });
@@ -365,19 +373,32 @@ impl FolderTree {
     /// A read of Bookmarks is out (self-test).
     #[cfg(feature = "selftest")] // only the self-test uses it
     pub fn reading_bookmarks(&self) -> bool {
-        self.reading.borrow().contains_key(&self.root())
+        self.with_node(self.root(), |n| n.read != 0)
     }
 
     pub fn add_children(&self, batch: TreeBatch) {
-        // Nodes in `reading` are alive (deleted ones leave in TVN_DELETEITEM); the read number spots a reused handle.
-        if self.reading.borrow().get(&batch.node) != Some(&batch.read) {
+        if batch.node == 0 {
+            // The user folders go after Bookmarks (always the first root) and before This PC.
+            if batch.read != self.user_folders_read.get() {
+                return;
+            }
+            let mut after = HTREEITEM(self.root());
+            for c in batch.children {
+                after = self.add(TVI_ROOT, c.location, &c.text, c.icon.unwrap_or_else(folder_icon), false, after);
+            }
             return;
         }
-        self.reading.borrow_mut().remove(&batch.node);
-        self.drop_fill(batch.node); // what an older read still had to put in: this one is newer
         let node = batch.node;
-        // A change while this read was out (reread) may be missing from it: one more read once it is shown.
-        let changed = self.stale.borrow_mut().remove(&node);
+        // A node deleted since has left `nodes` (TVN_DELETEITEM); the read number spots a reused handle.
+        let changed = match self.nodes.borrow_mut().get_mut(&node) {
+            Some(n) if n.read == batch.read => {
+                n.read = 0;
+                // A change while this read was out (reread) may be missing from it: one more read once it is shown.
+                std::mem::take(&mut n.stale)
+            }
+            _ => return,
+        };
+        self.drop_fill(node); // what an older read still had to put in: this one is newer
         self.show_children(batch);
         if changed {
             self.reread(node);
@@ -386,21 +407,12 @@ impl FolderTree {
 
     /// `add_children`'s batch, put in the tree.
     fn show_children(&self, batch: TreeBatch) {
-        if batch.node == 0 {
-            // The user folders go after Bookmarks (always the first root) and before This PC.
-            let mut after = HTREEITEM(self.root());
-            for c in batch.children {
-                after = self.add(TVI_ROOT, c.location, &c.text, c.icon.unwrap_or_else(folder_icon), false, after);
-            }
-            return;
-        }
         let node = HTREEITEM(batch.node);
         if batch.failed {
             return; // keep what is shown, and the arrow: expanding again tries again
         }
-        if batch.node == self.root() {
-            self.bookmarks_empty.set(batch.children.is_empty()); // reread() reads it again
-        }
+        // reread() reads it again: it may have some by then.
+        self.with_node(batch.node, |n| n.none = batch.children.is_empty());
         // Read again (refresh): a folder whose subfolders are the same stays as it is. Otherwise they are put in afresh,
         // and what was open below closes (an open list changed item by item is slow: Windows repaints it for each).
         let shown: Vec<isize> = self.siblings(self.child(node.0)).collect();
@@ -409,8 +421,8 @@ impl FolderTree {
                 l.path().map(Path::as_os_str)
             }
             let same = shown.len() == batch.children.len() && {
-                let paths = self.paths.borrow();
-                shown.iter().zip(&batch.children).all(|(n, c)| text(&paths[n].0) == text(&c.location))
+                let nodes = self.nodes.borrow();
+                shown.iter().zip(&batch.children).all(|(n, c)| text(&nodes[n].location) == text(&c.location))
             };
             if same {
                 return;
@@ -492,14 +504,16 @@ impl FolderTree {
 
     /// And its reads out, whose results must not land on it either.
     fn forget_reads(&self, node: isize) {
-        self.reading.borrow_mut().remove(&node);
-        self.stale.borrow_mut().remove(&node);
+        self.with_node(node, |n| {
+            n.read = 0;
+            n.stale = false;
+        });
         self.drop_fill(node);
     }
 
     /// The shortcuts' own icons, read after their node was shown (start_worker). The node may be gone by now.
     pub fn set_icons(&self, node: isize, batch: &IconBatch) {
-        if !self.paths.borrow().contains_key(&node) {
+        if !self.nodes.borrow().contains_key(&node) {
             return;
         }
         // By lowercase path: one look-up per node, not one per pair.
@@ -604,8 +618,8 @@ impl FolderTree {
             TVN_DELETEITEMW => {
                 // The handle dies with the node (collapse, fill(), shutdown); a read still in flight must not insert under it.
                 let node = unsafe { (*(nm as *const NMTREEVIEWW)).itemOld.hItem.0 };
-                self.forget_reads(node);
-                self.paths.borrow_mut().remove(&node);
+                self.drop_fill(node);
+                self.nodes.borrow_mut().remove(&node);
                 None
             }
             TVN_SELCHANGEDW => {

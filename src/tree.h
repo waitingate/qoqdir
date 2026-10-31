@@ -5,7 +5,6 @@
 
 #include <functional>
 #include <map>
-#include <set>
 
 // Subfolders of one node, read on a worker thread and posted to the tree's parent window.
 struct TreeBatch {
@@ -38,7 +37,7 @@ public:
     // More of a big folder's subfolders, as many as about 30 ms allows; the timer brings the rest (showChildren).
     void fillMore();
     UINT batchMessage() const { return batchMsg_; }   // what a read's result comes back as (self-test)
-    bool readingBookmarks() const { return reading_.count(TreeView_GetRoot(tv_)) > 0; }   // a read is out (self-test)
+    bool readingBookmarks() const { return nodes_.at(TreeView_GetRoot(tv_)).read != 0; }   // a read is out (self-test)
     void setIcons(HTREEITEM node, const IconBatch& batch);
 
     // Path of the node under a screen point, or of the selected node when pt is (-1,-1). 'shortcut', when given,
@@ -72,11 +71,15 @@ private:
     struct Fill { HTREEITEM node; std::vector<TreeBatch::Child> children; };   // still to go in, the last first
     std::vector<Fill> fills_;
     unsigned reads_ = 0;                      // numbers every read started
-    struct Node { std::wstring path; bool shortcut = false; };   // a bookmark shortcut, or a folder (its own path)
-    std::map<HTREEITEM, Node> paths_;         // each node's folder or shortcut; a node leaves it when deleted
-    std::map<HTREEITEM, unsigned> reading_;   // nodes whose subfolders are being read, by read number
-    std::set<HTREEITEM> stale_;               // ...that changed meanwhile: read once more after (5.5)
-    bool bookmarksEmpty_ = false;             // Bookmarks was read and found empty (it keeps its arrow)
+    unsigned userFoldersRead_ = 0;            // the read of the user folders that is wanted
+    struct Node {
+        std::wstring path;                    // its folder, or its shortcut
+        bool shortcut = false;                // a bookmark shortcut, not a folder
+        unsigned read = 0;                    // the read of its subfolders that is out, by number (0: none)
+        bool stale = false;                   // ...and it changed meanwhile: read once more after (5.5)
+        bool none = false;                    // its last read found no subfolders
+    };
+    std::map<HTREEITEM, Node> nodes_;         // a node leaves when deleted, and what is known of its reads with it
     ULONGLONG openAt_ = 0;                    // when the node a drag lights up opens (0: done)
     std::optional<std::wstring> dropFolder_;  // and where a drop on that node goes
 };

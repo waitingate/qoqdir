@@ -99,10 +99,11 @@ HTREEITEM FolderTree::lastRoot() const {
 // Drives came or went: re-read This PC only, so expanded folders stay open (4.5); its read in flight is dropped.
 void FolderTree::refreshDrives() {
     HTREEITEM pc = lastRoot();
+    if (!pc) return;
     if (!TreeView_GetChild(tv_, pc)) {
         // No drives shown yet: their first read is still in flight or waits to go in (read again, so the drive that
         // came or went is in the list), or This PC is closed and unread (its next expand reads them).
-        if (reading_.count(pc) || filling(pc)) {
+        if (nodes_.at(pc).read || filling(pc)) {
             forgetReads(pc);
             startReading(pc);
         }
@@ -121,28 +122,23 @@ void FolderTree::refresh() {
 // The same for one folder's nodes: the folder shown in the list when its subfolders changed, or the parent of a node
 // whose own menu was used (the node's folder may be gone).
 void FolderTree::refreshFolder(const std::wstring& dir) {
-    for (const auto& [node, info] : paths_)
+    for (const auto& [node, info] : nodes_)
         if (samePath(info.path, dir)) reread(node);
 }
 
 bool FolderTree::hasNode(const std::wstring& dir) const {
-    return std::any_of(paths_.begin(), paths_.end(), [&](const auto& p) { return samePath(p.second.path, dir); });
+    return std::any_of(nodes_.begin(), nodes_.end(), [&](const auto& n) { return samePath(n.second.path, dir); });
 }
 
 void FolderTree::reread(HTREEITEM n) {
+    Node& node = nodes_.at(n);
     // A read already out may have listed the folder before the change this is for: one more follows it.
-    if (reading_.count(n)) {
-        stale_.insert(n);
+    if (node.read) {
+        node.stale = true;
         return;
     }
-    TVITEMW item{};
-    item.mask = TVIF_CHILDREN;
-    item.hItem = n;
-    TreeView_GetItem(tv_, &item);
-    // An empty Bookmarks keeps its arrow (addChildren), so the arrow can't tell: its last read does.
-    bool emptyRoot = bookmarksEmpty_ && n == TreeView_GetRoot(tv_);
     // Children still waiting to go in were read before the change too.
-    if (TreeView_GetChild(tv_, n) || filling(n) || (!item.cChildren && !shortcutNode(n)) || emptyRoot) startReading(n);
+    if (TreeView_GetChild(tv_, n) || filling(n) || node.none) startReading(n);
 }
 
 HTREEITEM FolderTree::add(HTREEITEM parent, const std::wstring& path, const std::wstring& text, int icon,
@@ -155,18 +151,18 @@ HTREEITEM FolderTree::add(HTREEITEM parent, const std::wstring& path, const std:
     ins.item.iImage = ins.item.iSelectedImage = icon;
     ins.item.cChildren = shortcut ? 0 : 1;   // a shortcut has no arrow; a folder's children are unknown until expanded
     HTREEITEM node = TreeView_InsertItem(tv_, &ins);
-    if (node) paths_[node] = {path, shortcut};
+    if (node) nodes_[node] = {path, shortcut};
     return node;
 }
 
 const std::wstring& FolderTree::pathOf(HTREEITEM node) const {
-    return paths_.at(node).path;   // a node that is not there is a dead handle: stop loudly (4.10)
+    return nodes_.at(node).path;   // a node that is not there is a dead handle: stop loudly (4.10)
 }
 
-bool FolderTree::shortcutNode(HTREEITEM node) const { return paths_.at(node).shortcut; }
+bool FolderTree::shortcutNode(HTREEITEM node) const { return nodes_.at(node).shortcut; }
 
 void FolderTree::startReading(HTREEITEM node) {
-    if (reading_.count(node)) return;   // being read
+    if (nodes_.at(node).read) return;   // being read
     std::wstring dir = pathOf(node);
     HTREEITEM top = node;   // shortcuts show under Bookmarks, the first root, at any depth (5.6)
     while (HTREEITEM up = TreeView_GetParent(tv_, top)) top = up;
@@ -175,7 +171,8 @@ void FolderTree::startReading(HTREEITEM node) {
 }
 
 void FolderTree::startWorker(HTREEITEM node, std::function<void(TreeBatch&)> reader) {
-    unsigned read = reading_[node] = ++reads_;
+    unsigned read = ++reads_;
+    (node ? nodes_.at(node).read : userFoldersRead_) = read;
     inBackground([parent = parent_, msg = batchMsg_, iconMsg = iconMsg_, read, node, reader = std::move(reader)] {
         auto batch = std::make_unique<TreeBatch>();
         batch->read = read;
@@ -196,25 +193,26 @@ void FolderTree::startWorker(HTREEITEM node, std::function<void(TreeBatch&)> rea
 }
 
 void FolderTree::addChildren(TreeBatch& batch) {
-    // Nodes in reading_ are alive (deleted ones leave in TVN_DELETEITEM); the read number spots a reused handle.
-    auto it = reading_.find(batch.node);
-    if (it == reading_.end() || it->second != batch.read) return;
-    reading_.erase(it);
+    if (!batch.node) {   // the user folders go after Bookmarks (always the first root) and before This PC
+        if (batch.read != userFoldersRead_) return;
+        HTREEITEM after = TreeView_GetRoot(tv_);
+        for (const auto& c : batch.children) after = add(TVI_ROOT, c.path, c.text, c.icon, false, after);
+        return;
+    }
+    // A node deleted since has left nodes_ (TVN_DELETEITEM); the read number spots a reused handle.
+    auto it = nodes_.find(batch.node);
+    if (it == nodes_.end() || it->second.read != batch.read) return;
+    it->second.read = 0;
     dropFill(batch.node);   // what an older read still had to put in: this one is newer
     // A change while this read was out (reread) may be missing from it: one more read once it is shown.
-    bool changed = stale_.erase(batch.node);
+    bool changed = std::exchange(it->second.stale, false);
     showChildren(batch);
     if (changed) reread(batch.node);
 }
 
 void FolderTree::showChildren(TreeBatch& batch) {
-    if (!batch.node) {   // the user folders go after Bookmarks (always the first root) and before This PC
-        HTREEITEM after = TreeView_GetRoot(tv_);
-        for (const auto& c : batch.children) after = add(TVI_ROOT, c.path, c.text, c.icon, false, after);
-        return;
-    }
     if (batch.failed) return;   // keep what is shown, and the arrow: expanding again tries again
-    if (batch.node == TreeView_GetRoot(tv_)) bookmarksEmpty_ = batch.children.empty();   // reread() reads it again
+    nodes_.at(batch.node).none = batch.children.empty();   // reread() reads it again: it may have some by then
     // Read again (refresh): a folder whose subfolders are the same stays as it is. Otherwise they are put in afresh,
     // and what was open below closes (an open list changed item by item is slow: Windows repaints it for each).
     if (HTREEITEM c = TreeView_GetChild(tv_, batch.node)) {
@@ -279,14 +277,15 @@ bool FolderTree::filling(HTREEITEM node) const {
 }
 
 void FolderTree::forgetReads(HTREEITEM node) {
-    reading_.erase(node);
-    stale_.erase(node);
+    Node& n = nodes_.at(node);
+    n.read = 0;
+    n.stale = false;
     dropFill(node);
 }
 
 // The shortcuts' own icons, read after their node was shown (startWorker). The node may be gone by now.
 void FolderTree::setIcons(HTREEITEM node, const IconBatch& batch) {
-    if (!paths_.count(node)) return;
+    if (!nodes_.count(node)) return;
     std::unordered_map<std::wstring, int> icons;   // by lowercase path: one look-up per node, not one per pair
     for (const auto& [name, icon] : batch.icons) icons[toLower(joinPath(batch.dir, name))] = icon;
     for (HTREEITEM c = TreeView_GetChild(tv_, node); c; c = TreeView_GetNextSibling(tv_, c)) {
@@ -369,8 +368,8 @@ bool FolderTree::onNotify(NMHDR* nm, std::wstring* open, bool* shortcut) {
     case TVN_DELETEITEMW: {
         // The handle dies with the node (collapse, fill(), shutdown); a read still in flight must not insert under it.
         HTREEITEM gone = reinterpret_cast<NMTREEVIEWW*>(nm)->itemOld.hItem;
-        forgetReads(gone);
-        paths_.erase(gone);
+        dropFill(gone);
+        nodes_.erase(gone);
         return false;
     }
     case TVN_SELCHANGEDW: {

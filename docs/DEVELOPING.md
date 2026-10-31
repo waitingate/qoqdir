@@ -118,8 +118,9 @@ instead of corrupting data, and the crash log says where.
   Hidden items are always read; Ctrl+H only shows or hides them. A read's worker
   sorts what it read (`Listing::sorted`); `setListing` sorts it again only if the
   sort has changed since.
-- Tree nodes keep their path in `FolderTree::paths_`, removed in
-  `TVN_DELETEITEM`. A bookmark shortcut is read from the .lnk file; a target on
+- Tree nodes keep their path and what is known of their reads in
+  `FolderTree::nodes_`, removed in `TVN_DELETEITEM`. A bookmark shortcut is read
+  from the .lnk file; a target on
   a drive letter that is gone is looked for by the relative path Windows stores
   in it (`Resolve` without search or UI); a drive that is there is never asked.
   Its own icon comes later from the worker, like file icons in the list.
